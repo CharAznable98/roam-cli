@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@roamcli/protocol": ["../../packages/protocol/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

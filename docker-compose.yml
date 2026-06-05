@@ -1,0 +1,17 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    environment:
+      ROAMCLI_AUTH_TOKEN: dev-token
+      ROAMCLI_DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: 8787
+    ports:
+      - "8787:8787"
+    volumes:
+      - roamcli-data:/data
+
+volumes:
+  roamcli-data:

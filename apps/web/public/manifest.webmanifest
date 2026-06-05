@@ -1,0 +1,17 @@
+{
+  "name": "RoamCli",
+  "short_name": "RoamCli",
+  "description": "Responsive web client for remote AI coding runners.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1f2937",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

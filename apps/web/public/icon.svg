@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="RoamCli icon">
+  <rect width="128" height="128" rx="24" fill="#1f2937"/>
+  <path d="M31 83V45c0-8 6-14 14-14h38c8 0 14 6 14 14v38c0 8-6 14-14 14H45c-8 0-14-6-14-14Z" fill="#f8fafc"/>
+  <path d="M48 56h33M48 72h18" stroke="#138fbd" stroke-width="10" stroke-linecap="round"/>
+</svg>

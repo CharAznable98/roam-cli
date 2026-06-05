@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+coverage/
+*.tsbuildinfo
+
+# Local environment
+.env
+.env.*
+.DS_Store
+
+# Runtime state and local data
+.roamcli/
+.roamcli-server/
+.roam-runner/
+**/.roamcli-server/
+**/.roam-runner/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Logs and diagnostics
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test and browser artifacts
+test-results/
+playwright-report/
+blob-report/
+tmp-playwright-*.png
+*.har
+*.trace.zip

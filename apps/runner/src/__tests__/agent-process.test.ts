@@ -1,0 +1,37 @@
+import { describe, expect, it, vi } from "vitest";
+import { spawnAgentProcess } from "../agent-process.js";
+
+describe("AgentProcess", () => {
+  it("maps interrupt to SIGINT for the child-process fallback", async () => {
+    const child = await spawnAgentProcess(
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.on('SIGINT', () => { console.log('interrupted'); process.exit(130); });",
+          "console.log('ready');",
+          "setInterval(() => {}, 1000);"
+        ].join("")
+      ],
+      {
+        cwd: process.cwd(),
+        preferPty: false
+      }
+    );
+    let output = "";
+    child.onData((chunk) => {
+      output += chunk.toString();
+    });
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.onExit(resolve);
+    });
+
+    await vi.waitFor(() => {
+      expect(output).toContain("ready");
+    });
+    child.interrupt();
+
+    await expect(exit).resolves.toMatchObject({ code: 130 });
+    expect(output).toContain("interrupted");
+  });
+});
