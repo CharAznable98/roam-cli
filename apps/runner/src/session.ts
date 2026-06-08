@@ -92,11 +92,21 @@ export class SessionManager {
       return;
     }
 
-    const child = await spawnAgentProcess(capability.command, capability.args, {
-      cwd,
-      env: process.env,
-      preferPty: true
-    });
+    const requiresPty = capability.kind !== "mock";
+    let child: AgentProcess;
+    try {
+      child = await spawnAgentProcess(capability.command, capability.args, {
+        cwd,
+        env: process.env,
+        preferPty: requiresPty,
+        requirePty: requiresPty
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({ type: "error", sessionId: session.id, message, code: "SPAWN_ERROR" });
+      await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "failed" });
+      return;
+    }
     const running: RunningSession = { session: { ...session, cwd }, child, parser: new OutputParser(), stopRequested: false };
     this.#sessions.set(session.id, running);
     this.#sessionCwds.set(session.id, cwd);

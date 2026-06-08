@@ -1,7 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawnAgentProcess } from "../agent-process.js";
 
+vi.mock("node-pty", () => ({
+  spawn: () => {
+    throw new Error("pty unavailable");
+  }
+}));
+
 describe("AgentProcess", () => {
+  it("does not fall back to pipes when a PTY is required", async () => {
+    await expect(
+      spawnAgentProcess(process.execPath, [], {
+        cwd: process.cwd(),
+        requirePty: true
+      })
+    ).rejects.toThrow(`PTY spawn failed for ${process.execPath}: pty unavailable`);
+  });
+
   it("maps interrupt to SIGINT for the child-process fallback", async () => {
     const child = await spawnAgentProcess(
       process.execPath,

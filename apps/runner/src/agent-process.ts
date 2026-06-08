@@ -1,4 +1,8 @@
 import { spawn as spawnChild, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants } from "node:fs";
+import { access, chmod } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import type { IPty } from "node-pty";
 
 export interface AgentProcess {
@@ -14,7 +18,10 @@ export interface SpawnAgentProcessOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   preferPty?: boolean;
+  requirePty?: boolean;
 }
+
+const require = createRequire(import.meta.url);
 
 export async function spawnAgentProcess(
   command: string,
@@ -22,32 +29,33 @@ export async function spawnAgentProcess(
   options: SpawnAgentProcessOptions
 ): Promise<AgentProcess> {
   if (options.preferPty ?? true) {
-    const ptyProcess = await trySpawnPty(command, args, options);
-    if (ptyProcess !== undefined) {
-      return ptyProcess;
+    try {
+      return await spawnPtyProcess(command, args, options);
+    } catch (error: unknown) {
+      if (options.requirePty) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`PTY spawn failed for ${command}: ${message}`);
+      }
     }
   }
   return spawnChildProcess(command, args, options);
 }
 
-async function trySpawnPty(
+async function spawnPtyProcess(
   command: string,
   args: readonly string[],
   options: SpawnAgentProcessOptions
-): Promise<AgentProcess | undefined> {
-  try {
-    const pty = await import("node-pty");
-    const child = pty.spawn(command, [...args], {
-      name: "xterm-256color",
-      cols: 120,
-      rows: 40,
-      cwd: options.cwd,
-      env: compactEnv(options.env ?? process.env)
-    });
-    return new PtyAgentProcess(child);
-  } catch {
-    return undefined;
-  }
+): Promise<AgentProcess> {
+  await ensureNodePtySpawnHelperExecutable();
+  const pty = await import("node-pty");
+  const child = pty.spawn(command, [...args], {
+    name: "xterm-256color",
+    cols: 120,
+    rows: 40,
+    cwd: options.cwd,
+    env: compactEnv(options.env ?? process.env)
+  });
+  return new PtyAgentProcess(child);
 }
 
 function spawnChildProcess(command: string, args: readonly string[], options: SpawnAgentProcessOptions): AgentProcess {
@@ -136,6 +144,19 @@ function compactEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     }
   }
   return result;
+}
+
+async function ensureNodePtySpawnHelperExecutable(): Promise<void> {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const helperPath = resolve(dirname(require.resolve("node-pty")), "..", "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+  try {
+    await access(helperPath, constants.X_OK);
+  } catch {
+    await chmod(helperPath, 0o755);
+  }
 }
 
 function signalFromPty(signal: number | string | undefined): NodeJS.Signals | null {
