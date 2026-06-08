@@ -1,9 +1,9 @@
 {
   "name": "roamcli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Open-source remote AI coding agent control platform.",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {

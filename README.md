@@ -2,19 +2,22 @@
 
 RoamCli is an open-source remote AI coding agent control platform. It connects a responsive web client, a central TypeScript server, and one or more development-machine runners over reverse WebSocket connections.
 
+Chinese documentation is available in [README_ch.md](README_ch.md).
+
 ## What Is Included
 
 This repository implements a usable MVP for remote agent control:
 
-- Fastify server with token auth, SQLite persistence, local artifact storage, static web hosting, client stream WebSocket, and runner reverse WebSocket.
-- Runner CLI with process management, PTY support, reconnect/cache, parser replay support, approval forwarding, audit hash chain, file tree/content RPCs, safe file writes, signed patch apply, and strict/standard/trusted profiles.
+- Fastify server with bearer-token auth, SQLite persistence, local artifact storage, static web hosting, client stream WebSocket, and runner reverse WebSocket.
+- Runner CLI with process management, PTY fallback, reconnect/cache, parser replay support, approval forwarding, audit hash chain, file tree/content RPCs, safe UTF-8 file writes, signed patch apply, and strict/standard/trusted profiles.
 - React web client with responsive desktop/tablet/mobile layouts, runner/session controls, chat stream, file browser, editable text file panel, terminal input/stream, approval center, patch review, PWA manifest, and service worker.
 - Shared protocol, security, and parser SDK packages with tests.
 - Smoke/E2E gate that starts real Server + Runner and verifies session creation, persistence, file read/write, terminal input, bad patch signature rejection, and signed patch apply.
+- Browser blackbox gate that drives the real Web UI through Chromium across desktop, tablet, and mobile viewports.
 
 ## Prerequisites
 
-- Node.js 24 or newer.
+- Node.js 24 or newer. The smoke script requires a runtime with global `WebSocket`.
 - pnpm 10 or newer. This repo declares `packageManager: pnpm@10.33.0`.
 - Git.
 - Optional for browser validation: Playwright with Chromium.
@@ -42,7 +45,7 @@ pnpm smoke:e2e
 pnpm blackbox:browser
 ```
 
-`pnpm smoke:e2e` starts its own local Server and Runner, creates a real session, and verifies the MVP path without relying on mock HTTP responses.
+`pnpm smoke:e2e` starts its own local Server and Runner by default, creates a real session with the `mock` agent, and verifies the MVP path without relying on mock HTTP responses.
 
 `pnpm blackbox:browser` builds the app, starts a local Server and Runner, opens the real Web UI in Chromium, and verifies the empty-runner state plus desktop, tablet, and mobile user paths: chat, file browse/edit/save, terminal input, exec approval approve/reject, artifact display, and patch review/apply. By default it uses an isolated temporary Runner workspace; set `ROAMCLI_BLACKBOX_WORKSPACE` to point it at a specific workspace.
 
@@ -85,13 +88,13 @@ Use `dev-token` in the Web UI token field if it is not already filled.
 3. Set the working directory to a path inside the runner workspace.
 4. Use the Files panel to browse and edit UTF-8 text files.
 5. Use the Terminal panel to send input to the active session.
-6. Use the Approvals panel to accept/reject patch hunks and apply signed patches.
+6. Use the Approvals panel to accept/reject exec requests and apply signed patches.
 
 ## Runner CLI Options
 
 ```text
 --server      Server websocket URL. http/https are converted to ws/wss.
---token       Bearer token used for runner registration and patch signature verification.
+--token       Bearer token used during websocket registration and patch signature verification.
 --profile     Permission profile: strict, standard, trusted. Default: standard.
 --runner-id   Stable runner id. Default: hostname plus UUID.
 --workspace   Workspace root exposed to sessions. Default: cwd.
@@ -107,6 +110,25 @@ ROAM_RUNNER_ID
 ROAM_RUNNER_WORKSPACE
 ```
 
+Agent commands and arguments can be overridden per agent kind:
+
+```text
+ROAMCLI_AGENT_CLAUDE_COMMAND
+ROAMCLI_AGENT_CLAUDE_ARGS
+ROAMCLI_AGENT_CODEX_COMMAND
+ROAMCLI_AGENT_CODEX_ARGS
+ROAMCLI_AGENT_GEMINI_COMMAND
+ROAMCLI_AGENT_GEMINI_ARGS
+ROAMCLI_AGENT_AIDER_COMMAND
+ROAMCLI_AGENT_AIDER_ARGS
+ROAMCLI_AGENT_MOCK_COMMAND
+ROAMCLI_AGENT_MOCK_ARGS
+ROAMCLI_AGENT_SHELL_COMMAND
+ROAMCLI_AGENT_SHELL_ARGS
+```
+
+`*_ARGS` accepts either a shell-like string or a JSON string array.
+
 ## Server Environment
 
 ```text
@@ -114,18 +136,29 @@ HOST                         Bind host. Default: 127.0.0.1.
 PORT                         Bind port. Default: 3000.
 ROAMCLI_AUTH_TOKEN           Bearer token for HTTP and WebSocket auth.
 ROAMCLI_APPROVAL_SECRET      HMAC secret for approvals and patch apply. Defaults to auth token.
-ROAMCLI_DATA_DIR             SQLite/artifact data directory.
-ROAMCLI_WEB_DIST             Path to built web assets. Defaults to apps/web/dist when available.
+ROAMCLI_DATA_DIR             SQLite/artifact data directory. Default: .roamcli-server.
+ROAMCLI_WEB_DIST             Path to built web assets. Defaults to apps/web/dist or ../web/dist when available.
 ROAMCLI_RUNNER_RPC_TIMEOUT_MS Runner RPC timeout. Default: 5000.
+```
+
+## Smoke/E2E Options
+
+```text
+ROAMCLI_SMOKE_BASE_URL            Connect to an existing server instead of starting one.
+ROAMCLI_SMOKE_TOKEN               Bearer token. Default: dev-token.
+ROAMCLI_SMOKE_RUNNER_ID           Runner id to use or start. Default: smoke-<pid>.
+ROAMCLI_SMOKE_WORKSPACE           Workspace exposed to the runner. Default: repo root.
+ROAMCLI_SMOKE_SKIP_BUILD=1        Skip protocol/security prebuild.
+ROAMCLI_SMOKE_TIMEOUT_MS          Per-step timeout. Default: 30000.
+ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0 Skip patch apply assertion.
 ```
 
 ## Browser Validation
 
-Install Playwright globally if you want to repeat the visual sanity check:
+Install Playwright browsers if Chromium is not already installed:
 
 ```bash
-npm install -g playwright
-playwright install chromium
+pnpm exec playwright install chromium
 ```
 
 Run the normal verification first:
@@ -172,7 +205,7 @@ apps/web          React client.
 packages/protocol Shared Zod schemas and TypeScript types.
 packages/security Crypto, signatures, hashes, audit helpers.
 packages/parser-sdk Agent parser SDK and fixture replay tests.
-scripts           Smoke/E2E runner.
+scripts           Smoke/E2E and browser blackbox runners.
 docs              PRD status and task tracking.
 ```
 
@@ -181,3 +214,4 @@ docs              PRD status and task tracking.
 - Runtime state lives under `.roamcli-server/` and `.roam-runner/`; these are ignored by Git.
 - Build output, Playwright screenshots, test reports, databases, and logs are ignored by Git.
 - The current MVP uses bearer-token/HMAC signing. Runner-side patch apply re-verifies signatures, but production deployments should still add secret isolation, replay windows, HTTPS, OIDC or stronger auth, and audit export.
+- This project is licensed under EESPL 2.0. See [LICENSE](LICENSE).

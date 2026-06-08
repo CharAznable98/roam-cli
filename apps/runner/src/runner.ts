@@ -28,7 +28,7 @@ export async function createRunner(
     profile: cli.profile,
     publicKey,
     capabilities,
-    version: "1.0.0",
+    version: "1.1.0",
   };
 
   const stateDir = join(cli.workspace, ".roam-runner");
