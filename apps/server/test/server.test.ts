@@ -128,6 +128,66 @@ describe("server", () => {
     runner.close();
   });
 
+  it("restarts a stopped resumable session instead of forwarding resume to a dead process", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration({ supportsResume: true })));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        runnerId: "runner-1",
+        agent: "mock",
+        cwd: "/workspace",
+        prompt: "start once",
+      },
+    });
+    const sessionId = created.json().session.id as string;
+    await nextJson(runner);
+
+    runner.send(
+      JSON.stringify({ type: "sessionStatus", sessionId, status: "stopped" }),
+    );
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "session:updated" &&
+        event.session.id === sessionId &&
+        event.session.status === "stopped",
+    );
+
+    stream.send(
+      JSON.stringify({
+        type: "controlSignal",
+        requestId: "resume-1",
+        sessionId,
+        signal: "resume",
+      }),
+    );
+    const resumeCommand = await nextJson(runner);
+    expect(resumeCommand).toMatchObject({
+      type: "startSession",
+      prompt: `Resume session ${sessionId}`,
+    });
+    expect(resumeCommand.session).toMatchObject({
+      id: sessionId,
+      status: "pending",
+    });
+
+    stream.close();
+    runner.close();
+  });
+
   it("requests file trees and file content from the registered runner", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
@@ -492,7 +552,7 @@ describe("server", () => {
   });
 });
 
-function runnerRegistration(): RunnerRegistration {
+function runnerRegistration(options: { supportsResume?: boolean } = {}): RunnerRegistration {
   return {
     runnerId: "runner-1",
     displayName: "Test Runner",
@@ -508,7 +568,7 @@ function runnerRegistration(): RunnerRegistration {
         command: "mock",
         args: [],
         parser: "mock",
-        supportsResume: false,
+        supportsResume: options.supportsResume ?? false,
       },
     ],
   };

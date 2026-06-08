@@ -246,7 +246,7 @@ describe("App", () => {
 
     const patchCard = screen.getByText("src/App.tsx").closest("article");
     expect(patchCard).not.toBeNull();
-    fireEvent.click(within(patchCard as HTMLElement).getByRole("button", { name: "Accept" }));
+    fireEvent.click(within(patchCard as HTMLElement).getByRole("button", { name: "Accept patch hunk hunk-1" }));
 
     await waitFor(() => expect(screen.getByText("accepted")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));

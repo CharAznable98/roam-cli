@@ -63,7 +63,7 @@ export function ChatPanel({ session, messages, onSend, onControl }: ChatPanelPro
           onChange={(event) => setDraft(event.target.value)}
           rows={2}
           placeholder="Message the active session"
-          aria-label="Message"
+          aria-label="Chat composer"
         />
         <button className="primary-icon-button" type="submit" aria-label="Send message" title="Send message">
           <Send size={17} />

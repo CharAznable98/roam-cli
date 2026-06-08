@@ -529,6 +529,39 @@ function handleClientCommand(
     });
     return;
   }
+
+  if (command.signal === "resume" && session.status !== "running" && session.status !== "waiting_approval") {
+    if (!hub.isRunnerOnline(session.runnerId)) {
+      hub.broadcast({
+        type: "error",
+        message: "runner is offline",
+        code: "runner_offline",
+      });
+      return;
+    }
+    const runner = store.getRunner(session.runnerId);
+    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
+    if (capability?.supportsResume === false) {
+      hub.broadcast({
+        type: "error",
+        message: `${session.agent} sessions cannot be resumed`,
+        code: "resume_unsupported",
+      });
+      return;
+    }
+
+    const pending = store.updateSessionStatus(session.id, "pending", nowIso());
+    if (pending) {
+      hub.broadcast({ type: "session:updated", session: pending });
+    }
+    hub.sendToRunner(session.runnerId, {
+      type: "startSession",
+      session: pending ?? { ...session, status: "pending" },
+      prompt: `Resume session ${session.id}`,
+    });
+    return;
+  }
+
   hub.sendToRunner(session.runnerId, {
     type: "controlSignal",
     sessionId: session.id,
@@ -642,7 +675,7 @@ function handleRunnerEvent(
     message: event.message,
     ...(event.code ? { code: event.code } : {}),
   });
-  if (event.sessionId) {
+  if (event.sessionId && event.code !== "SESSION_NOT_RUNNING") {
     const session = store.updateSessionStatus(
       event.sessionId,
       "failed",

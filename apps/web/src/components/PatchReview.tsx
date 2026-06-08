@@ -46,6 +46,7 @@ export function PatchReview({ hunks, onResolveHunk, onApplyPatch, applyState }: 
             <button
               className="small-button accept"
               type="button"
+              aria-label={`Accept patch hunk ${hunk.id}`}
               disabled={hunk.status !== "pending"}
               onClick={() => onResolveHunk(hunk.id, "accepted")}
             >
@@ -55,6 +56,7 @@ export function PatchReview({ hunks, onResolveHunk, onApplyPatch, applyState }: 
             <button
               className="small-button reject"
               type="button"
+              aria-label={`Reject patch hunk ${hunk.id}`}
               disabled={hunk.status !== "pending"}
               onClick={() => onResolveHunk(hunk.id, "rejected")}
             >
