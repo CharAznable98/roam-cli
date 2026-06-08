@@ -1,12 +1,22 @@
 # RoamCli
 
+⚠️ **警告：本仓库目前处于开发初期，暂不可用。** ⚠️
+
+> **状态**：早期开发 / 半成品 / 概念验证阶段  
+> **预计可用时间**：2026 年 Q3  
+> **当前问题**：核心功能未实现 / 可能存在严重 bug / 接口随时可能破坏性变更 / 文档不完整
+
+本项目正在积极开发中，目前仅用于代码备份和协作。**请勿在任何生产或测试环境中使用**。
+
+如果您对本项目感兴趣，可以 Watch 仓库获取更新通知。
+
 RoamCli 是一个开源的远程 AI 编码 Agent 控制平台。它通过反向 WebSocket 连接，把响应式 Web 客户端、TypeScript 中心服务端和一个或多个开发机 Runner 连接起来。
 
 英文文档见 [README.md](README.md)。
 
 ## 当前包含内容
 
-本仓库实现了一个可用的远程 Agent 控制 MVP：
+本仓库正在开发一个远程 Agent 控制 MVP：
 
 - Fastify 服务端：支持 Bearer Token 认证、SQLite 持久化、本地 artifact 存储、静态 Web 托管、客户端流式 WebSocket、Runner 反向 WebSocket。
 - Runner CLI：支持进程管理、PTY 降级、重连缓存、解析器回放、审批转发、审计哈希链、文件树/文件内容 RPC、安全 UTF-8 文件写入、签名 patch apply，以及 strict/standard/trusted 三种权限 profile。

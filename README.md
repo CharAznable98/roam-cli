@@ -1,12 +1,22 @@
 # RoamCli
 
+⚠️ **Warning: this repository is in early development and is not usable yet.** ⚠️
+
+> **Status**: Early development / unfinished / proof-of-concept stage  
+> **Expected availability**: Q3 2026  
+> **Known issues**: Core features are incomplete / serious bugs may exist / interfaces may change incompatibly at any time / documentation is incomplete
+
+This project is under active development and is currently intended only for code backup and collaboration. **Do not use it in production or test environments.**
+
+If you are interested in this project, watch the repository to receive update notifications.
+
 RoamCli is an open-source remote AI coding agent control platform. It connects a responsive web client, a central TypeScript server, and one or more development-machine runners over reverse WebSocket connections.
 
 Chinese documentation is available in [README_ch.md](README_ch.md).
 
 ## What Is Included
 
-This repository implements a usable MVP for remote agent control:
+This repository is building toward an MVP for remote agent control:
 
 - Fastify server with bearer-token auth, SQLite persistence, local artifact storage, static web hosting, client stream WebSocket, and runner reverse WebSocket.
 - Runner CLI with process management, PTY fallback, reconnect/cache, parser replay support, approval forwarding, audit hash chain, file tree/content RPCs, safe UTF-8 file writes, signed patch apply, and strict/standard/trusted profiles.
