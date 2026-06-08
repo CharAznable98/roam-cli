@@ -310,7 +310,9 @@ describe("server", () => {
       bytesWritten: 22,
       encoding: "utf8",
     };
-    runner.send(JSON.stringify({ type: "fileWriteResult", result: writeResult }));
+    runner.send(
+      JSON.stringify({ type: "fileWriteResult", result: writeResult }),
+    );
     const writeResponse = await writePromise;
     expect(writeResponse.statusCode).toBe(200);
     expect(writeResponse.json()).toEqual({ result: writeResult });
@@ -536,7 +538,9 @@ describe("server", () => {
       message: "applied",
       rejected: [],
     };
-    runner.send(JSON.stringify({ type: "patchApplyResult", result: patchResult }));
+    runner.send(
+      JSON.stringify({ type: "patchApplyResult", result: patchResult }),
+    );
     const patchResponse = await patchPromise;
     expect(patchResponse.statusCode).toBe(200);
     expect(patchResponse.json()).toEqual({ result: patchResult });
@@ -552,7 +556,9 @@ describe("server", () => {
   });
 });
 
-function runnerRegistration(options: { supportsResume?: boolean } = {}): RunnerRegistration {
+function runnerRegistration(
+  options: { supportsResume?: boolean } = {},
+): RunnerRegistration {
   return {
     runnerId: "runner-1",
     displayName: "Test Runner",
@@ -560,7 +566,7 @@ function runnerRegistration(options: { supportsResume?: boolean } = {}): RunnerR
     workspaceRoot: "/workspace",
     profile: "standard",
     publicKey: "0123456789abcdef",
-    version: "0.1.0",
+    version: "1.0.0",
     capabilities: [
       {
         kind: "mock",

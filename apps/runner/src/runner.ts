@@ -13,7 +13,10 @@ export interface CreateRunnerOptions {
   createSocket?: WebSocketFactory;
 }
 
-export async function createRunner(argv: readonly string[], options: CreateRunnerOptions = {}): Promise<RunnerConnection> {
+export async function createRunner(
+  argv: readonly string[],
+  options: CreateRunnerOptions = {},
+): Promise<RunnerConnection> {
   const cli = parseCliArgs(argv);
   const capabilities = buildCapabilities(cli.profile);
   const publicKey = createPublicKey();
@@ -25,7 +28,7 @@ export async function createRunner(argv: readonly string[], options: CreateRunne
     profile: cli.profile,
     publicKey,
     capabilities,
-    version: "0.1.0"
+    version: "1.0.0",
   };
 
   const stateDir = join(cli.workspace, ".roam-runner");
@@ -35,10 +38,12 @@ export async function createRunner(argv: readonly string[], options: CreateRunne
   const sessionOptions: Omit<SessionManagerOptions, "approvalSecret"> = {
     workspace: cli.workspace,
     capabilities,
-    emit: (event) => connection.send(event)
+    emit: (event) => connection.send(event),
   };
   const sessions = new SessionManager(
-    cli.token === undefined ? sessionOptions : { ...sessionOptions, approvalSecret: cli.token }
+    cli.token === undefined
+      ? sessionOptions
+      : { ...sessionOptions, approvalSecret: cli.token },
   );
 
   const connectionOptions = {
@@ -47,10 +52,12 @@ export async function createRunner(argv: readonly string[], options: CreateRunne
     registration,
     cache,
     audit,
-    onCommand: (command: RunnerCommand) => sessions.handle(command)
+    onCommand: (command: RunnerCommand) => sessions.handle(command),
   };
   connection = new RunnerConnection(
-    options.createSocket === undefined ? connectionOptions : { ...connectionOptions, createSocket: options.createSocket }
+    options.createSocket === undefined
+      ? connectionOptions
+      : { ...connectionOptions, createSocket: options.createSocket },
   );
   return connection;
 }

@@ -9,7 +9,7 @@ import {
   RunnerCommandSchema,
   RunnerRegistrationSchema,
   ServerEventSchema,
-  nowIso
+  nowIso,
 } from "./index.js";
 
 describe("protocol schemas", () => {
@@ -21,8 +21,10 @@ describe("protocol schemas", () => {
       workspaceRoot: "/workspace",
       profile: "strict",
       publicKey: "0123456789abcdef",
-      capabilities: [{ kind: "mock", label: "Mock", command: "node", parser: "mock" }],
-      version: "0.1.0"
+      capabilities: [
+        { kind: "mock", label: "Mock", command: "node", parser: "mock" },
+      ],
+      version: "1.0.0",
     });
 
     expect(runner.capabilities[0]?.supportsResume).toBe(false);
@@ -40,9 +42,9 @@ describe("protocol schemas", () => {
           status: "running",
           cwd: "/tmp",
           createdAt: nowIso(),
-          updatedAt: nowIso()
-        }
-      }).type
+          updatedAt: nowIso(),
+        },
+      }).type,
     ).toBe("session:updated");
   });
 
@@ -55,9 +57,11 @@ describe("protocol schemas", () => {
           path: ".",
           name: ".",
           type: "directory",
-          children: [{ path: "README.md", name: "README.md", type: "file", size: 42 }]
-        }
-      }).root.children?.[0]?.name
+          children: [
+            { path: "README.md", name: "README.md", type: "file", size: 42 },
+          ],
+        },
+      }).root.children?.[0]?.name,
     ).toBe("README.md");
 
     expect(
@@ -67,8 +71,8 @@ describe("protocol schemas", () => {
         path: "README.md",
         content: "hello",
         truncated: false,
-        encoding: "utf8"
-      }).content
+        encoding: "utf8",
+      }).content,
     ).toBe("hello");
 
     expect(
@@ -77,8 +81,8 @@ describe("protocol schemas", () => {
         sessionId: "s1",
         path: "README.md",
         bytesWritten: 5,
-        encoding: "utf8"
-      }).bytesWritten
+        encoding: "utf8",
+      }).bytesWritten,
     ).toBe(5);
   });
 
@@ -88,16 +92,16 @@ describe("protocol schemas", () => {
       ApiApprovalResponseSchema.parse({
         approved: true,
         signedAt,
-        signature: "client-signature"
-      }).signedAt
+        signature: "client-signature",
+      }).signedAt,
     ).toBe(signedAt);
 
     expect(
       ApiApplyPatchSchema.parse({
         patch: "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
         signedAt,
-        signature: "patch-signature"
-      }).strip
+        signature: "patch-signature",
+      }).strip,
     ).toBe(1);
 
     const writeCommand = RunnerCommandSchema.parse({
@@ -105,7 +109,7 @@ describe("protocol schemas", () => {
       requestId: "write-1",
       sessionId: "s1",
       path: "README.md",
-      content: "updated"
+      content: "updated",
     });
     expect(writeCommand.type).toBe("writeFileContent");
 
@@ -115,7 +119,7 @@ describe("protocol schemas", () => {
       sessionId: "s1",
       patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
       signedAt,
-      signature: "patch-signature"
+      signature: "patch-signature",
     });
     expect(command.type).toBe("applyPatch");
     if (command.type === "applyPatch") {
@@ -129,8 +133,8 @@ describe("protocol schemas", () => {
         sessionId: "s1",
         applied: true,
         changedFiles: ["README.md"],
-        message: "applied"
-      }).rejected
+        message: "applied",
+      }).rejected,
     ).toEqual([]);
   });
 });

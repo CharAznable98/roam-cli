@@ -1,4 +1,13 @@
-import type { AgentKind, Approval, Artifact, FileNode, PatchHunk, RunnerRegistration, ServerEvent, Session } from "@roamcli/protocol";
+import type {
+  AgentKind,
+  Approval,
+  Artifact,
+  FileNode,
+  PatchHunk,
+  RunnerRegistration,
+  ServerEvent,
+  Session,
+} from "@roamcli/protocol";
 import { Bell, Files, MessageSquare, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCenter } from "./components/ApprovalCenter";
@@ -9,40 +18,68 @@ import { NewSessionForm } from "./components/NewSessionForm";
 import { PushSettings } from "./components/PushSettings";
 import { RunnerSidebar } from "./components/RunnerSidebar";
 import { TerminalPanel } from "./components/TerminalPanel";
-import { createRoamApiClient, sendStreamCommand, type RoamApiClient } from "./lib/api";
+import {
+  createRoamApiClient,
+  sendStreamCommand,
+  type RoamApiClient,
+} from "./lib/api";
 import type { UiMessage, WorkspaceTab } from "./types";
 
-const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: typeof MessageSquare }> = [
+type SessionPatchHunk = PatchHunk & {
+  approvalId: string;
+  sessionId: string;
+};
+
+const workspaceTabs: Array<{
+  id: WorkspaceTab;
+  label: string;
+  icon: typeof MessageSquare;
+}> = [
   { id: "chat", label: "Conversation", icon: MessageSquare },
   { id: "files", label: "Files", icon: Files },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
-  { id: "approvals", label: "Approvals", icon: Bell }
+  { id: "approvals", label: "Approvals", icon: Bell },
 ];
 
 type AsyncState = "idle" | "loading" | "ready" | "error";
 
 export function App() {
-  const [token, setToken] = useState(() => localStorage.getItem("roamcli.token") ?? "dev-token");
+  const [token, setToken] = useState(
+    () => localStorage.getItem("roamcli.token") ?? "dev-token",
+  );
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("chat");
   const [runners, setRunners] = useState<RunnerRegistration[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [hunks, setHunks] = useState<PatchHunk[]>([]);
-  const [filesBySession, setFilesBySession] = useState<Record<string, FileNode[]>>({});
-  const [fileTreeState, setFileTreeState] = useState<Record<string, AsyncState>>({});
+  const [hunks, setHunks] = useState<SessionPatchHunk[]>([]);
+  const [filesBySession, setFilesBySession] = useState<
+    Record<string, FileNode[]>
+  >({});
+  const [fileTreeState, setFileTreeState] = useState<
+    Record<string, AsyncState>
+  >({});
   const [selectedFilePath, setSelectedFilePath] = useState("");
-  const [fileContent, setFileContent] = useState<{ path: string; content: string; truncated: boolean; encoding: string } | undefined>();
+  const [fileContent, setFileContent] = useState<
+    | { path: string; content: string; truncated: boolean; encoding: string }
+    | undefined
+  >();
   const [editorContent, setEditorContent] = useState("");
   const [fileContentState, setFileContentState] = useState<AsyncState>("idle");
   const [fileSaveState, setFileSaveState] = useState<AsyncState>("idle");
-  const [terminalLines, setTerminalLines] = useState<Record<string, string[]>>({});
+  const [terminalLines, setTerminalLines] = useState<Record<string, string[]>>(
+    {},
+  );
   const [patchApplyState, setPatchApplyState] = useState<AsyncState>("idle");
   const [selectedRunnerId, setSelectedRunnerId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [connectionState, setConnectionState] = useState<"open" | "closed" | "error">("closed");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [connectionState, setConnectionState] = useState<
+    "open" | "closed" | "error"
+  >("closed");
   const [error, setError] = useState<string | undefined>();
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
@@ -65,17 +102,26 @@ export function App() {
         setApprovals(state.approvals);
         setArtifacts(state.artifacts);
         setHunks(extractPatchHunks(state.approvals));
-        setSelectedRunnerId((current) => current || state.runners[0]?.runnerId || "");
-        setSelectedSessionId((current) => current || state.sessions[0]?.id || "");
+        setSelectedRunnerId(
+          (current) => current || state.runners[0]?.runnerId || "",
+        );
+        setSelectedSessionId(
+          (current) => current || state.sessions[0]?.id || "",
+        );
         setLoadState("ready");
       })
       .catch((loadError: unknown) => {
         if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        setError(
+          loadError instanceof Error ? loadError.message : String(loadError),
+        );
         setLoadState("error");
       });
 
-    const socket = api.connectStream((event) => applyServerEvent(event), setConnectionState);
+    const socket = api.connectStream(
+      (event) => applyServerEvent(event),
+      setConnectionState,
+    );
     streamRef.current = socket;
 
     return () => {
@@ -84,17 +130,38 @@ export function App() {
     };
   }, [token]);
 
-  const selectedRunner = runners.find((runner) => runner.runnerId === selectedRunnerId) ?? runners[0];
+  const selectedRunner =
+    runners.find((runner) => runner.runnerId === selectedRunnerId) ??
+    runners[0];
   const runnerSessions = useMemo(
-    () => sessions.filter((session) => session.runnerId === selectedRunner?.runnerId),
-    [selectedRunner?.runnerId, sessions]
+    () =>
+      sessions.filter(
+        (session) => session.runnerId === selectedRunner?.runnerId,
+      ),
+    [selectedRunner?.runnerId, sessions],
   );
-  const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? runnerSessions[0] ?? sessions[0];
-  const sessionMessages = selectedSession ? messages.filter((message) => message.sessionId === selectedSession.id) : [];
-  const sessionApprovals = selectedSession ? approvals.filter((approval) => approval.sessionId === selectedSession.id) : approvals;
-  const sessionTerminalLines = selectedSession ? (terminalLines[selectedSession.id] ?? []) : [];
-  const sessionFiles = selectedSession ? (filesBySession[selectedSession.id] ?? []) : [];
-  const sessionFileTreeState = selectedSession ? (fileTreeState[selectedSession.id] ?? "idle") : "idle";
+  const selectedSession =
+    sessions.find((session) => session.id === selectedSessionId) ??
+    runnerSessions[0] ??
+    sessions[0];
+  const sessionMessages = selectedSession
+    ? messages.filter((message) => message.sessionId === selectedSession.id)
+    : [];
+  const sessionApprovals = selectedSession
+    ? approvals.filter((approval) => approval.sessionId === selectedSession.id)
+    : approvals;
+  const sessionHunks = selectedSession
+    ? hunks.filter((hunk) => hunk.sessionId === selectedSession.id)
+    : [];
+  const sessionTerminalLines = selectedSession
+    ? (terminalLines[selectedSession.id] ?? [])
+    : [];
+  const sessionFiles = selectedSession
+    ? (filesBySession[selectedSession.id] ?? [])
+    : [];
+  const sessionFileTreeState = selectedSession
+    ? (fileTreeState[selectedSession.id] ?? "idle")
+    : "idle";
 
   useEffect(() => {
     if (!selectedSession || !apiRef.current) {
@@ -125,7 +192,9 @@ export function App() {
       .catch((fileError: unknown) => {
         if (cancelled) return;
         setFileTreeState((current) => ({ ...current, [sessionId]: "error" }));
-        setError(fileError instanceof Error ? fileError.message : String(fileError));
+        setError(
+          fileError instanceof Error ? fileError.message : String(fileError),
+        );
       });
 
     return () => {
@@ -135,11 +204,18 @@ export function App() {
 
   const selectRunner = (runnerId: string) => {
     setSelectedRunnerId(runnerId);
-    const nextSession = sessions.find((session) => session.runnerId === runnerId);
+    const nextSession = sessions.find(
+      (session) => session.runnerId === runnerId,
+    );
     setSelectedSessionId(nextSession?.id ?? "");
   };
 
-  const createSession = (values: { title: string; cwd: string; prompt: string; agent: AgentKind }) => {
+  const createSession = (values: {
+    title: string;
+    cwd: string;
+    prompt: string;
+    agent: AgentKind;
+  }) => {
     if (!selectedRunner || !apiRef.current) return;
     void apiRef.current
       .createSession({ runnerId: selectedRunner.runnerId, ...values })
@@ -148,7 +224,13 @@ export function App() {
         setSelectedSessionId(session.id);
         setActiveTab("chat");
       })
-      .catch((createError: unknown) => setError(createError instanceof Error ? createError.message : String(createError)));
+      .catch((createError: unknown) =>
+        setError(
+          createError instanceof Error
+            ? createError.message
+            : String(createError),
+        ),
+      );
   };
 
   const sendMessage = (content: string) => {
@@ -157,7 +239,7 @@ export function App() {
       type: "userMessage",
       requestId: `req-${Date.now()}`,
       sessionId: selectedSession.id,
-      content
+      content,
     });
     if (!sent) {
       setError("The event stream is not connected; message was not sent.");
@@ -168,18 +250,28 @@ export function App() {
     void apiRef.current
       ?.resolveApproval(approvalId, approved)
       .then((approval) => upsertApproval(approval))
-      .catch((approvalError: unknown) => setError(approvalError instanceof Error ? approvalError.message : String(approvalError)));
+      .catch((approvalError: unknown) =>
+        setError(
+          approvalError instanceof Error
+            ? approvalError.message
+            : String(approvalError),
+        ),
+      );
   };
 
   const resolveHunk = (hunkId: string, status: "accepted" | "rejected") => {
-    setHunks((current) => current.map((hunk) => (hunk.id === hunkId ? { ...hunk, status } : hunk)));
+    setHunks((current) =>
+      current.map((hunk) => (hunk.id === hunkId ? { ...hunk, status } : hunk)),
+    );
   };
 
   const applyAcceptedPatch = () => {
     if (!selectedSession || !apiRef.current) return;
     const sessionId = selectedSession.id;
     const openPath = selectedFilePath;
-    const patch = buildPatchFromHunks(hunks.filter((hunk) => hunk.status === "accepted"));
+    const patch = buildPatchFromHunks(
+      sessionHunks.filter((hunk) => hunk.status === "accepted"),
+    );
     if (!patch) {
       setError("No accepted patch hunks are ready to apply.");
       return;
@@ -188,7 +280,13 @@ export function App() {
     void apiRef.current
       .applyPatch(sessionId, patch)
       .then((result) => {
-        setHunks((current) => current.map((hunk) => (hunk.status === "accepted" ? { ...hunk, status: result.applied ? "edited" : "pending" } : hunk)));
+        setHunks((current) =>
+          current.map((hunk) =>
+            hunk.sessionId === sessionId && hunk.status === "accepted"
+              ? { ...hunk, status: result.applied ? "edited" : "pending" }
+              : hunk,
+          ),
+        );
         setPatchApplyState("ready");
         if (!result.applied) {
           setError(result.message);
@@ -199,7 +297,9 @@ export function App() {
       })
       .catch((patchError: unknown) => {
         setPatchApplyState("error");
-        setError(patchError instanceof Error ? patchError.message : String(patchError));
+        setError(
+          patchError instanceof Error ? patchError.message : String(patchError),
+        );
       });
   };
 
@@ -209,10 +309,12 @@ export function App() {
       type: "controlSignal",
       requestId: `req-${Date.now()}`,
       sessionId: selectedSession.id,
-      signal
+      signal,
     });
     if (!sent) {
-      setError("The event stream is not connected; control signal was not sent.");
+      setError(
+        "The event stream is not connected; control signal was not sent.",
+      );
     }
   };
 
@@ -222,10 +324,12 @@ export function App() {
       type: "userMessage",
       requestId: `req-${Date.now()}`,
       sessionId: selectedSession.id,
-      content: command
+      content: command,
     });
     if (!sent) {
-      setError("The event stream is not connected; terminal input was not sent.");
+      setError(
+        "The event stream is not connected; terminal input was not sent.",
+      );
     }
   };
 
@@ -247,7 +351,9 @@ export function App() {
       })
       .catch((saveError: unknown) => {
         setFileSaveState("error");
-        setError(saveError instanceof Error ? saveError.message : String(saveError));
+        setError(
+          saveError instanceof Error ? saveError.message : String(saveError),
+        );
       });
   };
 
@@ -267,18 +373,24 @@ export function App() {
       })
       .catch((fileError: unknown) => {
         setFileContentState("error");
-        setError(fileError instanceof Error ? fileError.message : String(fileError));
+        setError(
+          fileError instanceof Error ? fileError.message : String(fileError),
+        );
       });
   };
 
   function applyServerEvent(event: ServerEvent) {
     if (event.type === "runner:online") {
-      setRunners((current) => upsertBy(current, event.runner, (runner) => runner.runnerId));
+      setRunners((current) =>
+        upsertBy(current, event.runner, (runner) => runner.runnerId),
+      );
       setSelectedRunnerId((current) => current || event.runner.runnerId);
       return;
     }
     if (event.type === "runner:offline") {
-      setRunners((current) => current.filter((runner) => runner.runnerId !== event.runnerId));
+      setRunners((current) =>
+        current.filter((runner) => runner.runnerId !== event.runnerId),
+      );
       return;
     }
     if (event.type === "session:created" || event.type === "session:updated") {
@@ -287,7 +399,9 @@ export function App() {
       return;
     }
     if (event.type === "message:created") {
-      setMessages((current) => upsertBy(current, event.message, (message) => message.id));
+      setMessages((current) =>
+        upsertBy(current, event.message, (message) => message.id),
+      );
       return;
     }
     if (event.type === "token") {
@@ -297,29 +411,47 @@ export function App() {
     if (event.type === "terminal:data") {
       setTerminalLines((current) => ({
         ...current,
-        [event.sessionId]: [...(current[event.sessionId] ?? []), stripAnsi(event.chunk)].slice(-1000)
+        [event.sessionId]: [
+          ...(current[event.sessionId] ?? []),
+          stripAnsi(event.chunk),
+        ].slice(-1000),
       }));
       return;
     }
-    if (event.type === "approval:requested" || event.type === "approval:updated") {
+    if (
+      event.type === "approval:requested" ||
+      event.type === "approval:updated"
+    ) {
       upsertApproval(event.approval);
-      setHunks((current) => mergePatchHunks(current, extractPatchHunks([event.approval])));
+      setHunks((current) =>
+        mergePatchHunks(current, extractPatchHunks([event.approval])),
+      );
       return;
     }
     if (event.type === "artifact:created") {
-      setArtifacts((current) => upsertBy(current, event.artifact, (artifact) => artifact.id));
+      setArtifacts((current) =>
+        upsertBy(current, event.artifact, (artifact) => artifact.id),
+      );
       return;
     }
     if (event.type === "file:tree") {
       setFilesBySession((current) => ({
         ...current,
-        [event.result.sessionId]: event.result.root.children ?? [event.result.root]
+        [event.result.sessionId]: event.result.root.children ?? [
+          event.result.root,
+        ],
       }));
-      setFileTreeState((current) => ({ ...current, [event.result.sessionId]: "ready" }));
+      setFileTreeState((current) => ({
+        ...current,
+        [event.result.sessionId]: "ready",
+      }));
       return;
     }
     if (event.type === "file:content") {
-      if (event.result.sessionId === selectedSession?.id && event.result.path === selectedFilePath) {
+      if (
+        event.result.sessionId === selectedSession?.id &&
+        event.result.path === selectedFilePath
+      ) {
         setFileContent(event.result);
         setEditorContent(event.result.content);
         setFileContentState("ready");
@@ -327,7 +459,10 @@ export function App() {
       return;
     }
     if (event.type === "file:written") {
-      if (event.result.sessionId === selectedSession?.id && event.result.path === selectedFilePath) {
+      if (
+        event.result.sessionId === selectedSession?.id &&
+        event.result.path === selectedFilePath
+      ) {
         setFileSaveState("ready");
       }
       return;
@@ -357,7 +492,11 @@ export function App() {
       const id = `stream-${sessionId}`;
       const existing = current.find((message) => message.id === id);
       if (existing) {
-        return current.map((message) => (message.id === id ? { ...message, content: message.content + content } : message));
+        return current.map((message) =>
+          message.id === id
+            ? { ...message, content: message.content + content }
+            : message,
+        );
       }
       return [
         ...current,
@@ -367,8 +506,8 @@ export function App() {
           role: "assistant",
           content,
           encrypted: false,
-          createdAt: new Date().toISOString()
-        }
+          createdAt: new Date().toISOString(),
+        },
       ];
     });
   }
@@ -378,37 +517,60 @@ export function App() {
       <header className="topbar">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase text-ink-500">RoamCli</p>
-          <h1 className="truncate text-lg font-semibold text-ink-900">Remote Agent Control</h1>
+          <h1 className="truncate text-lg font-semibold text-ink-900">
+            Remote Agent Control
+          </h1>
         </div>
         <div className="topbar-actions">
-          <span className={`rounded px-2 py-1 text-xs font-medium ${connectionState === "open" ? "bg-emerald-50 text-signal-green" : "bg-amber-50 text-signal-amber"}`}>
-            {connectionState === "open" ? "stream connected" : "stream disconnected"}
+          <span
+            className={`rounded px-2 py-1 text-xs font-medium ${connectionState === "open" ? "bg-emerald-50 text-signal-green" : "bg-amber-50 text-signal-amber"}`}
+          >
+            {connectionState === "open"
+              ? "stream connected"
+              : "stream disconnected"}
           </span>
           <label className="token-field">
             <span>Token</span>
-            <input value={token} onChange={(event) => setToken(event.target.value)} aria-label="API token" />
+            <input
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              aria-label="API token"
+            />
           </label>
-          <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-signal-green">{runners.length} runners online</span>
+          <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-signal-green">
+            {runners.length} runners online
+          </span>
         </div>
       </header>
 
       {error ? <div className="error-banner">{error}</div> : null}
 
-      {loadState === "loading" ? <div className="empty-state">Loading remote RoamCli state...</div> : null}
+      {loadState === "loading" ? (
+        <div className="empty-state">Loading remote RoamCli state...</div>
+      ) : null}
 
       {loadState !== "loading" && runners.length === 0 ? (
         <div className="empty-state">
           No runners are connected. Start one with:
-          <pre>pnpm --filter @roamcli/runner dev --server ws://127.0.0.1:8787/v1/runner --token {token || "dev-token"}</pre>
+          <pre>
+            pnpm --filter @roamcli/runner dev --server
+            ws://127.0.0.1:8787/v1/runner --token {token || "dev-token"}
+          </pre>
         </div>
       ) : null}
 
       {selectedRunner ? (
         <>
-          <section className="mobile-controls" aria-label="Mobile runner controls">
+          <section
+            className="mobile-controls"
+            aria-label="Mobile runner controls"
+          >
             <label>
               <span>Runner</span>
-              <select value={selectedRunnerId} onChange={(event) => selectRunner(event.target.value)}>
+              <select
+                value={selectedRunnerId}
+                onChange={(event) => selectRunner(event.target.value)}
+              >
                 {runners.map((runner) => (
                   <option key={runner.runnerId} value={runner.runnerId}>
                     {runner.displayName}
@@ -418,7 +580,10 @@ export function App() {
             </label>
             <label>
               <span>Session</span>
-              <select value={selectedSession?.id ?? ""} onChange={(event) => setSelectedSessionId(event.target.value)}>
+              <select
+                value={selectedSession?.id ?? ""}
+                onChange={(event) => setSelectedSessionId(event.target.value)}
+              >
                 {runnerSessions.map((session) => (
                   <option key={session.id} value={session.id}>
                     {session.title}
@@ -428,13 +593,22 @@ export function App() {
             </label>
             <details>
               <summary>New session</summary>
-              <NewSessionForm key={selectedRunner.runnerId} runner={selectedRunner} onCreate={createSession} />
+              <NewSessionForm
+                key={selectedRunner.runnerId}
+                runner={selectedRunner}
+                onCreate={createSession}
+              />
             </details>
           </section>
 
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
             {workspaceTabs.map((tab) => (
-              <WorkspaceTabButton key={tab.id} tab={tab} activeTab={activeTab} onChange={setActiveTab} />
+              <WorkspaceTabButton
+                key={tab.id}
+                tab={tab}
+                activeTab={activeTab}
+                onChange={setActiveTab}
+              />
             ))}
           </nav>
 
@@ -449,10 +623,17 @@ export function App() {
               onCreateSession={createSession}
             />
             {selectedSession ? (
-              <ChatPanel session={selectedSession} messages={sessionMessages} onSend={sendMessage} onControl={sendControl} />
+              <ChatPanel
+                session={selectedSession}
+                messages={sessionMessages}
+                onSend={sendMessage}
+                onControl={sendControl}
+              />
             ) : (
               <section className="chat-column" aria-label="Conversation">
-                <div className="empty-state compact">Create a session on the selected runner.</div>
+                <div className="empty-state compact">
+                  Create a session on the selected runner.
+                </div>
               </section>
             )}
             <aside className="workspace-column" aria-label="Workspace tools">
@@ -460,7 +641,12 @@ export function App() {
                 {workspaceTabs
                   .filter((tab) => tab.id !== "chat")
                   .map((tab) => (
-                    <WorkspaceTabButton key={tab.id} tab={tab} activeTab={activeTab === "chat" ? "files" : activeTab} onChange={setActiveTab} />
+                    <WorkspaceTabButton
+                      key={tab.id}
+                      tab={tab}
+                      activeTab={activeTab === "chat" ? "files" : activeTab}
+                      onChange={setActiveTab}
+                    />
                   ))}
               </nav>
               <div className="workspace-scroll">
@@ -479,19 +665,30 @@ export function App() {
                   />
                 </div>
                 <div className="workspace-surface terminal-surface">
-                  <TerminalPanel lines={sessionTerminalLines} streamState={connectionState} onCommand={sendTerminalCommand} onControl={sendControl} />
+                  <TerminalPanel
+                    lines={sessionTerminalLines}
+                    streamState={connectionState}
+                    onCommand={sendTerminalCommand}
+                    onControl={sendControl}
+                  />
                 </div>
                 <div className="workspace-surface approvals-surface">
                   <PushSettings />
                   <ApprovalCenter
                     approvals={sessionApprovals}
-                    hunks={hunks}
+                    hunks={sessionHunks}
                     onResolveApproval={resolveApproval}
                     onResolveHunk={resolveHunk}
                     onApplyPatch={applyAcceptedPatch}
                     patchApplyState={patchApplyState}
                   />
-                  <ArtifactList artifacts={artifacts.filter((artifact) => !selectedSession || artifact.sessionId === selectedSession.id)} />
+                  <ArtifactList
+                    artifacts={artifacts.filter(
+                      (artifact) =>
+                        !selectedSession ||
+                        artifact.sessionId === selectedSession.id,
+                    )}
+                  />
                 </div>
               </div>
             </aside>
@@ -507,7 +704,7 @@ export function App() {
 function WorkspaceTabButton({
   tab,
   activeTab,
-  onChange
+  onChange,
 }: {
   tab: (typeof workspaceTabs)[number];
   activeTab: WorkspaceTab;
@@ -515,7 +712,11 @@ function WorkspaceTabButton({
 }) {
   const Icon = tab.icon;
   return (
-    <button type="button" className={activeTab === tab.id ? "is-active" : ""} onClick={() => onChange(tab.id)}>
+    <button
+      type="button"
+      className={activeTab === tab.id ? "is-active" : ""}
+      onClick={() => onChange(tab.id)}
+    >
       <Icon size={16} />
       <span>{tab.label}</span>
     </button>
@@ -529,7 +730,11 @@ function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
         <h2 className="panel-title">Artifacts</h2>
         <span className="text-xs text-ink-500">{artifacts.length}</span>
       </div>
-      {artifacts.length === 0 ? <div className="empty-state compact">No artifacts uploaded for this session.</div> : null}
+      {artifacts.length === 0 ? (
+        <div className="empty-state compact">
+          No artifacts uploaded for this session.
+        </div>
+      ) : null}
       {artifacts.map((artifact) => (
         <article key={artifact.id} className="approval-card">
           <h3 className="truncate font-medium text-ink-900">{artifact.name}</h3>
@@ -543,10 +748,10 @@ function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
                   id: artifact.id,
                   sha256: artifact.sha256,
                   storagePath: artifact.storagePath,
-                  createdAt: artifact.createdAt
+                  createdAt: artifact.createdAt,
                 },
                 null,
-                2
+                2,
               )}
             </pre>
           ) : null}
@@ -559,14 +764,23 @@ function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
 function upsertBy<T>(items: T[], next: T, keyOf: (item: T) => string): T[] {
   const key = keyOf(next);
   const exists = items.some((item) => keyOf(item) === key);
-  return exists ? items.map((item) => (keyOf(item) === key ? next : item)) : [next, ...items];
+  return exists
+    ? items.map((item) => (keyOf(item) === key ? next : item))
+    : [next, ...items];
 }
 
-function mergePatchHunks(current: PatchHunk[], next: PatchHunk[]): PatchHunk[] {
-  return next.reduce((items, hunk) => upsertBy(items, hunk, (item) => item.id), current);
+function mergePatchHunks(
+  current: SessionPatchHunk[],
+  next: SessionPatchHunk[],
+): SessionPatchHunk[] {
+  return next.reduce(
+    (items, hunk) =>
+      upsertBy(items, hunk, (item) => `${item.approvalId}:${item.id}`),
+    current,
+  );
 }
 
-function extractPatchHunks(approvals: Approval[]): PatchHunk[] {
+function extractPatchHunks(approvals: Approval[]): SessionPatchHunk[] {
   return approvals.flatMap((approval) => {
     if (approval.kind !== "applyPatch") {
       return [];
@@ -575,7 +789,11 @@ function extractPatchHunks(approvals: Approval[]): PatchHunk[] {
     if (!Array.isArray(payload.hunks)) {
       return [];
     }
-    return payload.hunks.filter(isPatchHunk);
+    return payload.hunks.filter(isPatchHunk).map((hunk) => ({
+      ...hunk,
+      approvalId: approval.id,
+      sessionId: approval.sessionId,
+    }));
   });
 }
 
@@ -592,7 +810,7 @@ function buildPatchFromHunks(hunks: PatchHunk[]): string {
       `diff --git a/${filePath} b/${filePath}`,
       `--- a/${filePath}`,
       `+++ b/${filePath}`,
-      ...fileHunks.flatMap((hunk) => [hunk.header, ...hunk.lines])
+      ...fileHunks.flatMap((hunk) => [hunk.header, ...hunk.lines]),
     ])
     .join("\n")
     .concat("\n");
@@ -609,7 +827,11 @@ function isPatchHunk(value: unknown): value is PatchHunk {
     typeof hunk.header === "string" &&
     Array.isArray(hunk.lines) &&
     hunk.lines.every((line) => typeof line === "string") &&
-    (hunk.status === undefined || hunk.status === "pending" || hunk.status === "accepted" || hunk.status === "rejected" || hunk.status === "edited")
+    (hunk.status === undefined ||
+      hunk.status === "pending" ||
+      hunk.status === "accepted" ||
+      hunk.status === "rejected" ||
+      hunk.status === "edited")
   );
 }
 

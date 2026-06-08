@@ -39,9 +39,12 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm smoke:e2e
+pnpm blackbox:browser
 ```
 
 `pnpm smoke:e2e` starts its own local Server and Runner, creates a real session, and verifies the MVP path without relying on mock HTTP responses.
+
+`pnpm blackbox:browser` builds the app, starts a local Server and Runner, opens the real Web UI in Chromium, and verifies the empty-runner state plus desktop, tablet, and mobile user paths: chat, file browse/edit/save, terminal input, exec approval approve/reject, artifact display, and patch review/apply. By default it uses an isolated temporary Runner workspace; set `ROAMCLI_BLACKBOX_WORKSPACE` to point it at a specific workspace.
 
 ## Run Locally
 
@@ -132,9 +135,21 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm smoke:e2e
+pnpm blackbox:browser
 ```
 
-Then start Server + Runner as shown above and use Playwright to open `http://127.0.0.1:8787`.
+Then start Server + Runner as shown above if you want to inspect the app manually.
+
+`pnpm blackbox:browser` supports:
+
+```text
+ROAMCLI_BLACKBOX_BASE_URL       Connect to an existing server instead of starting one.
+ROAMCLI_BLACKBOX_TOKEN          Bearer token. Default: dev-token.
+ROAMCLI_BLACKBOX_RUNNER_ID      Runner id to use or start. Default: blackbox-<pid>.
+ROAMCLI_BLACKBOX_WORKSPACE      Workspace exposed to the runner. Default: temporary isolated workspace.
+ROAMCLI_BLACKBOX_TIMEOUT_MS     Per-step timeout. Default: 45000.
+ROAMCLI_BLACKBOX_HEADFUL=1      Show Chromium while the test runs.
+```
 
 ## Docker Compose
 

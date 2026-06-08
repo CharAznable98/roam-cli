@@ -4,12 +4,19 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { AuditLog } from "../audit.js";
 import { EventCache } from "../cache.js";
-import { backoffDelay, RunnerConnection, type WebSocketLike } from "../connection.js";
+import {
+  backoffDelay,
+  RunnerConnection,
+  type WebSocketLike,
+} from "../connection.js";
 
 class FakeSocket implements WebSocketLike {
   public readyState = 0;
   public sent: string[] = [];
-  readonly #listeners = new Map<string, Array<(event?: { data: unknown }) => void>>();
+  readonly #listeners = new Map<
+    string,
+    Array<(event?: { data: unknown }) => void>
+  >();
 
   public send(data: string): void {
     this.sent.push(data);
@@ -20,13 +27,19 @@ class FakeSocket implements WebSocketLike {
     this.emit("close");
   }
 
-  public addEventListener(type: "open" | "message" | "close" | "error", listener: (event?: { data: unknown }) => void): void {
+  public addEventListener(
+    type: "open" | "message" | "close" | "error",
+    listener: (event?: { data: unknown }) => void,
+  ): void {
     const listeners = this.#listeners.get(type) ?? [];
     listeners.push(listener);
     this.#listeners.set(type, listeners);
   }
 
-  public emit(type: "open" | "message" | "close" | "error", event?: { data: unknown }): void {
+  public emit(
+    type: "open" | "message" | "close" | "error",
+    event?: { data: unknown },
+  ): void {
     if (type === "open") {
       this.readyState = 1;
     }
@@ -57,8 +70,17 @@ describe("RunnerConnection", () => {
         workspaceRoot: dir,
         profile: "standard",
         publicKey: "0123456789abcdef",
-        capabilities: [{ kind: "mock", label: "Mock", command: "node", args: [], parser: "mock", supportsResume: false }],
-        version: "0.1.0"
+        capabilities: [
+          {
+            kind: "mock",
+            label: "Mock",
+            command: "node",
+            args: [],
+            parser: "mock",
+            supportsResume: false,
+          },
+        ],
+        version: "1.0.0",
       },
       cache: new EventCache(join(dir, "pending.jsonl")),
       audit: new AuditLog(join(dir, "audit.jsonl")),
@@ -70,7 +92,7 @@ describe("RunnerConnection", () => {
         return socket;
       },
       minBackoffMs: 1,
-      maxBackoffMs: 1
+      maxBackoffMs: 1,
     });
 
     const started = connection.start().catch((error: unknown) => error);
@@ -80,15 +102,17 @@ describe("RunnerConnection", () => {
       data: JSON.stringify({
         type: "deliverInput",
         sessionId: "s1",
-        content: "hello"
-      })
+        content: "hello",
+      }),
     });
     await vi.waitFor(() => {
       expect(handled).toEqual(["deliverInput"]);
     });
     connection.stop();
 
-    expect(JSON.parse(socket.sent[0] ?? "{}")).toMatchObject({ type: "registered" });
+    expect(JSON.parse(socket.sent[0] ?? "{}")).toMatchObject({
+      type: "registered",
+    });
     await expect(started).resolves.toBeInstanceOf(Error);
   });
 });

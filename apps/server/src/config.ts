@@ -27,17 +27,17 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
     process.env.ROAMCLI_DATA_DIR ??
     path.resolve(process.cwd(), ".roamcli-server");
   const configuredWebDist = input.webDistDir ?? process.env.ROAMCLI_WEB_DIST;
-  const defaultWebDist = path.resolve(process.cwd(), "apps/web/dist");
+  const defaultWebDist = firstExistingDirectory([
+    path.resolve(process.cwd(), "apps/web/dist"),
+    path.resolve(process.cwd(), "../web/dist"),
+  ]);
   const webDistDir =
     configuredWebDist === false
       ? undefined
-      : (configuredWebDist ??
-        (isDirectory(defaultWebDist) ? defaultWebDist : undefined));
+      : (configuredWebDist ?? defaultWebDist);
   const authToken = input.authToken ?? process.env.ROAMCLI_AUTH_TOKEN;
   const approvalSecret =
-    input.approvalSecret ??
-    process.env.ROAMCLI_APPROVAL_SECRET ??
-    authToken;
+    input.approvalSecret ?? process.env.ROAMCLI_APPROVAL_SECRET ?? authToken;
 
   return {
     host: input.host ?? process.env.HOST ?? "127.0.0.1",
@@ -58,4 +58,8 @@ function isDirectory(candidate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function firstExistingDirectory(candidates: string[]): string | undefined {
+  return candidates.find(isDirectory);
 }

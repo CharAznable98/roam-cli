@@ -1,6 +1,6 @@
 {
   "name": "roamcli",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Open-source remote AI coding agent control platform.",
   "license": "Apache-2.0",
@@ -8,6 +8,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm -r build",
+    "blackbox:browser": "pnpm build && node scripts/blackbox-browser.mjs",
     "dev": "pnpm --filter @roamcli/server dev",
     "smoke:e2e": "node scripts/smoke-e2e.mjs",
     "test": "vitest run",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "playwright": "^1.60.0",
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
