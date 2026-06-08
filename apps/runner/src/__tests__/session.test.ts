@@ -93,6 +93,48 @@ describe("SessionManager", () => {
     await expect(readFile(join(workspace, "src", "main.ts"), "utf8")).resolves.toBe("console.log('saved');");
   });
 
+  it("resolves emitted artifact paths inside the started session cwd", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-artifact-"));
+    const sessionCwd = join(workspace, "task");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeFile(join(sessionCwd, "result.log"), "artifact output", "utf8");
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      capabilities: buildCapabilities("standard").filter((capability) => capability.kind === "mock"),
+      emit: (event) => {
+        events.push(event);
+      }
+    });
+
+    await manager.start(makeSession(sessionCwd), "ready");
+    manager.deliverInput(
+      "s1",
+      `ROAMCLI_ARTIFACT: ${JSON.stringify({
+        type: "artifact",
+        path: "result.log",
+        kind: "log",
+        mimeType: "text/plain"
+      })}`
+    );
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "artifactCreated",
+          artifact: expect.objectContaining({
+            sessionId: "s1",
+            name: "result.log",
+            mimeType: "text/plain",
+            storagePath: join(sessionCwd, "result.log")
+          })
+        })
+      );
+    });
+    expect(events.some((event) => event.type === "error" && event.code === "ARTIFACT_ERROR")).toBe(false);
+    manager.control("s1", "stop");
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-"));
     await writeFile(join(workspace, "README.md"), "old\n");

@@ -288,7 +288,12 @@ export class SessionManager {
 
     for (const draft of parsed.artifacts) {
       try {
-        const artifact = await buildArtifact(running.session.id, this.#resolveCwd(draft.path), draft.kind ?? "file", draft.mimeType ?? "application/octet-stream");
+        const artifact = await buildArtifact(
+          running.session.id,
+          this.#resolveSessionPath(running.session.cwd, draft.path),
+          draft.kind ?? "file",
+          draft.mimeType ?? "application/octet-stream"
+        );
         await this.#emit({ type: "artifactCreated", artifact });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -301,6 +306,14 @@ export class SessionManager {
     const candidate = resolve(this.#workspace, cwd);
     if (candidate !== this.#workspace && !candidate.startsWith(`${this.#workspace}/`)) {
       throw new Error(`Path escapes workspace: ${cwd}`);
+    }
+    return candidate;
+  }
+
+  #resolveSessionPath(sessionCwd: string, path: string): string {
+    const candidate = resolve(sessionCwd, path);
+    if (candidate !== sessionCwd && !candidate.startsWith(`${sessionCwd}/`)) {
+      throw new Error(`Path escapes session cwd: ${path}`);
     }
     return candidate;
   }
