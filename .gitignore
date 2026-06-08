@@ -16,8 +16,10 @@ coverage/
 # Runtime state and local data
 .roamcli/
 .roamcli-server/
+.roamcli-server-local-*/
 .roam-runner/
 **/.roamcli-server/
+**/.roamcli-server-local-*/
 **/.roam-runner/
 *.db
 *.db-shm
