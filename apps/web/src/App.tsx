@@ -318,6 +318,24 @@ export function App() {
     }
   };
 
+  const deleteSelectedSession = () => {
+    if (!selectedSession || !apiRef.current) return;
+    if (!window.confirm(`Delete session "${selectedSession.title}"?`)) {
+      return;
+    }
+    const sessionId = selectedSession.id;
+    void apiRef.current
+      .deleteSession(sessionId)
+      .then(() => removeSession(sessionId))
+      .catch((deleteError: unknown) =>
+        setError(
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
+        ),
+      );
+  };
+
   const sendTerminalCommand = (command: string) => {
     if (!selectedSession) return;
     const sent = sendStreamCommand(streamRef.current, {
@@ -396,6 +414,10 @@ export function App() {
     if (event.type === "session:created" || event.type === "session:updated") {
       upsertSession(event.session);
       setSelectedSessionId((current) => current || event.session.id);
+      return;
+    }
+    if (event.type === "session:deleted") {
+      removeSession(event.sessionId);
       return;
     }
     if (event.type === "message:created") {
@@ -481,6 +503,23 @@ export function App() {
 
   function upsertSession(session: Session) {
     setSessions((current) => upsertBy(current, session, (item) => item.id));
+  }
+
+  function removeSession(sessionId: string) {
+    setSessions((current) => {
+      const next = current.filter((session) => session.id !== sessionId);
+      setSelectedSessionId((selected) =>
+        selected === sessionId ? "" : selected,
+      );
+      return next;
+    });
+    setMessages((current) => current.filter((message) => message.sessionId !== sessionId));
+    setApprovals((current) => current.filter((approval) => approval.sessionId !== sessionId));
+    setArtifacts((current) => current.filter((artifact) => artifact.sessionId !== sessionId));
+    setHunks((current) => current.filter((hunk) => hunk.sessionId !== sessionId));
+    setFilesBySession((current) => omitKey(current, sessionId));
+    setFileTreeState((current) => omitKey(current, sessionId));
+    setTerminalLines((current) => omitKey(current, sessionId));
   }
 
   function upsertApproval(approval: Approval) {
@@ -628,6 +667,7 @@ export function App() {
                 messages={sessionMessages}
                 onSend={sendMessage}
                 onControl={sendControl}
+                onDelete={deleteSelectedSession}
               />
             ) : (
               <section className="chat-column" aria-label="Conversation">
@@ -767,6 +807,11 @@ function upsertBy<T>(items: T[], next: T, keyOf: (item: T) => string): T[] {
   return exists
     ? items.map((item) => (keyOf(item) === key ? next : item))
     : [next, ...items];
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _removed, ...rest } = record;
+  return rest;
 }
 
 function mergePatchHunks(

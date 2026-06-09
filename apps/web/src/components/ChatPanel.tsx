@@ -1,5 +1,5 @@
 import type { Session } from "@roamcli/protocol";
-import { Bot, ChevronDown, CircleStop, Play, Send, SquareTerminal, User } from "lucide-react";
+import { Bot, ChevronDown, CircleStop, Play, Send, SquareTerminal, Trash2, User } from "lucide-react";
 import { FormEvent, useState } from "react";
 import type { UiMessage } from "../types";
 import { StatusPill } from "./StatusPill";
@@ -10,9 +10,10 @@ type ChatPanelProps = {
   messages: UiMessage[];
   onSend: (content: string) => void;
   onControl?: (signal: "stop" | "resume") => void;
+  onDelete?: () => void;
 };
 
-export function ChatPanel({ session, messages, onSend, onControl }: ChatPanelProps) {
+export function ChatPanel({ session, messages, onSend, onControl, onDelete }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -44,6 +45,9 @@ export function ChatPanel({ session, messages, onSend, onControl }: ChatPanelPro
           </button>
           <button className="icon-button" type="button" aria-label="Stop session" title="Stop session" onClick={() => onControl?.("stop")}>
             <CircleStop size={17} />
+          </button>
+          <button className="icon-button" type="button" aria-label="Delete session" title="Delete session" onClick={onDelete}>
+            <Trash2 size={17} />
           </button>
         </div>
       </div>

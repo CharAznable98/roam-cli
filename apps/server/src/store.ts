@@ -116,6 +116,11 @@ export class ServerStore {
     return row ? toSession(row) : undefined;
   }
 
+  deleteSession(id: string): boolean {
+    const result = this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
   updateSessionStatus(id: string, status: SessionStatus, updatedAt: string): Session | undefined {
     this.db.prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?").run(status, updatedAt, id);
     return this.getSession(id);

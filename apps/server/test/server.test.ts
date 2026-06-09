@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { RunnerRegistration } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { createServer, type RoamServer } from "../src/app.js";
 
@@ -524,6 +524,75 @@ describe("server", () => {
     expect(detail.json().artifacts[0].name).toBe("run.log");
 
     runner.close();
+  });
+
+  it("deletes a session, cascades persisted children, removes artifacts, and broadcasts deletion", async () => {
+    const now = new Date().toISOString();
+    app.roam.store.createSession({
+      id: "session-delete",
+      title: "Delete me",
+      runnerId: "runner-1",
+      agent: "mock",
+      status: "running",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const sendToRunner = vi.spyOn(app.roam.hub, "sendToRunner");
+    const broadcast = vi.spyOn(app.roam.hub, "broadcast");
+
+    app.roam.store.upsertApproval({
+      id: "approval-delete",
+      sessionId: "session-delete",
+      runnerId: "runner-1",
+      kind: "execCommand",
+      summary: "Pending command",
+      payload: { command: "pnpm test" },
+      status: "pending",
+      requestedAt: now,
+    });
+    const artifactResponse = await app.inject({
+      method: "POST",
+      url: "/v1/artifacts",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        sessionId: "session-delete",
+        kind: "log",
+        name: "delete.log",
+        mimeType: "text/plain",
+        content: "temporary",
+      },
+    });
+    const artifactPath = artifactResponse.json().artifact.storagePath as string;
+    expect(fs.existsSync(artifactPath)).toBe(true);
+    broadcast.mockClear();
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/v1/sessions/session-delete",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(sendToRunner).toHaveBeenCalledWith("runner-1", {
+      type: "controlSignal",
+      sessionId: "session-delete",
+      signal: "stop",
+    });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "session:deleted",
+      sessionId: "session-delete",
+    });
+
+    expect(app.roam.store.getSession("session-delete")).toBeUndefined();
+    expect(app.roam.store.getApproval("approval-delete")).toBeUndefined();
+    expect(fs.existsSync(artifactPath)).toBe(false);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/session-delete",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(detail.statusCode).toBe(404);
   });
 
   it("rejects invalid approval signatures and applies signed patches through runner RPC", async () => {
