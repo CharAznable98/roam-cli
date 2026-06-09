@@ -49,4 +49,27 @@ describe("AgentProcess", () => {
     await expect(exit).resolves.toMatchObject({ code: 130 });
     expect(output).toContain("interrupted");
   });
+
+  it("can close stdin for one-shot child processes", async () => {
+    const child = await spawnAgentProcess(
+      process.execPath,
+      ["-e", "process.stdin.resume();process.stdin.on('end', () => { console.log('ended'); });"],
+      {
+        cwd: process.cwd(),
+        preferPty: false
+      }
+    );
+    let output = "";
+    child.onData((chunk) => {
+      output += chunk.toString();
+    });
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.onExit(resolve);
+    });
+
+    child.endInput();
+
+    await expect(exit).resolves.toMatchObject({ code: 0 });
+    expect(output).toContain("ended");
+  });
 });

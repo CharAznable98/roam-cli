@@ -24,10 +24,22 @@ describe("capabilities", () => {
     expect(getPermissionTemplate("trusted").blockedCommands).toEqual([]);
   });
 
-  it("uses base codex startup without runner profile flags", () => {
+  it("uses non-interactive codex exec by default", () => {
     const codex = buildCapabilities("trusted").find((capability) => capability.kind === "codex");
 
-    expect(codex).toMatchObject({ command: "codex", args: [] });
+    expect(codex).toMatchObject({
+      command: "codex",
+      args: [
+        "exec",
+        "--json",
+        "--color",
+        "never",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox"
+      ],
+      parser: "codex-json",
+      supportsResume: false
+    });
   });
 
   it("supports per-agent command and args overrides", () => {

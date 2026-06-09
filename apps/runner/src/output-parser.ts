@@ -21,10 +21,19 @@ export interface OutputParseResult {
 
 export class OutputParser {
   #buffer = "";
+  readonly #mode: string;
+
+  public constructor(mode = "text") {
+    this.#mode = mode;
+  }
 
   public feed(chunk: string | Buffer): OutputParseResult {
     const parsed = parseAnsiChunk(chunk);
     this.#buffer += parsed.text;
+
+    if (this.#mode === "codex-json") {
+      return this.#feedCodexJson(parsed);
+    }
 
     const approvals: ApprovalRequestDraft[] = [];
     const artifacts: ArtifactDraft[] = [];
@@ -42,6 +51,34 @@ export class OutputParser {
     }
 
     return { chunk: parsed, approvals, artifacts };
+  }
+
+  #feedCodexJson(parsed: ParsedChunk): OutputParseResult {
+    let text = "";
+    const completeLines = this.#completeLines();
+    for (const line of completeLines) {
+      const event = parseJsonObject(line);
+      if (event?.type !== "item.completed" || !isRecord(event.item)) {
+        continue;
+      }
+      if (event.item.type !== "agent_message" || typeof event.item.text !== "string") {
+        continue;
+      }
+      text += event.item.text;
+      if (!text.endsWith("\n")) {
+        text += "\n";
+      }
+    }
+
+    return {
+      chunk: {
+        raw: parsed.raw,
+        text,
+        lines: text.split(/\r?\n/).filter((line) => line.length > 0)
+      },
+      approvals: [],
+      artifacts: []
+    };
   }
 
   #completeLines(): string[] {

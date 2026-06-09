@@ -10,8 +10,8 @@ export function buildCapabilities(profile: RunnerProfile): RunnerCapability[] {
     label: labelFor(kind),
     command: commandFor(kind),
     args: argsFor(kind),
-    parser: kind,
-    supportsResume: kind !== "shell"
+    parser: parserFor(kind),
+    supportsResume: supportsResume(kind)
   }));
 }
 
@@ -60,6 +60,16 @@ function argsFor(kind: AgentKind): string[] {
     return parseArgs(override);
   }
 
+  if (kind === "codex") {
+    return [
+      "exec",
+      "--json",
+      "--color",
+      "never",
+      "--skip-git-repo-check",
+      "--dangerously-bypass-approvals-and-sandbox"
+    ];
+  }
   if (kind === "mock") {
     return [
       "-e",
@@ -75,6 +85,14 @@ function argsFor(kind: AgentKind): string[] {
     return ["-i"];
   }
   return [];
+}
+
+function parserFor(kind: AgentKind): string {
+  return kind === "codex" ? "codex-json" : kind;
+}
+
+function supportsResume(kind: AgentKind): boolean {
+  return kind !== "shell" && kind !== "codex";
 }
 
 function parseArgs(value: string): string[] {

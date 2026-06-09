@@ -92,10 +92,11 @@ export class SessionManager {
       return;
     }
 
-    const requiresPty = capability.kind !== "mock";
+    const usesPromptArgument = capability.parser === "codex-json";
+    const requiresPty = capability.kind !== "mock" && !usesPromptArgument;
     let child: AgentProcess;
     try {
-      child = await spawnAgentProcess(capability.command, capability.args, {
+      child = await spawnAgentProcess(capability.command, usesPromptArgument ? [...capability.args, prompt] : capability.args, {
         cwd,
         env: process.env,
         preferPty: requiresPty,
@@ -107,7 +108,7 @@ export class SessionManager {
       await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "failed" });
       return;
     }
-    const running: RunningSession = { session: { ...session, cwd }, child, parser: new OutputParser(), stopRequested: false };
+    const running: RunningSession = { session: { ...session, cwd }, child, parser: new OutputParser(capability.parser), stopRequested: false };
     this.#sessions.set(session.id, running);
     this.#sessionCwds.set(session.id, cwd);
 
@@ -125,9 +126,13 @@ export class SessionManager {
     });
 
     await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "running" });
-    child.write(prompt);
-    if (!prompt.endsWith("\n")) {
-      child.write("\n");
+    if (!usesPromptArgument) {
+      child.write(prompt);
+      if (!prompt.endsWith("\n")) {
+        child.write("\n");
+      }
+    } else {
+      child.endInput();
     }
   }
 

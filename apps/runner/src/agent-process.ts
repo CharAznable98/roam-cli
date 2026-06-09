@@ -7,6 +7,7 @@ import type { IPty } from "node-pty";
 
 export interface AgentProcess {
   write(data: string): void;
+  endInput(): void;
   interrupt(): void;
   kill(signal?: NodeJS.Signals): void;
   onData(listener: (chunk: string | Buffer) => void): void;
@@ -78,6 +79,10 @@ class PtyAgentProcess implements AgentProcess {
     this.#child.write(data);
   }
 
+  public endInput(): void {
+    // PTY-backed interactive agents keep their input open for follow-up messages.
+  }
+
   public interrupt(): void {
     this.#child.write("\x03");
   }
@@ -110,6 +115,10 @@ class ChildAgentProcess implements AgentProcess {
 
   public write(data: string): void {
     this.#child.stdin.write(data);
+  }
+
+  public endInput(): void {
+    this.#child.stdin.end();
   }
 
   public interrupt(): void {

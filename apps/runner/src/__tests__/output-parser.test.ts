@@ -31,6 +31,20 @@ describe("output parsing", () => {
     ]);
   });
 
+  it("extracts readable assistant text from codex json events", () => {
+    const parser = new OutputParser("codex-json");
+
+    const first = parser.feed(
+      '2026-06-09T04:57:08Z WARN noisy startup\n{"type":"thread.started","thread_id":"t1"}\n',
+    );
+    const second = parser.feed(
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Projects:\\n- roam-cli"}}\n',
+    );
+
+    expect(first.chunk.text).toBe("");
+    expect(second.chunk.text).toBe("Projects:\n- roam-cli\n");
+  });
+
   it.each(outputParserReplayFixtures)(
     "replays $agent output fixtures",
     (fixture) => {
