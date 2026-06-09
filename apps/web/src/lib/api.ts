@@ -12,9 +12,13 @@ import type {
   PatchHunk,
   RunnerRegistration,
   ServerEvent,
-  Session
+  Session,
 } from "@roamcli/protocol";
-import type { InitialRemoteState, SessionDetailPayload, UiMessage } from "../types";
+import type {
+  InitialRemoteState,
+  SessionDetailPayload,
+  UiMessage,
+} from "../types";
 
 export interface RoamApiOptions {
   baseUrl?: string;
@@ -25,14 +29,34 @@ export interface RoamApiOptions {
 
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
-  createSession(input: { runnerId: string; agent: AgentKind; cwd: string; prompt: string; title?: string }): Promise<Session>;
+  createSession(input: {
+    runnerId: string;
+    agent: AgentKind;
+    cwd: string;
+    prompt: string;
+    title?: string;
+  }): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
-  fetchFileTree(sessionId: string, options?: { path?: string; depth?: number }): Promise<FileNode[]>;
-  fetchFileContent(sessionId: string, path: string, options?: { maxBytes?: number }): Promise<FileContentResult>;
-  saveFileContent(sessionId: string, path: string, content: string): Promise<FileWriteResult>;
+  fetchFileTree(
+    sessionId: string,
+    options?: { path?: string; depth?: number },
+  ): Promise<FileNode[]>;
+  fetchFileContent(
+    sessionId: string,
+    path: string,
+    options?: { maxBytes?: number },
+  ): Promise<FileContentResult>;
+  saveFileContent(
+    sessionId: string,
+    path: string,
+    content: string,
+  ): Promise<FileWriteResult>;
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
   resolveApproval(approvalId: string, approved: boolean): Promise<Approval>;
-  connectStream(onEvent: (event: ServerEvent) => void, onStatus?: (status: "open" | "closed" | "error") => void): WebSocket | undefined;
+  connectStream(
+    onEvent: (event: ServerEvent) => void,
+    onStatus?: (status: "open" | "closed" | "error") => void,
+  ): WebSocket | undefined;
 }
 
 interface SessionsResponse {
@@ -71,7 +95,9 @@ interface PatchApplyResponse {
   result: PatchApplyResult;
 }
 
-export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient {
+export function createRoamApiClient(
+  options: RoamApiOptions = {},
+): RoamApiClient {
   const baseUrl = options.baseUrl ?? window.location.origin;
   const token = options.token;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -83,8 +109,8 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
       headers: {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...init.headers
-      }
+        ...init.headers,
+      },
     });
     if (!response.ok) {
       const body = await response.text();
@@ -94,13 +120,13 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
       }
       throw new Error(formatHttpError(path, response, body));
     }
+    if (response.status === 204) {
+      return undefined as T;
+    }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) {
       const body = await response.text();
       throw new Error(formatUnexpectedResponse(path, contentType, body));
-    }
-    if (response.status === 204) {
-      return undefined as T;
     }
     return (await response.json()) as T;
   }
@@ -109,32 +135,47 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
     async loadInitialState() {
       const [{ runners }, { sessions }] = await Promise.all([
         request<RunnersResponse>("/v1/runners"),
-        request<SessionsResponse>("/v1/sessions")
+        request<SessionsResponse>("/v1/sessions"),
       ]);
-      const details = await Promise.all(sessions.map((session) => request<SessionDetailPayload>(`/v1/sessions/${session.id}`)));
+      const details = await Promise.all(
+        sessions.map((session) =>
+          request<SessionDetailPayload>(`/v1/sessions/${session.id}`),
+        ),
+      );
       return {
         runners,
         sessions,
         messages: details.flatMap((detail) => detail.messages.map(toUiMessage)),
         approvals: details.flatMap((detail) => detail.approvals),
-        artifacts: details.flatMap((detail) => detail.artifacts)
+        artifacts: details.flatMap((detail) => detail.artifacts),
       };
     },
 
     async createSession(input) {
       const payload: ApiCreateSession = input.title
-        ? { runnerId: input.runnerId, agent: input.agent, cwd: input.cwd, prompt: input.prompt, title: input.title }
-        : { runnerId: input.runnerId, agent: input.agent, cwd: input.cwd, prompt: input.prompt };
+        ? {
+            runnerId: input.runnerId,
+            agent: input.agent,
+            cwd: input.cwd,
+            prompt: input.prompt,
+            title: input.title,
+          }
+        : {
+            runnerId: input.runnerId,
+            agent: input.agent,
+            cwd: input.cwd,
+            prompt: input.prompt,
+          };
       const { session } = await request<CreateSessionResponse>("/v1/sessions", {
         method: "POST",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
       return session;
     },
 
     async deleteSession(sessionId) {
       await request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
-        method: "DELETE"
+        method: "DELETE",
       });
     },
 
@@ -142,7 +183,9 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
       const query = new URLSearchParams();
       query.set("path", options.path ?? ".");
       query.set("depth", String(options.depth ?? 3));
-      const payload = await request<FileTreeResponse>(`/v1/sessions/${encodeURIComponent(sessionId)}/files?${query.toString()}`);
+      const payload = await request<FileTreeResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/files?${query.toString()}`,
+      );
       const root = payload.result?.root ?? payload.root;
       return payload.files ?? root?.children ?? (root ? [root] : []);
     },
@@ -152,36 +195,55 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
       query.set("path", path);
       query.set("maxBytes", String(options.maxBytes ?? 256 * 1024));
       const payload = await request<FileContentResponse | FileContentResult>(
-        `/v1/sessions/${encodeURIComponent(sessionId)}/files/content?${query.toString()}`
+        `/v1/sessions/${encodeURIComponent(sessionId)}/files/content?${query.toString()}`,
       );
       return normalizeFileContent(payload);
     },
 
     async saveFileContent(sessionId, path, content) {
-      const { result } = await request<FileWriteResponse>(`/v1/sessions/${encodeURIComponent(sessionId)}/files/content`, {
-        method: "PUT",
-        body: JSON.stringify({ path, content, encoding: "utf8" })
-      });
+      const { result } = await request<FileWriteResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/files/content`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ path, content, encoding: "utf8" }),
+        },
+      );
       return result;
     },
 
     async applyPatch(sessionId, patch) {
       const signedAt = new Date().toISOString();
-      const signature = await signApprovalLike(token, `patch:${sessionId}:${await sha256Hex(patch)}`, true, signedAt);
-      const { result } = await request<PatchApplyResponse>(`/v1/sessions/${encodeURIComponent(sessionId)}/patches/apply`, {
-        method: "POST",
-        body: JSON.stringify({ patch, strip: 1, signedAt, signature })
-      });
+      const signature = await signApprovalLike(
+        token,
+        `patch:${sessionId}:${await sha256Hex(patch)}`,
+        true,
+        signedAt,
+      );
+      const { result } = await request<PatchApplyResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/patches/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
+        },
+      );
       return result;
     },
 
     async resolveApproval(approvalId, approved) {
       const signedAt = new Date().toISOString();
-      const signature = await signApprovalLike(token, approvalId, approved, signedAt);
-      const { approval } = await request<ApprovalResponse>(`/v1/approvals/${approvalId}`, {
-        method: "POST",
-        body: JSON.stringify({ approved, signedAt, signature })
-      });
+      const signature = await signApprovalLike(
+        token,
+        approvalId,
+        approved,
+        signedAt,
+      );
+      const { approval } = await request<ApprovalResponse>(
+        `/v1/approvals/${approvalId}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ approved, signedAt, signature }),
+        },
+      );
       return approval;
     },
 
@@ -207,11 +269,14 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
         }
       });
       return socket;
-    }
+    },
   };
 }
 
-export function sendStreamCommand(socket: WebSocket | undefined, command: ClientCommand): boolean {
+export function sendStreamCommand(
+  socket: WebSocket | undefined,
+  command: ClientCommand,
+): boolean {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     return false;
   }
@@ -226,7 +291,9 @@ function toUiMessage(message: Message): UiMessage {
   return message;
 }
 
-function normalizeFileContent(payload: FileContentResponse | FileContentResult): FileContentResult {
+function normalizeFileContent(
+  payload: FileContentResponse | FileContentResult,
+): FileContentResult {
   if ("result" in payload) {
     if (payload.result === undefined) {
       throw new Error("Invalid file content response");
@@ -236,35 +303,52 @@ function normalizeFileContent(payload: FileContentResponse | FileContentResult):
   return payload;
 }
 
-function formatUnexpectedResponse(path: string, contentType: string, body: string): string {
+function formatUnexpectedResponse(
+  path: string,
+  contentType: string,
+  body: string,
+): string {
   const received = contentType ? contentType.split(";")[0] : "unknown content";
   if (isHtmlResponse(contentType, body)) {
     return [
       `RoamCli API request ${path} returned HTML instead of JSON.`,
       "This usually means the web dev server is serving the React app for /v1 requests because the RoamCli server is not reachable.",
-      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app."
+      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app.",
     ].join(" ");
   }
   return `RoamCli API request ${path} returned ${received} instead of JSON.`;
 }
 
-function formatHttpError(path: string, response: Response, body: string): string {
+function formatHttpError(
+  path: string,
+  response: Response,
+  body: string,
+): string {
   const status = `${response.status} ${response.statusText}`.trim();
   if (!body && response.status >= 500) {
     return [
       `RoamCli API request ${path} failed with ${status}.`,
       "The RoamCli server may not be running or the Vite dev proxy cannot reach it.",
-      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app."
+      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app.",
     ].join(" ");
   }
   return `${status}${body ? `: ${body}` : ""}`;
 }
 
 function isHtmlResponse(contentType: string, body: string): boolean {
-  return contentType.includes("text/html") || /^\s*<!doctype html/i.test(body) || /^\s*<html/i.test(body);
+  return (
+    contentType.includes("text/html") ||
+    /^\s*<!doctype html/i.test(body) ||
+    /^\s*<html/i.test(body)
+  );
 }
 
-async function signApprovalLike(secret: string | undefined, approvalId: string, approved: boolean, signedAt: string): Promise<string> {
+async function signApprovalLike(
+  secret: string | undefined,
+  approvalId: string,
+  approved: boolean,
+  signedAt: string,
+): Promise<string> {
   if (!secret) {
     throw new Error("API token is required to sign approvals");
   }
@@ -273,15 +357,26 @@ async function signApprovalLike(secret: string | undefined, approvalId: string, 
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
-  const signature = await globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${approvalId}.${approved ? "1" : "0"}.${signedAt}`));
+  const signature = await globalThis.crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(
+      `${approvalId}.${approved ? "1" : "0"}.${signedAt}`,
+    ),
+  );
   return base64Url(new Uint8Array(signature));
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function base64Url(bytes: Uint8Array): string {
@@ -289,5 +384,8 @@ function base64Url(bytes: Uint8Array): string {
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
 }

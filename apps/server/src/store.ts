@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentKind,
@@ -12,7 +13,7 @@ import type {
   Message,
   RunnerRegistration,
   Session,
-  SessionStatus
+  SessionStatus,
 } from "@roamcli/protocol";
 
 interface SessionRow {
@@ -90,7 +91,7 @@ export class ServerStore {
     this.db
       .prepare(
         `INSERT INTO sessions (id, title, runner_id, agent, status, cwd, agent_thread_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -101,18 +102,22 @@ export class ServerStore {
         session.cwd,
         session.agentThreadId ?? null,
         session.createdAt,
-        session.updatedAt
+        session.updatedAt,
       );
     return session;
   }
 
   listSessions(): Session[] {
-    const rows = this.db.prepare("SELECT * FROM sessions ORDER BY created_at DESC").all() as unknown as SessionRow[];
+    const rows = this.db
+      .prepare("SELECT * FROM sessions ORDER BY created_at DESC")
+      .all() as unknown as SessionRow[];
     return rows.map(toSession);
   }
 
   getSession(id: string): Session | undefined {
-    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
+    const row = this.db
+      .prepare("SELECT * FROM sessions WHERE id = ?")
+      .get(id) as SessionRow | undefined;
     return row ? toSession(row) : undefined;
   }
 
@@ -121,13 +126,27 @@ export class ServerStore {
     return result.changes > 0;
   }
 
-  updateSessionStatus(id: string, status: SessionStatus, updatedAt: string): Session | undefined {
-    this.db.prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?").run(status, updatedAt, id);
+  updateSessionStatus(
+    id: string,
+    status: SessionStatus,
+    updatedAt: string,
+  ): Session | undefined {
+    this.db
+      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, updatedAt, id);
     return this.getSession(id);
   }
 
-  updateSessionThread(id: string, agentThreadId: string, updatedAt: string): Session | undefined {
-    this.db.prepare("UPDATE sessions SET agent_thread_id = ?, updated_at = ? WHERE id = ?").run(agentThreadId, updatedAt, id);
+  updateSessionThread(
+    id: string,
+    agentThreadId: string,
+    updatedAt: string,
+  ): Session | undefined {
+    this.db
+      .prepare(
+        "UPDATE sessions SET agent_thread_id = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(agentThreadId, updatedAt, id);
     return this.getSession(id);
   }
 
@@ -135,32 +154,58 @@ export class ServerStore {
     this.db
       .prepare(
         `INSERT INTO messages (id, session_id, role, content, encrypted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(message.id, message.sessionId, message.role, message.content, message.encrypted ? 1 : 0, message.createdAt);
+      .run(
+        message.id,
+        message.sessionId,
+        message.role,
+        message.content,
+        message.encrypted ? 1 : 0,
+        message.createdAt,
+      );
     return message;
   }
 
-  appendAssistantToken(sessionId: string, content: string, createdAt: string): Message {
-    const id = `stream_${sessionId}`;
-    const existing = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as MessageRow | undefined;
-    if (existing) {
-      this.db.prepare("UPDATE messages SET content = content || ? WHERE id = ?").run(content, id);
-      return this.listMessages(sessionId).find((message) => message.id === id) ?? toMessage(existing);
+  appendAssistantToken(
+    sessionId: string,
+    content: string,
+    createdAt: string,
+  ): Message {
+    const streamPrefix = `stream_${sessionId}_`;
+    const latest = this.db
+      .prepare(
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(sessionId) as MessageRow | undefined;
+    if (latest?.role === "assistant" && latest.id.startsWith(streamPrefix)) {
+      const id = latest.id;
+      this.db
+        .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
+        .run(content, id);
+      return (
+        this.listMessages(sessionId).find((message) => message.id === id) ??
+        toMessage(latest)
+      );
     }
+    const id = `${streamPrefix}${randomUUID()}`;
     const message: Message = {
       id,
       sessionId,
       role: "assistant",
       content,
       encrypted: false,
-      createdAt
+      createdAt,
     };
     return this.addMessage(message);
   }
 
   listMessages(sessionId: string): Message[] {
-    const rows = this.db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC").all(sessionId) as unknown as MessageRow[];
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(sessionId) as unknown as MessageRow[];
     return rows.map(toMessage);
   }
 
@@ -173,7 +218,7 @@ export class ServerStore {
            status = excluded.status,
            resolved_at = excluded.resolved_at,
            client_signature = excluded.client_signature,
-           payload_json = excluded.payload_json`
+           payload_json = excluded.payload_json`,
       )
       .run(
         approval.id,
@@ -185,18 +230,24 @@ export class ServerStore {
         approval.status,
         approval.requestedAt,
         approval.resolvedAt ?? null,
-        approval.clientSignature ?? null
+        approval.clientSignature ?? null,
       );
     return approval;
   }
 
   getApproval(id: string): Approval | undefined {
-    const row = this.db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+    const row = this.db
+      .prepare("SELECT * FROM approvals WHERE id = ?")
+      .get(id) as ApprovalRow | undefined;
     return row ? toApproval(row) : undefined;
   }
 
   listApprovals(sessionId: string): Approval[] {
-    const rows = this.db.prepare("SELECT * FROM approvals WHERE session_id = ? ORDER BY requested_at ASC").all(sessionId) as unknown as ApprovalRow[];
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM approvals WHERE session_id = ? ORDER BY requested_at ASC",
+      )
+      .all(sessionId) as unknown as ApprovalRow[];
     return rows.map(toApproval);
   }
 
@@ -211,7 +262,7 @@ export class ServerStore {
            mime_type = excluded.mime_type,
            size = excluded.size,
            sha256 = excluded.sha256,
-           storage_path = excluded.storage_path`
+           storage_path = excluded.storage_path`,
       )
       .run(
         artifact.id,
@@ -222,17 +273,25 @@ export class ServerStore {
         artifact.size,
         artifact.sha256,
         artifact.storagePath,
-        artifact.createdAt
+        artifact.createdAt,
       );
     return artifact;
   }
 
   listArtifacts(sessionId: string): Artifact[] {
-    const rows = this.db.prepare("SELECT * FROM artifacts WHERE session_id = ? ORDER BY created_at ASC").all(sessionId) as unknown as ArtifactRow[];
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM artifacts WHERE session_id = ? ORDER BY created_at ASC",
+      )
+      .all(sessionId) as unknown as ArtifactRow[];
     return rows.map(toArtifact);
   }
 
-  setRunnerOnline(runner: RunnerRegistration, online: boolean, seenAt: string): RunnerRegistration {
+  setRunnerOnline(
+    runner: RunnerRegistration,
+    online: boolean,
+    seenAt: string,
+  ): RunnerRegistration {
     this.db
       .prepare(
         `INSERT INTO runners (runner_id, registration_json, online, last_seen_at)
@@ -240,7 +299,7 @@ export class ServerStore {
          ON CONFLICT(runner_id) DO UPDATE SET
            registration_json = excluded.registration_json,
            online = excluded.online,
-           last_seen_at = excluded.last_seen_at`
+           last_seen_at = excluded.last_seen_at`,
       )
       .run(runner.runnerId, JSON.stringify(runner), online ? 1 : 0, seenAt);
     return runner;
@@ -250,17 +309,31 @@ export class ServerStore {
     if (this.closed) {
       return;
     }
-    this.db.prepare("UPDATE runners SET online = 0, last_seen_at = ? WHERE runner_id = ?").run(seenAt, runnerId);
+    this.db
+      .prepare(
+        "UPDATE runners SET online = 0, last_seen_at = ? WHERE runner_id = ?",
+      )
+      .run(seenAt, runnerId);
   }
 
   getRunner(runnerId: string): RunnerRegistration | undefined {
-    const row = this.db.prepare("SELECT * FROM runners WHERE runner_id = ?").get(runnerId) as RunnerRow | undefined;
-    return row ? (JSON.parse(row.registration_json) as RunnerRegistration) : undefined;
+    const row = this.db
+      .prepare("SELECT * FROM runners WHERE runner_id = ?")
+      .get(runnerId) as RunnerRow | undefined;
+    return row
+      ? (JSON.parse(row.registration_json) as RunnerRegistration)
+      : undefined;
   }
 
   listOnlineRunners(): RunnerRegistration[] {
-    const rows = this.db.prepare("SELECT * FROM runners WHERE online = 1 ORDER BY last_seen_at DESC").all() as unknown as RunnerRow[];
-    return rows.map((row) => JSON.parse(row.registration_json) as RunnerRegistration);
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM runners WHERE online = 1 ORDER BY last_seen_at DESC",
+      )
+      .all() as unknown as RunnerRow[];
+    return rows.map(
+      (row) => JSON.parse(row.registration_json) as RunnerRegistration,
+    );
   }
 
   private migrate(): void {
@@ -324,8 +397,14 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
   }
 
-  private addColumnIfMissing(table: string, column: string, definition: string): void {
-    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  private addColumnIfMissing(
+    table: string,
+    column: string,
+    definition: string,
+  ): void {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
     if (!rows.some((row) => row.name === column)) {
       this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
@@ -342,7 +421,7 @@ function toSession(row: SessionRow): Session {
     cwd: row.cwd,
     ...(row.agent_thread_id ? { agentThreadId: row.agent_thread_id } : {}),
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -353,7 +432,7 @@ function toMessage(row: MessageRow): Message {
     role: row.role,
     content: row.content,
     encrypted: Boolean(row.encrypted),
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -368,7 +447,7 @@ function toApproval(row: ApprovalRow): Approval {
     status: row.status,
     requestedAt: row.requested_at,
     ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {}),
-    ...(row.client_signature ? { clientSignature: row.client_signature } : {})
+    ...(row.client_signature ? { clientSignature: row.client_signature } : {}),
   };
 }
 
@@ -382,6 +461,6 @@ function toArtifact(row: ArtifactRow): Artifact {
     size: row.size,
     sha256: row.sha256,
     storagePath: row.storage_path,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }

@@ -3,6 +3,7 @@ import type {
   Approval,
   Artifact,
   FileNode,
+  Message,
   PatchHunk,
   RunnerRegistration,
   ServerEvent,
@@ -424,9 +425,7 @@ export function App() {
       return;
     }
     if (event.type === "message:created") {
-      setMessages((current) =>
-        upsertBy(current, event.message, (message) => message.id),
-      );
+      setMessages((current) => upsertMessage(current, event.message));
       return;
     }
     if (event.type === "token") {
@@ -516,10 +515,18 @@ export function App() {
       );
       return next;
     });
-    setMessages((current) => current.filter((message) => message.sessionId !== sessionId));
-    setApprovals((current) => current.filter((approval) => approval.sessionId !== sessionId));
-    setArtifacts((current) => current.filter((artifact) => artifact.sessionId !== sessionId));
-    setHunks((current) => current.filter((hunk) => hunk.sessionId !== sessionId));
+    setMessages((current) =>
+      current.filter((message) => message.sessionId !== sessionId),
+    );
+    setApprovals((current) =>
+      current.filter((approval) => approval.sessionId !== sessionId),
+    );
+    setArtifacts((current) =>
+      current.filter((artifact) => artifact.sessionId !== sessionId),
+    );
+    setHunks((current) =>
+      current.filter((hunk) => hunk.sessionId !== sessionId),
+    );
     setFilesBySession((current) => omitKey(current, sessionId));
     setFileTreeState((current) => omitKey(current, sessionId));
     setTerminalLines((current) => omitKey(current, sessionId));
@@ -531,26 +538,29 @@ export function App() {
 
   function appendTokenMessage(sessionId: string, content: string) {
     setMessages((current) => {
-      const id = `stream-${sessionId}`;
-      const existing = current.find((message) => message.id === id);
-      if (existing) {
-        return current.map((message) =>
-          message.id === id
-            ? { ...message, content: message.content + content }
-            : message,
+      const latest = [...current]
+        .reverse()
+        .find((message) => message.sessionId === sessionId);
+      if (latest && isStreamAssistantMessage(latest)) {
+        return sortMessages(
+          current.map((message) =>
+            message.id === latest.id
+              ? { ...message, content: message.content + content }
+              : message,
+          ),
         );
       }
-      return [
+      return sortMessages([
         ...current,
         {
-          id,
+          id: `stream-${sessionId}-${Date.now()}-${current.length}`,
           sessionId,
           role: "assistant",
           content,
           encrypted: false,
-          createdAt: new Date().toISOString(),
+          createdAt: nextMessageTimestamp(latest),
         },
-      ];
+      ]);
     });
   }
 
@@ -829,6 +839,37 @@ function upsertBy<T>(items: T[], next: T, keyOf: (item: T) => string): T[] {
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   const { [key]: _removed, ...rest } = record;
   return rest;
+}
+
+function upsertMessage<T extends Message>(items: T[], next: T): T[] {
+  const exists = items.some((item) => item.id === next.id);
+  return sortMessages(
+    exists
+      ? items.map((item) => (item.id === next.id ? next : item))
+      : [...items, next],
+  );
+}
+
+function sortMessages<T extends Message>(messages: T[]): T[] {
+  return [...messages].sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  );
+}
+
+function nextMessageTimestamp(previous: Message | undefined): string {
+  const now = Date.now();
+  const previousTime = previous ? Date.parse(previous.createdAt) : 0;
+  return new Date(Math.max(now, previousTime + 1)).toISOString();
+}
+
+function isStreamAssistantMessage(message: Message): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  return (
+    message.id.startsWith(`stream-${message.sessionId}-`) ||
+    message.id.startsWith(`stream_${message.sessionId}_`)
+  );
 }
 
 function mergePatchHunks(

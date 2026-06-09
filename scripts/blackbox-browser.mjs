@@ -262,7 +262,7 @@ async function runNoRunnerJourney(browser) {
       window.localStorage.setItem("roamcli.token", authToken);
     }, token);
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await expectText(page, "No runners are connected");
+    await expectText(page, "No runners are online");
     await expectText(page, "pnpm --filter @roamcli/runner dev");
   } finally {
     await context.close();

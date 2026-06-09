@@ -128,6 +128,129 @@ describe("server", () => {
     runner.close();
   });
 
+  it("keeps streamed assistant replies separated by resumed user turns", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(
+      JSON.stringify(
+        runnerRegistration({
+          agent: "codex",
+          parser: "codex-json",
+          supportsResume: true,
+        }),
+      ),
+    );
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        runnerId: "runner-1",
+        agent: "codex",
+        cwd: "/workspace",
+        prompt: "first question",
+      },
+    });
+    const sessionId = created.json().session.id as string;
+    await nextJson(runner);
+
+    runner.send(
+      JSON.stringify({
+        type: "token",
+        sessionId,
+        content: "first answer",
+        encrypted: false,
+      }),
+    );
+    await expectEventually(
+      stream,
+      (event) => event.type === "token" && event.content === "first answer",
+    );
+    runner.send(
+      JSON.stringify({
+        type: "sessionThread",
+        sessionId,
+        threadId: "codex-thread-1",
+      }),
+    );
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "session:updated" &&
+        event.session.id === sessionId &&
+        event.session.agentThreadId === "codex-thread-1",
+    );
+    runner.send(
+      JSON.stringify({ type: "sessionStatus", sessionId, status: "completed" }),
+    );
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "session:updated" &&
+        event.session.id === sessionId &&
+        event.session.status === "completed",
+    );
+
+    stream.send(
+      JSON.stringify({
+        type: "userMessage",
+        requestId: "second-1",
+        sessionId,
+        content: "second question",
+      }),
+    );
+    const resumeCommand = await nextJson(runner);
+    expect(resumeCommand).toMatchObject({
+      type: "startSession",
+      prompt: "second question",
+      resumeThreadId: "codex-thread-1",
+    });
+
+    runner.send(
+      JSON.stringify({
+        type: "token",
+        sessionId,
+        content: "second answer",
+        encrypted: false,
+      }),
+    );
+    await expectEventually(
+      stream,
+      (event) => event.type === "token" && event.content === "second answer",
+    );
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/v1/sessions/${sessionId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(
+      detail
+        .json()
+        .messages.map((message: { role: string; content: string }) => [
+          message.role,
+          message.content,
+        ]),
+    ).toEqual([
+      ["user", "first question"],
+      ["assistant", "first answer"],
+      ["user", "second question"],
+      ["assistant", "second answer"],
+    ]);
+
+    stream.close();
+    runner.close();
+  });
+
   it("restarts a stopped resumable session instead of forwarding resume to a dead process", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
@@ -194,7 +317,15 @@ describe("server", () => {
     const stream = await openSocket(`${baseUrl}/v1/stream`, token);
     const runner = await openSocket(`${baseUrl}/v1/runner`, token);
 
-    runner.send(JSON.stringify(runnerRegistration({ agent: "codex", parser: "codex-json", supportsResume: true })));
+    runner.send(
+      JSON.stringify(
+        runnerRegistration({
+          agent: "codex",
+          parser: "codex-json",
+          supportsResume: true,
+        }),
+      ),
+    );
     await expectEventually(
       stream,
       (event) =>
@@ -215,7 +346,13 @@ describe("server", () => {
     const sessionId = created.json().session.id as string;
     await nextJson(runner);
 
-    runner.send(JSON.stringify({ type: "sessionThread", sessionId, threadId: "codex-thread-1" }));
+    runner.send(
+      JSON.stringify({
+        type: "sessionThread",
+        sessionId,
+        threadId: "codex-thread-1",
+      }),
+    );
     await expectEventually(
       stream,
       (event) =>
@@ -223,7 +360,9 @@ describe("server", () => {
         event.session.id === sessionId &&
         event.session.agentThreadId === "codex-thread-1",
     );
-    runner.send(JSON.stringify({ type: "sessionStatus", sessionId, status: "completed" }));
+    runner.send(
+      JSON.stringify({ type: "sessionStatus", sessionId, status: "completed" }),
+    );
     await expectEventually(
       stream,
       (event) =>
@@ -694,7 +833,11 @@ describe("server", () => {
 });
 
 function runnerRegistration(
-  options: { supportsResume?: boolean; agent?: "mock" | "codex"; parser?: string } = {},
+  options: {
+    supportsResume?: boolean;
+    agent?: "mock" | "codex";
+    parser?: string;
+  } = {},
 ): RunnerRegistration {
   const agent = options.agent ?? "mock";
   return {

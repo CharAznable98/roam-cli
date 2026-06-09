@@ -2,7 +2,14 @@
 import "./test/setup.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -13,8 +20,17 @@ const runner = {
   workspaceRoot: "/workspace",
   profile: "trusted",
   publicKey: "0123456789abcdef",
-  capabilities: [{ kind: "mock", label: "Mock", command: "node", args: [], parser: "mock", supportsResume: false }],
-  version: "0.1.0"
+  capabilities: [
+    {
+      kind: "mock",
+      label: "Mock",
+      command: "node",
+      args: [],
+      parser: "mock",
+      supportsResume: false,
+    },
+  ],
+  version: "0.1.0",
 };
 
 const session = {
@@ -25,7 +41,7 @@ const session = {
   status: "running",
   cwd: "/workspace",
   createdAt: "2026-06-05T00:00:00.000Z",
-  updatedAt: "2026-06-05T00:00:00.000Z"
+  updatedAt: "2026-06-05T00:00:00.000Z",
 };
 
 const patchArtifact = {
@@ -37,7 +53,7 @@ const patchArtifact = {
   size: 128,
   sha256: "0123456789abcdef0123456789abcdef",
   storagePath: "artifacts/session-1/changes.patch",
-  createdAt: "2026-06-05T00:00:00.000Z"
+  createdAt: "2026-06-05T00:00:00.000Z",
 };
 
 const patchHunk = {
@@ -45,7 +61,7 @@ const patchHunk = {
   filePath: "src/App.tsx",
   header: "@@ -1 +1 @@",
   lines: ["-old", "+new"],
-  status: "pending"
+  status: "pending",
 } as const;
 
 const patchApproval = {
@@ -56,7 +72,7 @@ const patchApproval = {
   summary: "Apply generated patch",
   payload: { hunks: [patchHunk] },
   status: "pending",
-  requestedAt: "2026-06-05T00:00:00.000Z"
+  requestedAt: "2026-06-05T00:00:00.000Z",
 } as const;
 
 let sockets: TestWebSocket[];
@@ -90,7 +106,10 @@ describe("App", () => {
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -117,11 +136,11 @@ describe("App", () => {
                 role: "assistant",
                 content: "Loaded from API",
                 encrypted: false,
-                createdAt: "2026-06-05T00:00:00.000Z"
-              }
+                createdAt: "2026-06-05T00:00:00.000Z",
+              },
             ],
             approvals: [patchApproval],
-            artifacts: [patchArtifact]
+            artifacts: [patchArtifact],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files") {
@@ -135,10 +154,17 @@ describe("App", () => {
                   path: "src",
                   name: "src",
                   type: "directory",
-                  children: [{ path: "src/App.tsx", name: "App.tsx", type: "file", size: 42 }]
-                }
-              ]
-            }
+                  children: [
+                    {
+                      path: "src/App.tsx",
+                      name: "App.tsx",
+                      type: "file",
+                      size: 42,
+                    },
+                  ],
+                },
+              ],
+            },
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files/content") {
@@ -149,8 +175,8 @@ describe("App", () => {
                 sessionId: "session-1",
                 path: "src/App.tsx",
                 bytesWritten: 48,
-                encoding: "utf8"
-              }
+                encoding: "utf8",
+              },
             });
           }
           return jsonResponse({
@@ -160,8 +186,8 @@ describe("App", () => {
               path: requestUrl.searchParams.get("path"),
               content: "export function RealContent() { return null; }",
               truncated: false,
-              encoding: "utf8"
-            }
+              encoding: "utf8",
+            },
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/patches/apply") {
@@ -172,12 +198,12 @@ describe("App", () => {
               applied: true,
               changedFiles: ["src/App.tsx"],
               message: "applied",
-              rejected: []
-            }
+              rejected: [],
+            },
           });
         }
         return jsonResponse({ error: "not found" }, 404);
-      })
+      }),
     );
   });
 
@@ -188,59 +214,101 @@ describe("App", () => {
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getByText("changes.patch")).toBeInTheDocument();
-    expect(screen.getByText(/artifacts\/session-1\/changes.patch/)).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Mobile tabs" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Runners and sessions" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Conversation" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Workspace tools" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/artifacts\/session-1\/changes.patch/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "Mobile tabs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Runners and sessions" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Conversation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    ).toBeInTheDocument();
   });
 
   it("exposes mobile parity tabs when real state is loaded", async () => {
     render(<App />);
     await screen.findAllByText("Real Runner");
-    const mobileTabs = within(screen.getByRole("navigation", { name: "Mobile tabs" }));
+    const mobileTabs = within(
+      screen.getByRole("navigation", { name: "Mobile tabs" }),
+    );
 
-    expect(mobileTabs.getByRole("button", { name: "对话" })).toBeInTheDocument();
-    expect(mobileTabs.getByRole("button", { name: "文件" })).toBeInTheDocument();
-    expect(mobileTabs.getByRole("button", { name: "终端" })).toBeInTheDocument();
-    expect(mobileTabs.getByRole("button", { name: "审批" })).toBeInTheDocument();
+    expect(
+      mobileTabs.getByRole("button", { name: "对话" }),
+    ).toBeInTheDocument();
+    expect(
+      mobileTabs.getByRole("button", { name: "文件" }),
+    ).toBeInTheDocument();
+    expect(
+      mobileTabs.getByRole("button", { name: "终端" }),
+    ).toBeInTheDocument();
+    expect(
+      mobileTabs.getByRole("button", { name: "审批" }),
+    ).toBeInTheDocument();
   });
 
   it("loads the selected session file tree and displays real file content", async () => {
     render(<App />);
 
-    const fileButton = await screen.findByRole("treeitem", { name: /App\.tsx/ });
-    expect(fetchRequests.some((url) => url.includes("/v1/sessions/session-1/files?path=.&depth=3"))).toBe(true);
+    const fileButton = await screen.findByRole("treeitem", {
+      name: /App\.tsx/,
+    });
+    expect(
+      fetchRequests.some((url) =>
+        url.includes("/v1/sessions/session-1/files?path=.&depth=3"),
+      ),
+    ).toBe(true);
 
     fireEvent.click(fileButton);
 
-    const editor = await screen.findByRole("textbox", { name: "Edit src/App.tsx" });
-    expect(editor).toHaveValue("export function RealContent() { return null; }");
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/App.tsx",
+    });
+    expect(editor).toHaveValue(
+      "export function RealContent() { return null; }",
+    );
     expect(screen.getByText("Editable")).toBeInTheDocument();
     expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled();
-    const contentUrl = fetchRequests.find((url) => url.includes("/v1/sessions/session-1/files/content"));
+    const contentUrl = fetchRequests.find((url) =>
+      url.includes("/v1/sessions/session-1/files/content"),
+    );
     expect(contentUrl).toBeDefined();
-    expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe("src/App.tsx");
+    expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
+      "src/App.tsx",
+    );
   });
 
   it("edits and saves real file content through the API", async () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("treeitem", { name: /App\.tsx/ }));
-    const editor = await screen.findByRole("textbox", { name: "Edit src/App.tsx" });
-    fireEvent.change(editor, { target: { value: "export const saved = true;\n" } });
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/App.tsx",
+    });
+    fireEvent.change(editor, {
+      target: { value: "export const saved = true;\n" },
+    });
 
     expect(screen.getByText("Unsaved")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save file" }));
 
     await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
-    const saveCall = fetchCalls.find((call) => call.url.includes("/v1/sessions/session-1/files/content") && call.init?.method === "PUT");
+    const saveCall = fetchCalls.find(
+      (call) =>
+        call.url.includes("/v1/sessions/session-1/files/content") &&
+        call.init?.method === "PUT",
+    );
     expect(saveCall).toBeDefined();
     expect(JSON.parse(String(saveCall?.init?.body))).toEqual({
       path: "src/App.tsx",
       content: "export const saved = true;\n",
-      encoding: "utf8"
+      encoding: "utf8",
     });
   });
 
@@ -250,15 +318,27 @@ describe("App", () => {
 
     const patchCard = screen.getByText("src/App.tsx").closest("article");
     expect(patchCard).not.toBeNull();
-    fireEvent.click(within(patchCard as HTMLElement).getByRole("button", { name: "Accept patch hunk hunk-1" }));
+    fireEvent.click(
+      within(patchCard as HTMLElement).getByRole("button", {
+        name: "Accept patch hunk hunk-1",
+      }),
+    );
 
-    await waitFor(() => expect(screen.getByText("accepted")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("accepted")).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() => expect(screen.getByText("edited")).toBeInTheDocument());
-    const applyCall = fetchCalls.find((call) => call.url.includes("/v1/sessions/session-1/patches/apply"));
+    const applyCall = fetchCalls.find((call) =>
+      call.url.includes("/v1/sessions/session-1/patches/apply"),
+    );
     expect(applyCall?.init?.method).toBe("POST");
-    const body = JSON.parse(String(applyCall?.init?.body)) as { patch: string; signedAt: string; signature: string };
+    const body = JSON.parse(String(applyCall?.init?.body)) as {
+      patch: string;
+      signedAt: string;
+      signature: string;
+    };
     expect(body.patch).toContain("diff --git a/src/App.tsx b/src/App.tsx");
     expect(body.patch).toContain("@@ -1 +1 @@");
     expect(body.signedAt).toMatch(/2026|20/);
@@ -277,20 +357,106 @@ describe("App", () => {
     act(() => {
       sockets[0]?.dispatchEvent(
         new MessageEvent("message", {
-          data: JSON.stringify({ type: "terminal:data", sessionId: "session-1", chunk: "runner$ pnpm test" })
-        })
+          data: JSON.stringify({
+            type: "terminal:data",
+            sessionId: "session-1",
+            chunk: "runner$ pnpm test",
+          }),
+        }),
       );
     });
     expect(await screen.findByText("runner$ pnpm test")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText("Send input to active session"), { target: { value: "ls -la" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send terminal input" }));
+    fireEvent.change(
+      screen.getByPlaceholderText("Send input to active session"),
+      { target: { value: "ls -la" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Send terminal input" }),
+    );
 
     expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
       type: "userMessage",
       sessionId: "session-1",
-      content: "ls -la"
+      content: "ls -la",
     });
+  });
+
+  it("renders interleaved user and streamed assistant turns in chronological order", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const firstUserAt = new Date(Date.now() + 1000).toISOString();
+    const secondUserAt = new Date(Date.now() + 2000).toISOString();
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-user-1",
+              sessionId: "session-1",
+              role: "user",
+              content: "first question",
+              encrypted: false,
+              createdAt: firstUserAt,
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "token",
+            sessionId: "session-1",
+            content: "first answer",
+            encrypted: false,
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-user-2",
+              sessionId: "session-1",
+              role: "user",
+              content: "second question",
+              encrypted: false,
+              createdAt: secondUserAt,
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "token",
+            sessionId: "session-1",
+            content: "second answer",
+            encrypted: false,
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    await waitFor(() =>
+      expect(
+        within(conversation).getByText("second answer"),
+      ).toBeInTheDocument(),
+    );
+    const visibleMessages = [
+      ...conversation.querySelectorAll(".message-body p"),
+    ].map((item) => item.textContent);
+    expect(visibleMessages.slice(-4)).toEqual([
+      "first question",
+      "first answer",
+      "second question",
+      "second answer",
+    ]);
   });
 
   it("sends terminal control signals for interrupt and stop", async () => {
@@ -302,18 +468,20 @@ describe("App", () => {
     });
 
     const terminal = within(screen.getByRole("region", { name: "Terminal" }));
-    fireEvent.click(terminal.getByRole("button", { name: "Interrupt session" }));
+    fireEvent.click(
+      terminal.getByRole("button", { name: "Interrupt session" }),
+    );
     expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
       type: "controlSignal",
       sessionId: "session-1",
-      signal: "interrupt"
+      signal: "interrupt",
     });
 
     fireEvent.click(terminal.getByRole("button", { name: "Stop session" }));
     expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
       type: "controlSignal",
       sessionId: "session-1",
-      signal: "stop"
+      signal: "stop",
     });
   });
 
@@ -323,17 +491,30 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete session" }));
 
-    await waitFor(() => expect(screen.queryByText("Real session")).not.toBeInTheDocument());
-    expect(screen.getByText("Create a session on the selected runner.")).toBeInTheDocument();
-    const deleteCall = fetchCalls.find((call) => call.url.endsWith("/v1/sessions/session-1") && call.init?.method === "DELETE");
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Create a session on the selected runner."),
+    ).toBeInTheDocument();
+    const deleteCall = fetchCalls.find(
+      (call) =>
+        call.url.endsWith("/v1/sessions/session-1") &&
+        call.init?.method === "DELETE",
+    );
     expect(deleteCall).toBeDefined();
-    expect(window.confirm).toHaveBeenCalledWith('Delete session "Real session"?');
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Delete session "Real session"?',
+    );
   });
 
   it("does not import mock data into the runtime app", () => {
     const rootPath = resolve(process.cwd(), "apps/web/src/App.tsx");
     const packagePath = resolve(process.cwd(), "src/App.tsx");
-    const appSource = readFileSync(existsSync(rootPath) ? rootPath : packagePath, "utf8");
+    const appSource = readFileSync(
+      existsSync(rootPath) ? rootPath : packagePath,
+      "utf8",
+    );
     expect(appSource).not.toContain("mockData");
   });
 });
@@ -341,6 +522,6 @@ describe("App", () => {
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" }
+    headers: { "content-type": "application/json" },
   });
 }
