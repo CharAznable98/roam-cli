@@ -31,7 +31,7 @@ export function RunnerSidebar({
 
   return (
     <aside className="left-column" aria-label="Runners and sessions">
-      <section>
+      <section className="sidebar-runners">
         <h2 className="panel-title">Runners</h2>
         <div className="mt-3 space-y-2">
           {runners.map((runner) => (
@@ -56,12 +56,12 @@ export function RunnerSidebar({
         </div>
       </section>
 
-      <section className="min-h-0 flex-1">
+      <section className="sidebar-sessions">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="panel-title">Sessions</h2>
           <span className="text-xs text-ink-500">{visibleSessions.length}</span>
         </div>
-        <div className="space-y-2 overflow-auto pr-1">
+        <div className="sidebar-session-list">
           {visibleSessions.map((session) => (
             <button
               key={session.id}
@@ -69,12 +69,12 @@ export function RunnerSidebar({
               className={`session-button ${session.id === selectedSessionId ? "is-selected" : ""}`}
               onClick={() => onSelectSession(session.id)}
             >
-              <span className="flex items-center gap-2">
+              <span className="session-agent-row">
                 <Cpu size={15} />
                 <span className="truncate">{session.agent}</span>
               </span>
               <span className="truncate text-left font-medium">{session.title}</span>
-              <span className="flex items-center justify-between gap-2">
+              <span className="session-meta-row">
                 <span className="truncate text-xs text-ink-500">{session.cwd}</span>
                 <StatusPill status={session.status} />
               </span>

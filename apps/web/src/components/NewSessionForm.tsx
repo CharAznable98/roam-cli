@@ -32,7 +32,7 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
   };
 
   return (
-    <form className="space-y-3 border-t border-ink-200 pt-4" onSubmit={submit}>
+    <form className="new-session-form" onSubmit={submit}>
       <div className="flex items-center justify-between">
         <h2 className="panel-title">New Session</h2>
         <button className="primary-icon-button" type="submit" aria-label="Create session" title="Create session">
