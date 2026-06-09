@@ -162,6 +162,9 @@ export function App() {
   const sessionFileTreeState = selectedSession
     ? (fileTreeState[selectedSession.id] ?? "idle")
     : "idle";
+  const serverCommand =
+    "PORT=8787 ROAMCLI_AUTH_TOKEN=dev-token ROAMCLI_DATA_DIR=.roamcli-server pnpm --filter @roamcli/server dev";
+  const runnerCommand = `pnpm --filter @roamcli/runner dev --server ws://127.0.0.1:8787/v1/runner --token ${token || "dev-token"}`;
 
   useEffect(() => {
     if (!selectedSession || !apiRef.current) {
@@ -537,25 +540,39 @@ export function App() {
               aria-label="API token"
             />
           </label>
-          <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-signal-green">
-            {runners.length} runners online
+          <span
+            className={`rounded px-2 py-1 text-xs font-medium ${
+              loadState === "error"
+                ? "bg-red-50 text-signal-red"
+                : "bg-emerald-50 text-signal-green"
+            }`}
+          >
+            {loadState === "error" ? "server offline" : `${runners.length} runners online`}
           </span>
         </div>
       </header>
 
-      {error ? <div className="error-banner">{error}</div> : null}
+      {error ? (
+        <div className="error-banner" role="alert">
+          <div>
+            <strong>RoamCli server is not reachable</strong>
+            <p>{error}</p>
+          </div>
+          <pre>{serverCommand}</pre>
+        </div>
+      ) : null}
 
       {loadState === "loading" ? (
         <div className="empty-state">Loading remote RoamCli state...</div>
       ) : null}
 
-      {loadState !== "loading" && runners.length === 0 ? (
+      {loadState === "ready" && runners.length === 0 ? (
         <div className="empty-state">
-          No runners are connected. Start one with:
-          <pre>
-            pnpm --filter @roamcli/runner dev --server
-            ws://127.0.0.1:8787/v1/runner --token {token || "dev-token"}
-          </pre>
+          <div>
+            <h2>No runners are online</h2>
+            <p>The RoamCli server is connected. Start a runner to create or resume sessions.</p>
+            <pre>{runnerCommand}</pre>
+          </div>
         </div>
       ) : null}
 

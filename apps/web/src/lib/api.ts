@@ -87,7 +87,16 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (isHtmlResponse(contentType, body)) {
+        throw new Error(formatUnexpectedResponse(path, contentType, body));
+      }
+      throw new Error(formatHttpError(path, response, body));
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      const body = await response.text();
+      throw new Error(formatUnexpectedResponse(path, contentType, body));
     }
     return (await response.json()) as T;
   }
@@ -215,6 +224,34 @@ function normalizeFileContent(payload: FileContentResponse | FileContentResult):
     return payload.result;
   }
   return payload;
+}
+
+function formatUnexpectedResponse(path: string, contentType: string, body: string): string {
+  const received = contentType ? contentType.split(";")[0] : "unknown content";
+  if (isHtmlResponse(contentType, body)) {
+    return [
+      `RoamCli API request ${path} returned HTML instead of JSON.`,
+      "This usually means the web dev server is serving the React app for /v1 requests because the RoamCli server is not reachable.",
+      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app."
+    ].join(" ");
+  }
+  return `RoamCli API request ${path} returned ${received} instead of JSON.`;
+}
+
+function formatHttpError(path: string, response: Response, body: string): string {
+  const status = `${response.status} ${response.statusText}`.trim();
+  if (!body && response.status >= 500) {
+    return [
+      `RoamCli API request ${path} failed with ${status}.`,
+      "The RoamCli server may not be running or the Vite dev proxy cannot reach it.",
+      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app."
+    ].join(" ");
+  }
+  return `${status}${body ? `: ${body}` : ""}`;
+}
+
+function isHtmlResponse(contentType: string, body: string): boolean {
+  return contentType.includes("text/html") || /^\s*<!doctype html/i.test(body) || /^\s*<html/i.test(body);
 }
 
 async function signApprovalLike(secret: string | undefined, approvalId: string, approved: boolean, signedAt: string): Promise<string> {
