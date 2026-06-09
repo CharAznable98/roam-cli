@@ -35,6 +35,9 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local operational notes
+doc/
+
 # Test and browser artifacts
 test-results/
 playwright-report/
