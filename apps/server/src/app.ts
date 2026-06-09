@@ -126,6 +126,24 @@ export async function createServer(
     };
   });
 
+  app.delete("/v1/sessions/:id", async (request, reply) => {
+    const params = SessionParamsSchema.parse(request.params);
+    const session = store.getSession(params.id);
+    if (!session) {
+      return reply.code(404).send({ error: "session_not_found" });
+    }
+
+    hub.sendToRunner(session.runnerId, {
+      type: "controlSignal",
+      sessionId: session.id,
+      signal: "stop",
+    });
+    store.deleteSession(session.id);
+    artifacts.deleteSessionArtifacts(session.id);
+    hub.broadcast({ type: "session:deleted", sessionId: session.id });
+    return reply.code(204).send();
+  });
+
   app.get("/v1/sessions/:id/files", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
     const parsed = FileTreeQuerySchema.safeParse(request.query);

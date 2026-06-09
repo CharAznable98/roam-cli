@@ -90,6 +90,7 @@ describe("App", () => {
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
+    vi.stubGlobal("confirm", vi.fn(() => true));
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -104,6 +105,9 @@ describe("App", () => {
           return jsonResponse({ sessions: [session] });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
+          if (init?.method === "DELETE") {
+            return new Response(null, { status: 204 });
+          }
           return jsonResponse({
             session,
             messages: [
@@ -311,6 +315,19 @@ describe("App", () => {
       sessionId: "session-1",
       signal: "stop"
     });
+  });
+
+  it("deletes the selected session through the API and removes local session state", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete session" }));
+
+    await waitFor(() => expect(screen.queryByText("Real session")).not.toBeInTheDocument());
+    expect(screen.getByText("Create a session on the selected runner.")).toBeInTheDocument();
+    const deleteCall = fetchCalls.find((call) => call.url.endsWith("/v1/sessions/session-1") && call.init?.method === "DELETE");
+    expect(deleteCall).toBeDefined();
+    expect(window.confirm).toHaveBeenCalledWith('Delete session "Real session"?');
   });
 
   it("does not import mock data into the runtime app", () => {

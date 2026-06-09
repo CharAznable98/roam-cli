@@ -50,6 +50,10 @@ export class ArtifactStorage {
       createdAt: nowIso()
     };
   }
+
+  deleteSessionArtifacts(sessionId: string): void {
+    fs.rmSync(path.join(this.rootDir, sanitizePathSegment(sessionId)), { recursive: true, force: true });
+  }
 }
 
 function sanitizePathSegment(segment: string): string {

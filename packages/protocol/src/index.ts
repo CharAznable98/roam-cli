@@ -272,6 +272,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("runner:offline"), runnerId: z.string().min(1) }),
   z.object({ type: z.literal("session:created"), session: SessionSchema }),
   z.object({ type: z.literal("session:updated"), session: SessionSchema }),
+  z.object({ type: z.literal("session:deleted"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("message:created"), message: MessageSchema }),
   z.object({ type: z.literal("token"), sessionId: z.string().min(1), content: z.string(), encrypted: z.boolean().default(false) }),
   z.object({ type: z.literal("approval:requested"), approval: ApprovalSchema }),

@@ -26,6 +26,7 @@ export interface RoamApiOptions {
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
   createSession(input: { runnerId: string; agent: AgentKind; cwd: string; prompt: string; title?: string }): Promise<Session>;
+  deleteSession(sessionId: string): Promise<void>;
   fetchFileTree(sessionId: string, options?: { path?: string; depth?: number }): Promise<FileNode[]>;
   fetchFileContent(sessionId: string, path: string, options?: { maxBytes?: number }): Promise<FileContentResult>;
   saveFileContent(sessionId: string, path: string, content: string): Promise<FileWriteResult>;
@@ -89,6 +90,9 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
       const body = await response.text();
       throw new Error(`${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
     }
+    if (response.status === 204) {
+      return undefined as T;
+    }
     return (await response.json()) as T;
   }
 
@@ -117,6 +121,12 @@ export function createRoamApiClient(options: RoamApiOptions = {}): RoamApiClient
         body: JSON.stringify(payload)
       });
       return session;
+    },
+
+    async deleteSession(sessionId) {
+      await request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE"
+      });
     },
 
     async fetchFileTree(sessionId, options = {}) {
