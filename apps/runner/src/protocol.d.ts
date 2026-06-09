@@ -41,6 +41,7 @@ declare module "@roamcli/protocol" {
     agent: AgentKind;
     status: SessionStatus;
     cwd: string;
+    agentThreadId?: string;
     createdAt: string;
     updatedAt: string;
   }
@@ -120,7 +121,7 @@ declare module "@roamcli/protocol" {
   }
 
   export type RunnerCommand =
-    | { type: "startSession"; session: Session; prompt: string }
+    | { type: "startSession"; session: Session; prompt: string; resumeThreadId?: string }
     | { type: "deliverInput"; sessionId: string; content: string }
     | { type: "readFileTree"; requestId: string; sessionId: string; path?: string; depth?: number }
     | { type: "readFileContent"; requestId: string; sessionId: string; path: string; maxBytes?: number }
@@ -132,6 +133,7 @@ declare module "@roamcli/protocol" {
   export type RunnerEvent =
     | { type: "registered"; runner: RunnerRegistration }
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
+    | { type: "sessionThread"; sessionId: string; threadId: string }
     | { type: "assistantMessage"; sessionId: string; content: string; encrypted: boolean }
     | { type: "token"; sessionId: string; content: string; encrypted: boolean }
     | { type: "terminalData"; sessionId: string; chunk: string }

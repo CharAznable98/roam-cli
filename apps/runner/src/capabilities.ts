@@ -92,7 +92,7 @@ function parserFor(kind: AgentKind): string {
 }
 
 function supportsResume(kind: AgentKind): boolean {
-  return kind !== "shell" && kind !== "codex";
+  return kind !== "shell";
 }
 
 function parseArgs(value: string): string[] {

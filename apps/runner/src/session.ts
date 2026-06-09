@@ -45,7 +45,7 @@ export class SessionManager {
   public async handle(command: RunnerCommand): Promise<void> {
     switch (command.type) {
       case "startSession":
-        await this.start(command.session, command.prompt);
+        await this.start(command.session, command.prompt, command.resumeThreadId);
         return;
       case "deliverInput":
         this.deliverInput(command.sessionId, command.content);
@@ -71,7 +71,7 @@ export class SessionManager {
     }
   }
 
-  public async start(session: Session, prompt: string): Promise<void> {
+  public async start(session: Session, prompt: string, resumeThreadId?: string): Promise<void> {
     if (this.#sessions.has(session.id)) {
       await this.#emit({ type: "error", sessionId: session.id, message: "Session is already running", code: "SESSION_EXISTS" });
       return;
@@ -96,7 +96,8 @@ export class SessionManager {
     const requiresPty = capability.kind !== "mock" && !usesPromptArgument;
     let child: AgentProcess;
     try {
-      child = await spawnAgentProcess(capability.command, usesPromptArgument ? [...capability.args, prompt] : capability.args, {
+      const args = usesPromptArgument ? codexJsonArgs(capability.args, prompt, resumeThreadId) : capability.args;
+      child = await spawnAgentProcess(capability.command, args, {
         cwd,
         env: process.env,
         preferPty: requiresPty,
@@ -281,6 +282,9 @@ export class SessionManager {
   async #handleOutput(running: RunningSession, chunk: string | Buffer): Promise<void> {
     const parsed = running.parser.feed(chunk);
     await this.#emit({ type: "terminalData", sessionId: running.session.id, chunk: parsed.chunk.raw });
+    if (parsed.threadId !== undefined) {
+      await this.#emit({ type: "sessionThread", sessionId: running.session.id, threadId: parsed.threadId });
+    }
     if (parsed.chunk.text.length > 0) {
       await this.#emit({ type: "token", sessionId: running.session.id, content: parsed.chunk.text, encrypted: false });
     }
@@ -332,4 +336,35 @@ export class SessionManager {
     }
     return candidate;
   }
+}
+
+export function codexJsonArgs(baseArgs: readonly string[], prompt: string, resumeThreadId: string | undefined): string[] {
+  if (resumeThreadId === undefined) {
+    return [...baseArgs, prompt];
+  }
+
+  const [subcommand, ...rest] = baseArgs;
+  return [
+    subcommand ?? "exec",
+    "resume",
+    ...withoutExecOnlyArgs(rest),
+    resumeThreadId,
+    prompt
+  ];
+}
+
+function withoutExecOnlyArgs(args: readonly string[]): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === "--color") {
+      index += 1;
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
 }

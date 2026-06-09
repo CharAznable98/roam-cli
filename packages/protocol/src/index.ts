@@ -38,6 +38,7 @@ export const SessionSchema = z.object({
   agent: AgentKindSchema,
   status: SessionStatusSchema,
   cwd: z.string().min(1),
+  agentThreadId: z.string().min(1).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -222,7 +223,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
 export const RunnerCommandSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("startSession"), session: SessionSchema, prompt: z.string().min(1) }),
+  z.object({ type: z.literal("startSession"), session: SessionSchema, prompt: z.string().min(1), resumeThreadId: z.string().min(1).optional() }),
   z.object({ type: z.literal("deliverInput"), sessionId: z.string().min(1), content: z.string().min(1) }),
   z.object({
     type: z.literal("readFileTree"),
@@ -288,6 +289,7 @@ export type ServerEvent = z.infer<typeof ServerEventSchema>;
 export const RunnerEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("registered"), runner: RunnerRegistrationSchema }),
   z.object({ type: z.literal("sessionStatus"), sessionId: z.string().min(1), status: SessionStatusSchema }),
+  z.object({ type: z.literal("sessionThread"), sessionId: z.string().min(1), threadId: z.string().min(1) }),
   z.object({ type: z.literal("assistantMessage"), sessionId: z.string().min(1), content: z.string(), encrypted: z.boolean().default(false) }),
   z.object({ type: z.literal("token"), sessionId: z.string().min(1), content: z.string(), encrypted: z.boolean().default(false) }),
   z.object({ type: z.literal("terminalData"), sessionId: z.string().min(1), chunk: z.string() }),

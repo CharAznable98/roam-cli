@@ -5,7 +5,7 @@ import type { RunnerEvent, Session } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
 import { describe, expect, it, vi } from "vitest";
 import { buildCapabilities } from "../capabilities.js";
-import { SessionManager } from "../session.js";
+import { codexJsonArgs, SessionManager } from "../session.js";
 
 const approvalSecret = "runner-test-secret";
 
@@ -133,6 +133,24 @@ describe("SessionManager", () => {
     });
     expect(events.some((event) => event.type === "error" && event.code === "ARTIFACT_ERROR")).toBe(false);
     manager.control("s1", "stop");
+  });
+
+  it("builds codex json resume args with the stored thread id and prompt argument", () => {
+    expect(
+      codexJsonArgs(
+        ["exec", "--json", "--color", "never", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+        "next prompt",
+        "thread-1"
+      )
+    ).toEqual([
+      "exec",
+      "resume",
+      "--json",
+      "--skip-git-repo-check",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "thread-1",
+      "next prompt"
+    ]);
   });
 
   it("handles patch commands with structured results", async () => {

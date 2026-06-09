@@ -22,6 +22,7 @@ interface SessionRow {
   agent: AgentKind;
   status: SessionStatus;
   cwd: string;
+  agent_thread_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -88,10 +89,20 @@ export class ServerStore {
   createSession(session: Session): Session {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, runner_id, agent, status, cwd, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, runner_id, agent, status, cwd, agent_thread_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(session.id, session.title, session.runnerId, session.agent, session.status, session.cwd, session.createdAt, session.updatedAt);
+      .run(
+        session.id,
+        session.title,
+        session.runnerId,
+        session.agent,
+        session.status,
+        session.cwd,
+        session.agentThreadId ?? null,
+        session.createdAt,
+        session.updatedAt
+      );
     return session;
   }
 
@@ -107,6 +118,11 @@ export class ServerStore {
 
   updateSessionStatus(id: string, status: SessionStatus, updatedAt: string): Session | undefined {
     this.db.prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?").run(status, updatedAt, id);
+    return this.getSession(id);
+  }
+
+  updateSessionThread(id: string, agentThreadId: string, updatedAt: string): Session | undefined {
+    this.db.prepare("UPDATE sessions SET agent_thread_id = ?, updated_at = ? WHERE id = ?").run(agentThreadId, updatedAt, id);
     return this.getSession(id);
   }
 
@@ -251,6 +267,7 @@ export class ServerStore {
         agent TEXT NOT NULL,
         status TEXT NOT NULL,
         cwd TEXT NOT NULL,
+        agent_thread_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -299,6 +316,14 @@ export class ServerStore {
         last_seen_at TEXT NOT NULL
       );
     `);
+    this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
+  }
+
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!rows.some((row) => row.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 }
 
@@ -310,6 +335,7 @@ function toSession(row: SessionRow): Session {
     agent: row.agent,
     status: row.status,
     cwd: row.cwd,
+    ...(row.agent_thread_id ? { agentThreadId: row.agent_thread_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

@@ -468,6 +468,39 @@ function handleClientCommand(
     const message = createUserMessage(session.id, command.content);
     store.addMessage(message);
     hub.broadcast({ type: "message:created", message });
+    const runner = store.getRunner(session.runnerId);
+    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
+    const canResumeCodexJson = capability?.parser === "codex-json" && session.agentThreadId !== undefined;
+    if (session.status !== "running" && session.status !== "waiting_approval") {
+      if (!hub.isRunnerOnline(session.runnerId)) {
+        hub.broadcast({
+          type: "error",
+          message: "runner is offline",
+          code: "runner_offline",
+        });
+        return;
+      }
+      if (!canResumeCodexJson) {
+        hub.broadcast({
+          type: "error",
+          message: `${session.agent} session is not running`,
+          code: "session_not_running",
+        });
+        return;
+      }
+
+      const pending = store.updateSessionStatus(session.id, "pending", nowIso());
+      if (pending) {
+        hub.broadcast({ type: "session:updated", session: pending });
+      }
+      hub.sendToRunner(session.runnerId, {
+        type: "startSession",
+        session: pending ?? { ...session, status: "pending" },
+        prompt: command.content,
+        resumeThreadId: session.agentThreadId,
+      });
+      return;
+    }
     hub.sendToRunner(session.runnerId, {
       type: "deliverInput",
       sessionId: session.id,
@@ -554,10 +587,12 @@ function handleClientCommand(
     if (pending) {
       hub.broadcast({ type: "session:updated", session: pending });
     }
+    const resumeThreadId = capability?.parser === "codex-json" ? session.agentThreadId : undefined;
     hub.sendToRunner(session.runnerId, {
       type: "startSession",
       session: pending ?? { ...session, status: "pending" },
       prompt: `Resume session ${session.id}`,
+      ...(resumeThreadId ? { resumeThreadId } : {}),
     });
     return;
   }
@@ -584,6 +619,18 @@ function handleRunnerEvent(
     const session = store.updateSessionStatus(
       event.sessionId,
       event.status,
+      nowIso(),
+    );
+    if (session) {
+      hub.broadcast({ type: "session:updated", session });
+    }
+    return;
+  }
+
+  if (event.type === "sessionThread") {
+    const session = store.updateSessionThread(
+      event.sessionId,
+      event.threadId,
       nowIso(),
     );
     if (session) {

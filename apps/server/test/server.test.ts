@@ -188,6 +188,74 @@ describe("server", () => {
     runner.close();
   });
 
+  it("resumes completed codex exec sessions with the stored codex thread id", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration({ agent: "codex", parser: "codex-json", supportsResume: true })));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        runnerId: "runner-1",
+        agent: "codex",
+        cwd: "/workspace",
+        prompt: "first prompt",
+      },
+    });
+    const sessionId = created.json().session.id as string;
+    await nextJson(runner);
+
+    runner.send(JSON.stringify({ type: "sessionThread", sessionId, threadId: "codex-thread-1" }));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "session:updated" &&
+        event.session.id === sessionId &&
+        event.session.agentThreadId === "codex-thread-1",
+    );
+    runner.send(JSON.stringify({ type: "sessionStatus", sessionId, status: "completed" }));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "session:updated" &&
+        event.session.id === sessionId &&
+        event.session.status === "completed",
+    );
+
+    stream.send(
+      JSON.stringify({
+        type: "userMessage",
+        requestId: "next-1",
+        sessionId,
+        content: "next prompt",
+      }),
+    );
+    const resumeCommand = await nextJson(runner);
+    expect(resumeCommand).toMatchObject({
+      type: "startSession",
+      prompt: "next prompt",
+      resumeThreadId: "codex-thread-1",
+    });
+    expect(resumeCommand.session).toMatchObject({
+      id: sessionId,
+      status: "pending",
+      agentThreadId: "codex-thread-1",
+    });
+
+    stream.close();
+    runner.close();
+  });
+
   it("requests file trees and file content from the registered runner", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
@@ -557,8 +625,9 @@ describe("server", () => {
 });
 
 function runnerRegistration(
-  options: { supportsResume?: boolean } = {},
+  options: { supportsResume?: boolean; agent?: "mock" | "codex"; parser?: string } = {},
 ): RunnerRegistration {
+  const agent = options.agent ?? "mock";
   return {
     runnerId: "runner-1",
     displayName: "Test Runner",
@@ -569,11 +638,11 @@ function runnerRegistration(
     version: "1.0.0",
     capabilities: [
       {
-        kind: "mock",
-        label: "Mock",
-        command: "mock",
+        kind: agent,
+        label: agent === "codex" ? "Codex" : "Mock",
+        command: agent,
         args: [],
-        parser: "mock",
+        parser: options.parser ?? agent,
         supportsResume: options.supportsResume ?? false,
       },
     ],

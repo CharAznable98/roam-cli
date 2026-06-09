@@ -42,6 +42,7 @@ describe("output parsing", () => {
     );
 
     expect(first.chunk.text).toBe("");
+    expect(first.threadId).toBe("t1");
     expect(second.chunk.text).toBe("Projects:\n- roam-cli\n");
   });
 

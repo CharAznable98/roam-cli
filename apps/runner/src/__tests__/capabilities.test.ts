@@ -38,7 +38,7 @@ describe("capabilities", () => {
         "--dangerously-bypass-approvals-and-sandbox"
       ],
       parser: "codex-json",
-      supportsResume: false
+      supportsResume: true
     });
   });
 

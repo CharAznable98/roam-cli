@@ -17,6 +17,7 @@ export interface OutputParseResult {
   chunk: ParsedChunk;
   approvals: readonly ApprovalRequestDraft[];
   artifacts: readonly ArtifactDraft[];
+  threadId?: string;
 }
 
 export class OutputParser {
@@ -55,9 +56,14 @@ export class OutputParser {
 
   #feedCodexJson(parsed: ParsedChunk): OutputParseResult {
     let text = "";
+    let threadId: string | undefined;
     const completeLines = this.#completeLines();
     for (const line of completeLines) {
       const event = parseJsonObject(line);
+      if (event?.type === "thread.started" && typeof event.thread_id === "string") {
+        threadId = event.thread_id;
+        continue;
+      }
       if (event?.type !== "item.completed" || !isRecord(event.item)) {
         continue;
       }
@@ -77,7 +83,8 @@ export class OutputParser {
         lines: text.split(/\r?\n/).filter((line) => line.length > 0)
       },
       approvals: [],
-      artifacts: []
+      artifacts: [],
+      ...(threadId ? { threadId } : {})
     };
   }
 
