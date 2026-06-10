@@ -60,6 +60,16 @@ describe("approval patch model", () => {
     expect(mergePatchHunks(current, next)).toEqual(next);
   });
 
+  it("appends newly streamed hunks in payload order", () => {
+    const first = { ...hunk, id: "hunk-a", approvalId: "approval-1", sessionId: "session-1" };
+    const second = { ...hunk, id: "hunk-b", approvalId: "approval-1", sessionId: "session-1" };
+
+    expect(mergePatchHunks([], [first, second]).map((item) => item.id)).toEqual([
+      "hunk-a",
+      "hunk-b",
+    ]);
+  });
+
   it("builds a unified diff from accepted hunks", () => {
     expect(buildPatchFromHunks([hunk])).toBe(
       [

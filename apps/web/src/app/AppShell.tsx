@@ -48,6 +48,7 @@ export function AppShell({ controller }: AppShellProps) {
     dispatch({ type: "activeTabChanged", tab });
   const setSelectedSessionId = (sessionId: string) =>
     dispatch({ type: "sessionSelected", sessionId });
+  const activeRunnerId = selectedRunner?.runnerId ?? "";
 
   return (
     <div className={`app-shell active-${state.activeTab}`}>
@@ -124,7 +125,7 @@ export function AppShell({ controller }: AppShellProps) {
             <label>
               <span>Runner</span>
               <select
-                value={state.selectedRunnerId}
+                value={activeRunnerId}
                 onChange={(event) => selectRunner(event.target.value)}
               >
                 {state.runners.map((runner) => (
@@ -179,7 +180,7 @@ export function AppShell({ controller }: AppShellProps) {
           <main className="app-grid">
             <RunnerSidebar
               runners={state.runners}
-              selectedRunnerId={state.selectedRunnerId}
+              selectedRunnerId={activeRunnerId}
               sessions={state.sessions}
               selectedSessionId={selectedSession?.id ?? ""}
               onSelectRunner={selectRunner}

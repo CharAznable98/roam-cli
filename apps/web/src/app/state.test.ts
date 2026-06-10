@@ -87,4 +87,30 @@ describe("app reducer", () => {
     expect(next.editorContent).toBe("export const value = true;");
     expect(next.fileContentState).toBe("ready");
   });
+
+  it("ignores stale async file content loads", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/Fast.tsx",
+        fileContentState: "loading",
+      },
+      {
+        type: "fileContentLoaded",
+        result: {
+          requestId: "file-content-1",
+          sessionId: "session-1",
+          path: "src/Slow.tsx",
+          content: "export const slow = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+      },
+    );
+
+    expect(next.fileContent).toBeUndefined();
+    expect(next.editorContent).toBe("");
+    expect(next.fileContentState).toBe("loading");
+  });
 });

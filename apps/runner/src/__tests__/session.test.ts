@@ -250,6 +250,33 @@ describe("SessionManager", () => {
     });
   });
 
+  it("finalizes the session when output handling rejects", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-output-error-"));
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [throwingParserCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(makeSession(workspace), "ready");
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    });
+    manager.deliverInput("s1", "late input");
+
+    expect(events).toContainEqual({
+      type: "error",
+      sessionId: "s1",
+      message: "Session is not running",
+      code: "SESSION_NOT_RUNNING",
+    });
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-"));
     await writeFile(join(workspace, "README.md"), "old\n");
@@ -435,6 +462,45 @@ function approvalCodexAgent(): LoadedAgent {
               approvals: [{ kind: "execCommand", summary: "Approve stale command", payload: { command: "echo ok" } }],
               artifacts: [],
             };
+          },
+        };
+      },
+    },
+  };
+}
+
+function throwingParserCodexAgent(): LoadedAgent {
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-throwing-parser",
+    supportsResume: true,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      buildLaunch() {
+        return {
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('malformed output\\n')"],
+          preferPty: false,
+          requirePty: false,
+          promptDelivery: "argument",
+        };
+      },
+      createParser(): AgentOutputParser {
+        return {
+          feed(): AgentParseResult {
+            throw new Error("parser failed");
           },
         };
       },

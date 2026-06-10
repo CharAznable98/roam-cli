@@ -14,11 +14,10 @@ export function toUiMessage(message: Message): UiMessage {
 
 export function upsertMessage<T extends Message>(items: T[], next: T): T[] {
   const exists = items.some((item) => item.id === next.id);
-  return sortMessages(
-    exists
-      ? items.map((item) => (item.id === next.id ? next : item))
-      : [...items, next],
-  );
+  if (exists) {
+    return items.map((item) => (item.id === next.id ? next : item));
+  }
+  return sortMessages([...items, next]);
 }
 
 export function appendTokenMessage<T extends UiMessage>(
@@ -30,12 +29,10 @@ export function appendTokenMessage<T extends UiMessage>(
     .reverse()
     .find((message) => message.sessionId === sessionId);
   if (latest && isStreamAssistantMessage(latest)) {
-    return sortMessages(
-      messages.map((message) =>
-        message.id === latest.id
-          ? { ...message, content: message.content + content }
-          : message,
-      ),
+    return messages.map((message) =>
+      message.id === latest.id
+        ? { ...message, content: message.content + content }
+        : message,
     ) as T[];
   }
   return sortMessages([
