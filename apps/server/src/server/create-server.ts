@@ -74,7 +74,8 @@ export async function createServer(
   await app.register(websocketPlugin);
 
   app.addHook("preHandler", async (request, reply) => {
-    if (request.url.startsWith("/v1/")) {
+    const pathname = new URL(request.url, "http://localhost").pathname;
+    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
       await requireAuth(config.authToken, request, reply);
     }
   });

@@ -22,7 +22,16 @@ export class ArtifactService {
     }
 
     const artifact = this.artifacts.write(request);
-    this.store.addArtifact(artifact);
+    try {
+      this.store.addArtifact(artifact);
+    } catch (error) {
+      try {
+        this.artifacts.deleteArtifact(artifact);
+      } catch {
+        // Best-effort cleanup; preserve original persistence error.
+      }
+      throw error;
+    }
     this.hub.broadcast({ type: "artifact:created", artifact });
     return ok({ artifact });
   }

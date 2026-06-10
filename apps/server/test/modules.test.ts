@@ -12,6 +12,10 @@ import { hashPayload, signApproval } from "@roamcli/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionHub } from "../src/infra/connection-hub.js";
 import {
+  ArtifactStorage,
+  CreateArtifactRequestSchema,
+} from "../src/infra/local-artifact-storage.js";
+import {
   RunnerRpcClient,
   RunnerRpcError,
 } from "../src/infra/runner-rpc-client.js";
@@ -22,6 +26,7 @@ import {
   patchSignatureTarget,
 } from "../src/modules/approvals/approval-signatures.js";
 import { RunnerEventService } from "../src/modules/runners/runner-event-service.js";
+import { ArtifactService } from "../src/modules/artifacts/artifact-service.js";
 import { SessionCommandService } from "../src/modules/sessions/session-command-service.js";
 
 describe("ApprovalSignatureVerifier", () => {
@@ -188,6 +193,163 @@ describe("SessionCommandService", () => {
       session: { id: created.value.session.id },
     });
   });
+
+  it("rolls back session creation when startSession cannot be delivered", () => {
+    const hub = new ConnectionHub(store);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(store, hub, approvals);
+    hub.registerRunner(runnerRegistration(), fakeSocket<RunnerCommand>([], 3));
+
+    const result = service.createSession({
+      runnerId: "runner-1",
+      agent: "codex",
+      cwd: "/workspace",
+      prompt: "hello",
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "runner_offline" });
+    expect(store.listSessions()).toEqual([]);
+  });
+});
+
+describe("ApprovalService", () => {
+  let dataDir: string;
+  let store: ServerStore;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "roamcli-approval-test-"));
+    store = new ServerStore(dataDir);
+  });
+
+  afterEach(() => {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("only resolves pending approvals after runner delivery succeeds", () => {
+    const hub = new ConnectionHub(store);
+    const service = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const session = store.createSession(sessionRecord());
+    store.upsertApproval({
+      id: "approval-1",
+      sessionId: session.id,
+      runnerId: "runner-1",
+      kind: "execCommand",
+      summary: "Run command",
+      payload: { command: "pwd" },
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+    });
+
+    const offline = service.respondToApproval("approval-1", {
+      approved: true,
+      signedAt: new Date().toISOString(),
+      signature: "unsigned",
+    });
+    expect(offline).toMatchObject({ ok: false, error: "runner_offline" });
+    expect(store.getApproval("approval-1")?.status).toBe("pending");
+
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const resolved = service.respondToApproval("approval-1", {
+      approved: true,
+      signedAt: new Date().toISOString(),
+      signature: "unsigned",
+    });
+    expect(resolved.ok).toBe(true);
+    expect(store.getApproval("approval-1")?.status).toBe("approved");
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "resolveApproval",
+      approvalId: "approval-1",
+      approved: true,
+    });
+
+    const repeated = service.respondToApproval("approval-1", {
+      approved: false,
+      signedAt: new Date().toISOString(),
+      signature: "unsigned",
+    });
+    expect(repeated).toMatchObject({
+      ok: false,
+      error: "approval_already_resolved",
+    });
+    expect(store.getApproval("approval-1")?.status).toBe("approved");
+  });
+});
+
+describe("ArtifactStorage", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "roamcli-artifact-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("keeps sanitized session paths inside the artifact root", () => {
+    const storage = new ArtifactStorage(dataDir);
+    const marker = path.join(dataDir, "marker.txt");
+    fs.writeFileSync(marker, "do not delete", "utf8");
+
+    const artifact = storage.write({
+      sessionId: "..",
+      kind: "log",
+      name: "..",
+      mimeType: "text/plain",
+      content: "hello",
+    });
+    const relative = path.relative(storage.rootDir, artifact.storagePath);
+
+    expect(relative.startsWith("..")).toBe(false);
+    expect(path.isAbsolute(relative)).toBe(false);
+    storage.deleteSessionArtifacts("..");
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+
+  it("rejects malformed base64 and cleans up files when DB persistence fails", () => {
+    expect(
+      CreateArtifactRequestSchema.safeParse({
+        sessionId: "session-1",
+        kind: "log",
+        name: "bad.log",
+        mimeType: "text/plain",
+        contentBase64: "!!!!",
+      }).success,
+    ).toBe(false);
+
+    const storage = new ArtifactStorage(dataDir);
+    const service = new ArtifactService(
+      {
+        getSession: () => sessionRecord(),
+        addArtifact: () => {
+          throw new Error("db failed");
+        },
+      } as unknown as ServerStore,
+      storage,
+      { broadcast: vi.fn() } as unknown as ConnectionHub,
+    );
+
+    expect(() =>
+      service.createArtifact({
+        sessionId: "session-1",
+        kind: "log",
+        name: "artifact.log",
+        mimeType: "text/plain",
+        content: "hello",
+      }),
+    ).toThrow("db failed");
+    expect(listFiles(storage.rootDir)).toEqual([]);
+  });
 });
 
 describe("RunnerEventService", () => {
@@ -221,11 +383,23 @@ describe("RunnerEventService", () => {
       encrypted: false,
     });
     expect(store.listMessages(session.id)).toMatchObject([
-      { role: "assistant", content: "partial" },
+      { role: "assistant", content: "partial", encrypted: false },
     ]);
     expect(streamEvents).toContainEqual(
       expect.objectContaining({ type: "token", content: "partial" }),
     );
+
+    service.handle({
+      type: "token",
+      sessionId: session.id,
+      content: "secret",
+      encrypted: true,
+    });
+    expect(store.listMessages(session.id).at(-1)).toMatchObject({
+      role: "assistant",
+      content: "secret",
+      encrypted: true,
+    });
 
     service.handle({
       type: "approvalRequested",
@@ -304,6 +478,51 @@ describe("RunnerEventService", () => {
       }),
     );
   });
+
+  it("does not treat runner registered events as live socket registration", () => {
+    const streamEvents: ServerEvent[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    const service = new RunnerEventService(
+      store,
+      hub,
+      new RunnerRpcClient(hub),
+    );
+
+    service.handle({ type: "registered", runner: runnerRegistration() });
+
+    expect(store.listOnlineRunners()).toEqual([]);
+    expect(streamEvents).toEqual([]);
+  });
+});
+
+describe("ConnectionHub", () => {
+  let dataDir: string;
+  let store: ServerStore;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "roamcli-hub-test-"));
+    store = new ServerStore(dataDir);
+  });
+
+  afterEach(() => {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("bootstraps stream clients from live runner sockets, not stale DB rows", () => {
+    store.setRunnerOnline(runnerRegistration(), true, new Date().toISOString());
+    const hub = new ConnectionHub(store);
+    const streamEvents: ServerEvent[] = [];
+
+    hub.addStream(fakeSocket(streamEvents));
+    expect(streamEvents).toEqual([]);
+
+    hub.registerRunner(runnerRegistration(), fakeSocket<RunnerCommand>([]));
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({ type: "runner:online" }),
+    );
+  });
 });
 
 function runnerRegistration(): RunnerRegistration {
@@ -342,14 +561,21 @@ function sessionRecord(): Session {
   };
 }
 
-function fakeSocket<T>(messages: T[]): WebSocket {
+function fakeSocket<T>(messages: T[], readyState = 1): WebSocket {
   return {
     OPEN: 1,
-    readyState: 1,
+    readyState,
     send: vi.fn((data: string) => {
       messages.push(JSON.parse(data) as T);
     }),
     close: vi.fn(),
     once: vi.fn(),
   } as unknown as WebSocket;
+}
+
+function listFiles(rootDir: string): string[] {
+  return fs
+    .readdirSync(rootDir, { recursive: true })
+    .map((entry) => String(entry))
+    .filter((entry) => fs.statSync(path.join(rootDir, entry)).isFile());
 }

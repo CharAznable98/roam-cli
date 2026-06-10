@@ -11,7 +11,13 @@ export const CreateArtifactRequestSchema = z
     kind: ArtifactKindSchema,
     name: z.string().min(1),
     mimeType: z.string().min(1),
-    contentBase64: z.string().min(1).optional(),
+    contentBase64: z
+      .string()
+      .min(1)
+      .refine(isValidBase64, {
+        message: "contentBase64 must be valid base64",
+      })
+      .optional(),
     content: z.string().optional(),
   })
   .refine(
@@ -59,6 +65,18 @@ export class ArtifactStorage {
     };
   }
 
+  deleteArtifact(artifact: Artifact): void {
+    const storagePath = path.resolve(artifact.storagePath);
+    const rootDir = path.resolve(this.rootDir);
+    if (
+      storagePath === rootDir ||
+      !storagePath.startsWith(`${rootDir}${path.sep}`)
+    ) {
+      return;
+    }
+    fs.rmSync(storagePath, { force: true });
+  }
+
   deleteSessionArtifacts(sessionId: string): void {
     fs.rmSync(path.join(this.rootDir, sanitizePathSegment(sessionId)), {
       recursive: true,
@@ -68,5 +86,28 @@ export class ArtifactStorage {
 }
 
 function sanitizePathSegment(segment: string): string {
-  return segment.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180) || "artifact";
+  const safe = segment.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 180);
+  return safe.replace(/^_+$/g, "") || "artifact";
+}
+
+function isValidBase64(value: string): boolean {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+  if (value.includes("=") && !/^[A-Za-z0-9+/]+={1,2}$/.test(value)) {
+    return false;
+  }
+  if (value.length % 4 === 1) {
+    return false;
+  }
+  try {
+    const unpadded = value.replace(/=+$/, "");
+    const padded = unpadded.padEnd(Math.ceil(unpadded.length / 4) * 4, "=");
+    return (
+      Buffer.from(padded, "base64").toString("base64").replace(/=+$/, "") ===
+      unpadded
+    );
+  } catch {
+    return false;
+  }
 }

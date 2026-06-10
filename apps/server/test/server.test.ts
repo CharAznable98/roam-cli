@@ -45,6 +45,57 @@ describe("server", () => {
     expect(authorized.json()).toEqual({ sessions: [] });
   });
 
+  it("returns API 404s for /v1 and asset 404s without SPA fallback", async () => {
+    const webDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-web-data-"),
+    );
+    const webDistDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-web-dist-"),
+    );
+    const webApp = await createServer({
+      dataDir: webDataDir,
+      authToken: token,
+      webDistDir,
+    });
+    try {
+      fs.writeFileSync(
+        path.join(webDistDir, "index.html"),
+        "<!doctype html><div>spa</div>",
+        "utf8",
+      );
+
+      const apiRoot = await webApp.inject({
+        method: "GET",
+        url: "/v1",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(apiRoot.statusCode).toBe(404);
+      expect(apiRoot.headers["content-type"]).toContain("application/json");
+      expect(apiRoot.json()).toEqual({ error: "not_found" });
+
+      const missingAsset = await webApp.inject({
+        method: "GET",
+        url: "/assets/missing.js",
+      });
+      expect(missingAsset.statusCode).toBe(404);
+      expect(missingAsset.headers["content-type"]).toContain(
+        "application/json",
+      );
+
+      const clientRoute = await webApp.inject({
+        method: "GET",
+        url: "/sessions/session-1",
+      });
+      expect(clientRoute.statusCode).toBe(200);
+      expect(clientRoute.headers["content-type"]).toContain("text/html");
+      expect(clientRoute.body).toContain("spa");
+    } finally {
+      await webApp.close();
+      fs.rmSync(webDataDir, { recursive: true, force: true });
+      fs.rmSync(webDistDir, { recursive: true, force: true });
+    }
+  });
+
   it("registers a runner, creates a session, routes commands, and broadcasts runner events", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);

@@ -16,8 +16,6 @@ export class RunnerEventService {
 
   handle(event: RunnerEvent): void {
     if (event.type === "registered") {
-      this.store.setRunnerOnline(event.runner, true, nowIso());
-      this.hub.broadcast({ type: "runner:online", runner: event.runner });
       return;
     }
 
@@ -60,7 +58,12 @@ export class RunnerEventService {
     }
 
     if (event.type === "token") {
-      this.store.appendAssistantToken(event.sessionId, event.content, nowIso());
+      this.store.appendAssistantToken(
+        event.sessionId,
+        event.content,
+        nowIso(),
+        event.encrypted,
+      );
       this.hub.broadcast({
         type: "token",
         sessionId: event.sessionId,
