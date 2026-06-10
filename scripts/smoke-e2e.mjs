@@ -36,7 +36,9 @@ Environment:
 }
 
 if (typeof WebSocket !== "function") {
-  fail("This Node.js runtime does not provide a global WebSocket implementation.");
+  fail(
+    "This Node.js runtime does not provide a global WebSocket implementation.",
+  );
 }
 
 process.on("SIGINT", () => {
@@ -53,7 +55,9 @@ try {
 } catch (error) {
   await cleanup();
   console.error("[fail] RoamCli smoke/E2E failed");
-  console.error(error instanceof Error ? error.stack ?? error.message : error);
+  console.error(
+    error instanceof Error ? (error.stack ?? error.message) : error,
+  );
   if (logs.length > 0) {
     console.error("\n--- child process logs ---");
     console.error(logs.slice(-80).join(""));
@@ -63,10 +67,26 @@ try {
 
 async function runSmoke() {
   if (process.env.ROAMCLI_SMOKE_SKIP_BUILD !== "1") {
-    await runCommand("build:protocol", "pnpm", ["--filter", "@roamcli/protocol", "build"]);
-    await runCommand("build:security", "pnpm", ["--filter", "@roamcli/security", "build"]);
-    await runCommand("build:agent-plugin-sdk", "pnpm", ["--filter", "@roamcli/agent-plugin-sdk", "build"]);
-    await runCommand("build:agent-codex", "pnpm", ["--filter", "@roamcli/agent-codex", "build"]);
+    await runCommand("build:protocol", "pnpm", [
+      "--filter",
+      "@roamcli/protocol",
+      "build",
+    ]);
+    await runCommand("build:security", "pnpm", [
+      "--filter",
+      "@roamcli/security",
+      "build",
+    ]);
+    await runCommand("build:agent-plugin-sdk", "pnpm", [
+      "--filter",
+      "@roamcli/agent-plugin-sdk",
+      "build",
+    ]);
+    await runCommand("build:agent-codex", "pnpm", [
+      "--filter",
+      "@roamcli/agent-codex",
+      "build",
+    ]);
   }
 
   if (baseUrl === undefined) {
@@ -74,13 +94,18 @@ async function runSmoke() {
     baseUrl = `http://127.0.0.1:${port}`;
     const dataDir = await mkdtemp(resolve(tmpdir(), "roamcli-smoke-server-"));
     tempDirs.push(dataDir);
-    startChild("server", "pnpm", ["--filter", "@roamcli/server", "dev"], {
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      ROAMCLI_AUTH_TOKEN: token,
-      ROAMCLI_DATA_DIR: dataDir,
-      ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "10000",
-    });
+    startChild(
+      "server",
+      "pnpm",
+      ["--filter", "@roamcli/server", "exec", "tsx", "src/index.ts"],
+      {
+        HOST: "127.0.0.1",
+        PORT: String(port),
+        ROAMCLI_AUTH_TOKEN: token,
+        ROAMCLI_DATA_DIR: dataDir,
+        ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "10000",
+      },
+    );
     await waitForHttp("/v1/runners");
     pass(`server online at ${baseUrl}`);
   } else {
@@ -100,22 +125,42 @@ async function runSmoke() {
     await waitForPersistedAssistantToken(session.id, prompt);
     pass("assistant token persisted");
 
-    const tree = await requestJson(`/v1/sessions/${session.id}/files?path=.&depth=2`);
+    const tree = await requestJson(
+      `/v1/sessions/${session.id}/files?path=.&depth=2`,
+    );
     const root = tree.result?.root;
-    assert(root?.type === "directory", "file tree response did not include a directory root");
-    assert(hasTreePath(root, "package.json") || hasTreePath(root, "apps"), "file tree did not include expected repo entries");
+    assert(
+      root?.type === "directory",
+      "file tree response did not include a directory root",
+    );
+    assert(
+      hasTreePath(root, "package.json") || hasTreePath(root, "apps"),
+      "file tree did not include expected repo entries",
+    );
     pass("file tree returned from runner");
 
-    const content = await requestJson(`/v1/sessions/${session.id}/files/content?path=package.json&maxBytes=8192`);
-    assert(content.result?.content?.includes('"name": "roamcli"'), "file content did not include root package.json contents");
-    assert(content.result?.encoding === "utf8", "file content response did not report utf8 encoding");
+    const content = await requestJson(
+      `/v1/sessions/${session.id}/files/content?path=package.json&maxBytes=8192`,
+    );
+    assert(
+      content.result?.content?.includes('"name": "roamcli"'),
+      "file content did not include root package.json contents",
+    );
+    assert(
+      content.result?.encoding === "utf8",
+      "file content response did not report utf8 encoding",
+    );
     pass("file content returned from runner");
 
     await fileSaveAssertionEntry(session.id);
 
     const terminalInput = `terminal-smoke-${Date.now()}`;
     const terminalSeen = waitForStreamEvent(stream, (event) => {
-      return event.type === "terminal:data" && event.sessionId === session.id && event.chunk.includes(terminalInput);
+      return (
+        event.type === "terminal:data" &&
+        event.sessionId === session.id &&
+        event.chunk.includes(terminalInput)
+      );
     });
     stream.send(
       JSON.stringify({
@@ -137,11 +182,17 @@ async function runSmoke() {
 
 async function ensureRunnerOnline() {
   const existing = await requestJson("/v1/runners");
-  const requested = existing.runners?.find((runner) => runner.runnerId === runnerId);
+  const requested = existing.runners?.find(
+    (runner) => runner.runnerId === runnerId,
+  );
   if (requested !== undefined) {
     return requested;
   }
-  if (suppliedBaseUrl !== undefined && process.env.ROAMCLI_SMOKE_RUNNER_ID === undefined && existing.runners?.[0] !== undefined) {
+  if (
+    suppliedBaseUrl !== undefined &&
+    process.env.ROAMCLI_SMOKE_RUNNER_ID === undefined &&
+    existing.runners?.[0] !== undefined
+  ) {
     return existing.runners[0];
   }
 
@@ -194,7 +245,10 @@ async function createSession(activeRunnerId, prompt) {
       title: "Smoke E2E",
     }),
   });
-  assert(payload.session?.id, "create session response did not include session.id");
+  assert(
+    payload.session?.id,
+    "create session response did not include session.id",
+  );
   return payload.session;
 }
 
@@ -216,10 +270,16 @@ async function createFakeCodexCommand(label) {
 }
 
 async function waitForPersistedAssistantToken(sessionId, expected) {
-  return waitFor(async () => {
-    const payload = await requestJson(`/v1/sessions/${sessionId}`);
-    return payload.messages?.some((message) => message.role === "assistant" && message.content.includes(expected));
-  }, `assistant token containing ${JSON.stringify(expected)} to persist`);
+  return waitFor(
+    async () => {
+      const payload = await requestJson(`/v1/sessions/${sessionId}`);
+      return payload.messages?.some(
+        (message) =>
+          message.role === "assistant" && message.content.includes(expected),
+      );
+    },
+    `assistant token containing ${JSON.stringify(expected)} to persist`,
+  );
 }
 
 async function patchApplyAssertionEntry(sessionId) {
@@ -242,25 +302,49 @@ async function patchApplyAssertionEntry(sessionId) {
     `+${newValue}`,
     "",
   ].join("\n");
-  const invalidSignature = await requestRaw(`/v1/sessions/${sessionId}/patches/apply`, {
-    method: "POST",
-    body: JSON.stringify({ patch, strip: 1, signedAt: new Date().toISOString(), signature: "not-valid" }),
-  });
+  const invalidSignature = await requestRaw(
+    `/v1/sessions/${sessionId}/patches/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        patch,
+        strip: 1,
+        signedAt: new Date().toISOString(),
+        signature: "not-valid",
+      }),
+    },
+  );
   assert(
-    invalidSignature.status === 403 && invalidSignature.payload?.error === "invalid_signature",
+    invalidSignature.status === 403 &&
+      invalidSignature.payload?.error === "invalid_signature",
     `invalid patch signature was not rejected: ${JSON.stringify(invalidSignature)}`,
   );
   pass("invalid patch apply signature rejected");
   const signedAt = new Date().toISOString();
-  const signature = signApprovalLike(`patch:${sessionId}:${sha256Hex(patch)}`, true, signedAt);
+  const signature = signApprovalLike(
+    `patch:${sessionId}:${sha256Hex(patch)}`,
+    true,
+    signedAt,
+  );
   const payload = await requestJson(`/v1/sessions/${sessionId}/patches/apply`, {
     method: "POST",
     body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
   });
-  assert(payload.result?.applied === true, `patch apply did not report applied=true: ${JSON.stringify(payload)}`);
-  assert(payload.result?.changedFiles?.includes(filePath), "patch apply response did not include changed file");
-  const content = await requestJson(`/v1/sessions/${sessionId}/files/content?path=${encodeURIComponent(filePath)}&maxBytes=1024`);
-  assert(content.result?.content === `${newValue}\n`, "patched file content was not returned by runner");
+  assert(
+    payload.result?.applied === true,
+    `patch apply did not report applied=true: ${JSON.stringify(payload)}`,
+  );
+  assert(
+    payload.result?.changedFiles?.includes(filePath),
+    "patch apply response did not include changed file",
+  );
+  const content = await requestJson(
+    `/v1/sessions/${sessionId}/files/content?path=${encodeURIComponent(filePath)}&maxBytes=1024`,
+  );
+  assert(
+    content.result?.content === `${newValue}\n`,
+    "patched file content was not returned by runner",
+  );
   pass("signed patch apply changed a real workspace file");
 }
 
@@ -274,12 +358,24 @@ async function fileSaveAssertionEntry(sessionId) {
 
   const write = await requestJson(`/v1/sessions/${sessionId}/files/content`, {
     method: "PUT",
-    body: JSON.stringify({ path: filePath, content: `${newValue}\n`, encoding: "utf8" }),
+    body: JSON.stringify({
+      path: filePath,
+      content: `${newValue}\n`,
+      encoding: "utf8",
+    }),
   });
-  assert(write.result?.bytesWritten === Buffer.byteLength(`${newValue}\n`, "utf8"), `file write returned unexpected result: ${JSON.stringify(write)}`);
+  assert(
+    write.result?.bytesWritten === Buffer.byteLength(`${newValue}\n`, "utf8"),
+    `file write returned unexpected result: ${JSON.stringify(write)}`,
+  );
 
-  const content = await requestJson(`/v1/sessions/${sessionId}/files/content?path=${encodeURIComponent(filePath)}&maxBytes=1024`);
-  assert(content.result?.content === `${newValue}\n`, "saved file content was not returned by runner");
+  const content = await requestJson(
+    `/v1/sessions/${sessionId}/files/content?path=${encodeURIComponent(filePath)}&maxBytes=1024`,
+  );
+  assert(
+    content.result?.content === `${newValue}\n`,
+    "saved file content was not returned by runner",
+  );
   pass("file edit/save changed a real workspace file");
 }
 
@@ -297,15 +393,26 @@ async function connectStream() {
     }
   });
   await new Promise((resolveOpen, rejectOpen) => {
-    const timer = setTimeout(() => rejectOpen(new Error(`Timed out opening stream ${url}`)), timeoutMs);
-    socket.addEventListener("open", () => {
-      clearTimeout(timer);
-      resolveOpen();
-    }, { once: true });
-    socket.addEventListener("error", () => {
-      clearTimeout(timer);
-      rejectOpen(new Error(`Failed to open stream ${url}`));
-    }, { once: true });
+    const timer = setTimeout(
+      () => rejectOpen(new Error(`Timed out opening stream ${url}`)),
+      timeoutMs,
+    );
+    socket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timer);
+        resolveOpen();
+      },
+      { once: true },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timer);
+        rejectOpen(new Error(`Failed to open stream ${url}`));
+      },
+      { once: true },
+    );
   });
   return socket;
 }
@@ -369,7 +476,9 @@ async function waitFor(probe, description) {
 async function requestJson(path, init = {}) {
   const { ok, status, statusText, payload } = await requestRaw(path, init);
   if (!ok) {
-    throw new Error(`${status} ${statusText} from ${path}: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `${status} ${statusText} from ${path}: ${JSON.stringify(payload)}`,
+    );
   }
   return payload;
 }
@@ -410,7 +519,9 @@ function startChild(label, command, args, env = {}) {
   child.stdout.on("data", (chunk) => logs.push(`[${label}:stdout] ${chunk}`));
   child.stderr.on("data", (chunk) => logs.push(`[${label}:stderr] ${chunk}`));
   child.on("exit", (code, signal) => {
-    logs.push(`[${label}] exited code=${code ?? "null"} signal=${signal ?? "null"}\n`);
+    logs.push(
+      `[${label}] exited code=${code ?? "null"} signal=${signal ?? "null"}\n`,
+    );
   });
   return child;
 }
@@ -422,7 +533,11 @@ async function runCommand(label, command, args, env = {}) {
       if (code === 0) {
         resolveRun();
       } else {
-        rejectRun(new Error(`${label} failed with code=${code ?? "null"} signal=${signal ?? "null"}`));
+        rejectRun(
+          new Error(
+            `${label} failed with code=${code ?? "null"} signal=${signal ?? "null"}`,
+          ),
+        );
       }
     });
   });
@@ -447,7 +562,9 @@ async function cleanup() {
         }),
     ),
   );
-  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
+  );
   await Promise.all(tempPaths.map((path) => rm(path, { force: true })));
 }
 
@@ -499,5 +616,7 @@ function sha256Hex(value) {
 }
 
 function signApprovalLike(approvalId, approved, signedAt) {
-  return createHmac("sha256", token).update(`${approvalId}.${approved ? "1" : "0"}.${signedAt}`).digest("base64url");
+  return createHmac("sha256", token)
+    .update(`${approvalId}.${approved ? "1" : "0"}.${signedAt}`)
+    .digest("base64url");
 }

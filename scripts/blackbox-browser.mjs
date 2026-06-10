@@ -61,13 +61,18 @@ async function run() {
       resolve(tmpdir(), "roamcli-blackbox-server-"),
     );
     tempDirs.push(dataDir);
-    startChild("server", "pnpm", ["--filter", "@roamcli/server", "dev"], {
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      ROAMCLI_AUTH_TOKEN: token,
-      ROAMCLI_DATA_DIR: dataDir,
-      ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "30000",
-    });
+    startChild(
+      "server",
+      "pnpm",
+      ["--filter", "@roamcli/server", "exec", "tsx", "src/index.ts"],
+      {
+        HOST: "127.0.0.1",
+        PORT: String(port),
+        ROAMCLI_AUTH_TOKEN: token,
+        ROAMCLI_DATA_DIR: dataDir,
+        ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "30000",
+      },
+    );
     await waitForHttp("/v1/runners");
     pass(`server online at ${baseUrl}`);
   } else {
@@ -155,10 +160,20 @@ async function runUserJourney(browser, scenario) {
     });
     await expectText(page, `Blackbox ${scenario.name}`);
 
+    await assertSessionResume(page, scenario, session);
+    pass(`${scenario.name}: resume completed session`);
+    await waitForSessionStatus(session.id, "completed");
+
     const chatEcho = `chat echo ${scenario.name} ${Date.now()}`;
-    await sendChatMessage(page, scenario, chatEcho);
-    await expectText(page, chatEcho);
+    await sendChatMessageAndExpect(
+      page,
+      scenario,
+      session.id,
+      chatEcho,
+      chatEcho,
+    );
     pass(`${scenario.name}: chat round-trip`);
+    await waitForSessionStatus(session.id, "completed");
 
     await openTab(page, scenario, "files");
     await page.getByRole("treeitem", { name: fileName }).click();
@@ -178,7 +193,8 @@ async function runUserJourney(browser, scenario) {
     await expectText(page, terminalEcho);
     pass(`${scenario.name}: terminal input`);
 
-    await assertExecApprovals(page, scenario, session);
+    await waitForSessionStatus(session.id, "completed");
+    await assertExecApprovals(page, scenario, session.id);
     pass(`${scenario.name}: exec approval approve/reject`);
 
     const artifactFileName = `.roamcli-artifact-${scenario.name}-${process.pid}.log`;
@@ -186,18 +202,20 @@ async function runUserJourney(browser, scenario) {
     const artifactContent = `artifact ${scenario.name} ${Date.now()}\n`;
     await writeFile(artifactPath, artifactContent, "utf8");
     tempPaths.push(artifactPath);
-    await sendChatMessage(
+    await sendChatMessageUntil(
       page,
       scenario,
+      session.id,
       `ROAMCLI_ARTIFACT: ${JSON.stringify({
         type: "artifact",
         path: artifactFileName,
         kind: "log",
         mimeType: "text/plain",
       })}`,
+      () => sessionHasArtifact(session.id, artifactFileName),
+      `artifact ${artifactFileName} to be persisted`,
     );
     await openTab(page, scenario, "approvals");
-    await expectText(page, artifactFileName);
     await expectText(page, "text/plain");
     pass(`${scenario.name}: artifact display`);
 
@@ -218,9 +236,16 @@ async function runUserJourney(browser, scenario) {
         ],
       },
     })}`;
-    await sendChatMessage(page, scenario, approvalLine);
+    await sendChatMessageUntil(
+      page,
+      scenario,
+      session.id,
+      approvalLine,
+      () =>
+        sessionHasApproval(session.id, `Apply blackbox patch ${scenario.name}`),
+      `patch approval for ${scenario.name} to be persisted`,
+    );
     await openTab(page, scenario, "approvals");
-    await expectText(page, `Apply blackbox patch ${scenario.name}`);
     await page
       .getByRole("button", { name: `Accept patch hunk ${hunkId}` })
       .click();
@@ -282,46 +307,58 @@ async function runNoRunnerJourney(browser) {
   }
 }
 
-async function assertExecApprovals(page, scenario, session) {
+async function assertExecApprovals(page, scenario, sessionId) {
   const approveSummary = `Approve exec ${scenario.name} ${Date.now()}`;
-  await sendChatMessage(
+  await sendChatMessageUntil(
     page,
     scenario,
+    sessionId,
     `ROAMCLI_APPROVAL: ${JSON.stringify({
       type: "approval_request",
       kind: "execCommand",
       summary: approveSummary,
       payload: { command: `echo ${scenario.name}` },
     })}`,
+    () => sessionHasApproval(sessionId, approveSummary),
+    `approval ${approveSummary} to be persisted`,
   );
   await openTab(page, scenario, "approvals");
-  await expectText(page, approveSummary);
   await page
     .locator(".approval-card", { hasText: approveSummary })
     .getByRole("button", { name: "Approve" })
     .click();
   await expectText(page, "approved");
-  await waitForSessionStatus(session.id, "completed");
+  await waitForSessionStatus(sessionId, "completed");
 
   const rejectSummary = `Reject exec ${scenario.name} ${Date.now()}`;
-  await sendChatMessage(
+  await sendChatMessageUntil(
     page,
     scenario,
+    sessionId,
     `ROAMCLI_APPROVAL: ${JSON.stringify({
       type: "approval_request",
       kind: "execCommand",
       summary: rejectSummary,
       payload: { command: "rm -rf /tmp/nope" },
     })}`,
+    () => sessionHasApproval(sessionId, rejectSummary),
+    `approval ${rejectSummary} to be persisted`,
   );
   await openTab(page, scenario, "approvals");
-  await expectText(page, rejectSummary);
   await page
     .locator(".approval-card", { hasText: rejectSummary })
     .getByRole("button", { name: "Reject" })
     .click();
   await expectText(page, "rejected");
-  await waitForSessionStatus(session.id, "completed");
+  await waitForSessionStatus(sessionId, "completed");
+}
+
+async function assertSessionResume(page, scenario, session) {
+  await openTab(page, scenario, "chat");
+  const conversation = page.getByRole("region", { name: "Conversation" });
+  await expectText(page, "completed");
+  await conversation.getByRole("button", { name: "Resume session" }).click();
+  await expectText(page, `Resume session ${session.id}`);
 }
 
 async function createSessionFromUi(page, scenario, values) {
@@ -357,6 +394,46 @@ async function sendChatMessage(page, scenario, content) {
   await openTab(page, scenario, "chat");
   await page.getByLabel("Chat composer").fill(content);
   await page.getByRole("button", { name: "Send message" }).click();
+}
+
+async function sendChatMessageAndExpect(
+  page,
+  scenario,
+  sessionId,
+  content,
+  expectedText,
+) {
+  await sendChatMessageUntil(
+    page,
+    scenario,
+    sessionId,
+    content,
+    () => hasVisibleText(page, expectedText),
+    `visible text ${JSON.stringify(expectedText)}`,
+  );
+}
+
+async function sendChatMessageUntil(
+  page,
+  scenario,
+  sessionId,
+  content,
+  probe,
+  description,
+) {
+  await sendChatMessage(page, scenario, content);
+  try {
+    await waitFor(probe, description);
+    return;
+  } catch (error) {
+    if (!(await hasVisibleText(page, "Session is not running"))) {
+      throw error;
+    }
+  }
+
+  await waitForSessionStatus(sessionId, "stopped");
+  await sendChatMessage(page, scenario, content);
+  await waitFor(probe, description);
 }
 
 async function openTab(page, scenario, tab) {
@@ -469,6 +546,7 @@ async function createFakeCodexCommand() {
       "const resumed = process.argv.includes('resume');",
       "console.log(JSON.stringify({ type: 'thread.started', thread_id: resumed ? 'codex-thread-resumed' : 'codex-thread-1' }));",
       "emit(prompt);",
+      "if (prompt.length > 0) setImmediate(() => process.exit(0));",
       "process.stdin.setEncoding('utf8');",
       "process.stdin.on('data', (chunk) => {",
       "  buffer += chunk;",
@@ -519,6 +597,27 @@ async function expectText(page, text) {
   );
 }
 
+async function hasVisibleText(page, text) {
+  try {
+    return await page
+      .getByText(text, { exact: false })
+      .evaluateAll((elements) =>
+        elements.some((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.visibility !== "hidden" &&
+            style.display !== "none"
+          );
+        }),
+      );
+  } catch {
+    return false;
+  }
+}
+
 async function expectFileContent(sessionId, path, expected) {
   await waitFor(
     async () => {
@@ -533,9 +632,19 @@ async function expectFileContent(sessionId, path, expected) {
 
 async function waitForSessionStatus(sessionId, status) {
   await waitFor(async () => {
-    const payload = await requestJson(`/v1/sessions/${sessionId}`);
-    return payload.session?.status === status;
-  }, `session ${sessionId} status ${status}`);
+    const detail = await requestJson(`/v1/sessions/${sessionId}`);
+    return detail.session?.status === status;
+  }, `session ${sessionId} to be ${status}`);
+}
+
+async function sessionHasApproval(sessionId, summary) {
+  const detail = await requestJson(`/v1/sessions/${sessionId}`);
+  return detail.approvals?.some((approval) => approval.summary === summary);
+}
+
+async function sessionHasArtifact(sessionId, name) {
+  const detail = await requestJson(`/v1/sessions/${sessionId}`);
+  return detail.artifacts?.some((artifact) => artifact.name === name);
 }
 
 async function waitForHttp(path) {

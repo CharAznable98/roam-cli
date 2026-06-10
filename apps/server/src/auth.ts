@@ -1,6 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-export function isAuthorized(token: string | undefined, request: FastifyRequest): boolean {
+export function isAuthorized(
+  token: string | undefined,
+  request: FastifyRequest,
+): boolean {
   if (!token) {
     return true;
   }
@@ -19,7 +22,11 @@ export function isAuthorized(token: string | undefined, request: FastifyRequest)
   return query?.token === token;
 }
 
-export async function requireAuth(token: string | undefined, request: FastifyRequest, reply: FastifyReply): Promise<void> {
+export async function requireAuth(
+  token: string | undefined,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
   if (isAuthorized(token, request)) {
     return;
   }
