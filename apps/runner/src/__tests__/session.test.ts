@@ -223,6 +223,33 @@ describe("SessionManager", () => {
     });
   });
 
+  it("emits one-shot process exit status after delayed approval output handling", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-approval-order-"));
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [approvalCodexAgent()],
+      emit: async (event) => {
+        if (event.type === "sessionStatus" && event.status === "waiting_approval") {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        events.push(event);
+      },
+    });
+
+    await manager.start(makeSession(workspace), "approval please");
+
+    await vi.waitFor(() => {
+      const statusEvents = events.filter((event) => event.type === "sessionStatus");
+      expect(statusEvents.at(-1)).toEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
+    });
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-"));
     await writeFile(join(workspace, "README.md"), "old\n");

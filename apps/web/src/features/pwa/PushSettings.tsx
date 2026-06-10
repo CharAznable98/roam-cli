@@ -1,6 +1,6 @@
 import { Bell, BellOff } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getNotificationSupport } from "../lib/pwa";
+import { getNotificationSupport } from "./pwa";
 
 export function PushSettings() {
   const [permission, setPermission] = useState(getNotificationSupport);

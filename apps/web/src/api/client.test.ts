@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRoamApiClient } from "./api";
+import { createRoamApiClient } from "./client";
 
 describe("createRoamApiClient", () => {
   it("does not send a JSON content-type header for requests without a body", async () => {

@@ -1,8 +1,8 @@
 import type { Session } from "@roamcli/protocol";
 import { Bot, ChevronDown, CircleStop, Play, Send, SquareTerminal, Trash2, User } from "lucide-react";
 import { FormEvent, useState } from "react";
-import type { UiMessage } from "../types";
-import { StatusPill } from "./StatusPill";
+import type { UiMessage } from "./model";
+import { StatusPill } from "../../shared/components/StatusPill";
 import { VoiceButton } from "./VoiceButton";
 
 type ChatPanelProps = {

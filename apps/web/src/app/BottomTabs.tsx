@@ -1,5 +1,5 @@
 import { Bell, Files, MessageSquare, SquareTerminal } from "lucide-react";
-import type { WorkspaceTab } from "../types";
+import type { WorkspaceTab } from "./navigation";
 
 const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof MessageSquare }> = [
   { id: "chat", label: "对话", icon: MessageSquare },
