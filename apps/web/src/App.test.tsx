@@ -35,6 +35,13 @@ const runner = {
   version: "0.1.0",
 };
 
+const backupRunner = {
+  ...runner,
+  runnerId: "backup-runner",
+  displayName: "Backup Runner",
+  hostname: "backup.local",
+};
+
 const session = {
   id: "session-1",
   title: "Real session",
@@ -66,6 +73,14 @@ const patchHunk = {
   status: "pending",
 } as const;
 
+const secondPatchHunk = {
+  id: "hunk-2",
+  filePath: "src/Other.tsx",
+  header: "@@ -2 +2 @@",
+  lines: ["-before", "+after"],
+  status: "pending",
+} as const;
+
 const patchApproval = {
   id: "approval-1",
   sessionId: "session-1",
@@ -78,6 +93,22 @@ const patchApproval = {
 } as const;
 
 let sockets: TestWebSocket[];
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 class TestWebSocket extends EventTarget {
   static OPEN = 1;
@@ -101,10 +132,12 @@ class TestWebSocket extends EventTarget {
 describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
+  let deferredFileContent: Map<string, Deferred<Response>>;
 
   beforeEach(() => {
     fetchRequests = [];
     fetchCalls = [];
+    deferredFileContent = new Map();
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -163,6 +196,18 @@ describe("App", () => {
                       type: "file",
                       size: 42,
                     },
+                    {
+                      path: "src/Slow.tsx",
+                      name: "Slow.tsx",
+                      type: "file",
+                      size: 12,
+                    },
+                    {
+                      path: "src/Fast.tsx",
+                      name: "Fast.tsx",
+                      type: "file",
+                      size: 12,
+                    },
                   ],
                 },
               ],
@@ -170,6 +215,11 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files/content") {
+          const requestedPath = requestUrl.searchParams.get("path") ?? "";
+          const deferredResponse = deferredFileContent.get(requestedPath);
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           if (init?.method === "PUT") {
             return jsonResponse({
               result: {
@@ -185,8 +235,11 @@ describe("App", () => {
             result: {
               requestId: "file-content-1",
               sessionId: "session-1",
-              path: requestUrl.searchParams.get("path"),
-              content: "export function RealContent() { return null; }",
+              path: requestedPath,
+              content:
+                requestedPath === "src/App.tsx"
+                  ? "export function RealContent() { return null; }"
+                  : `export const file = ${JSON.stringify(requestedPath)};`,
               truncated: false,
               encoding: "utf8",
             },
@@ -286,6 +339,53 @@ describe("App", () => {
     );
   });
 
+  it("keeps the currently selected file when an older file response finishes later", async () => {
+    const slowContent = deferred<Response>();
+    const fastContent = deferred<Response>();
+    deferredFileContent.set("src/Slow.tsx", slowContent);
+    deferredFileContent.set("src/Fast.tsx", fastContent);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("treeitem", { name: /Slow\.tsx/ }));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /Fast\.tsx/ }));
+
+    fastContent.resolve(
+      jsonResponse({
+        result: {
+          requestId: "fast-content",
+          sessionId: "session-1",
+          path: "src/Fast.tsx",
+          content: "export const fast = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+      }),
+    );
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/Fast.tsx",
+    });
+    expect(editor).toHaveValue("export const fast = true;");
+
+    slowContent.resolve(
+      jsonResponse({
+        result: {
+          requestId: "slow-content",
+          sessionId: "session-1",
+          path: "src/Slow.tsx",
+          content: "export const slow = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Edit src/Fast.tsx" }),
+      ).toHaveValue("export const fast = true;"),
+    );
+  });
+
   it("edits and saves real file content through the API", async () => {
     render(<App />);
 
@@ -347,6 +447,41 @@ describe("App", () => {
     expect(body.signature.length).toBeGreaterThan(16);
   });
 
+  it("keeps streamed approval hunks in payload order", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "approval:requested",
+            approval: {
+              ...patchApproval,
+              id: "approval-stream",
+              payload: {
+                hunks: [
+                  { ...patchHunk, id: "hunk-a" },
+                  { ...secondPatchHunk, id: "hunk-b" },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+    });
+
+    await screen.findByRole("button", { name: "Accept patch hunk hunk-b" });
+    const hunkActions = screen
+      .getAllByRole("button", { name: /Accept patch hunk/ })
+      .map((button) => button.getAttribute("aria-label"));
+    expect(hunkActions).toEqual([
+      "Accept patch hunk hunk-1",
+      "Accept patch hunk hunk-a",
+      "Accept patch hunk hunk-b",
+    ]);
+  });
+
   it("renders terminal:data stream output and sends terminal input to the selected session", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
@@ -382,6 +517,42 @@ describe("App", () => {
       sessionId: "session-1",
       content: "ls -la",
     });
+  });
+
+  it("shows the active fallback runner after the selected runner goes offline", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+    });
+
+    const mobileControls = within(
+      screen.getByRole("region", { name: "Mobile runner controls" }),
+    );
+    fireEvent.change(mobileControls.getByLabelText("Runner"), {
+      target: { value: "backup-runner" },
+    });
+    expect(mobileControls.getByLabelText("Runner")).toHaveValue(
+      "backup-runner",
+    );
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "runner:offline",
+            runnerId: "backup-runner",
+          }),
+        }),
+      );
+    });
+
+    expect(mobileControls.getByLabelText("Runner")).toHaveValue("real-runner");
   });
 
   it("renders interleaved user and streamed assistant turns in chronological order", async () => {

@@ -46,6 +46,28 @@ describe("conversation model", () => {
     ]);
   });
 
+  it("preserves message position when updating an existing message", () => {
+    const first: UiMessage = {
+      id: "first",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "first",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const second: UiMessage = {
+      ...first,
+      id: "second",
+      content: "second",
+      createdAt: "2026-06-05T00:00:01.000Z",
+    };
+
+    expect(upsertMessage([first, second], { ...first, content: "updated" }).map((message) => message.id)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
   it("appends streamed tokens to the latest stream assistant message", () => {
     vi.setSystemTime(new Date("2026-06-05T00:00:03.000Z"));
     const seeded = appendTokenMessage([] as UiMessage[], "session-1", "hello");
@@ -55,5 +77,29 @@ describe("conversation model", () => {
     expect(appended[0]?.content).toBe("hello world");
     expect(appended[0]?.id).toMatch(/^stream-session-1-/);
     vi.useRealTimers();
+  });
+
+  it("does not re-sort the full message list for streaming token updates", () => {
+    const newerUser: UiMessage = {
+      id: "newer-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:03.000Z",
+    };
+    const stream: UiMessage = {
+      id: "stream-session-1-existing",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "hello",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+
+    expect(appendTokenMessage([newerUser, stream], "session-1", " world").map((message) => message.id)).toEqual([
+      "newer-user",
+      "stream-session-1-existing",
+    ]);
   });
 });

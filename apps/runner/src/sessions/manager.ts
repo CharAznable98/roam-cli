@@ -211,9 +211,9 @@ export class SessionManager {
   #trackOutput(running: RunningSession, chunk: string | Buffer): void {
     const task = this.#output.handle(running, chunk);
     running.outputTasks.add(task);
-    task.finally(() => {
+    void task.finally(() => {
       running.outputTasks.delete(task);
-    });
+    }).catch(() => undefined);
   }
 
   async #finishSession(running: RunningSession, code: number | null, signal: NodeJS.Signals | null): Promise<void> {

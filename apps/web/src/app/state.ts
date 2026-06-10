@@ -242,12 +242,15 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileSaveState: "idle",
       };
     case "fileContentLoaded":
-      return {
-        ...state,
-        fileContent: action.result,
-        editorContent: action.result.content,
-        fileContentState: "ready",
-      };
+      return action.result.sessionId === state.selectedSessionId &&
+        action.result.path === state.selectedFilePath
+        ? {
+            ...state,
+            fileContent: action.result,
+            editorContent: action.result.content,
+            fileContentState: "ready",
+          }
+        : state;
     case "fileContentFailed":
       return {
         ...state,

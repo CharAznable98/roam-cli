@@ -1,5 +1,4 @@
 import type { Approval, PatchHunk } from "@roamcli/protocol";
-import { upsertBy } from "../../shared/lib/collections";
 
 export type SessionPatchHunk = PatchHunk & {
   approvalId: string;
@@ -10,11 +9,18 @@ export function mergePatchHunks(
   current: SessionPatchHunk[],
   next: SessionPatchHunk[],
 ): SessionPatchHunk[] {
-  return next.reduce(
-    (items, hunk) =>
-      upsertBy(items, hunk, (item) => `${item.approvalId}:${item.id}`),
-    current,
-  );
+  return next.reduce<SessionPatchHunk[]>((items, hunk) => {
+    const key = `${hunk.approvalId}:${hunk.id}`;
+    const existingIndex = items.findIndex(
+      (item) => `${item.approvalId}:${item.id}` === key,
+    );
+    if (existingIndex >= 0) {
+      return items.map((item, index) =>
+        index === existingIndex ? hunk : item,
+      );
+    }
+    return [...items, hunk];
+  }, current);
 }
 
 export function extractPatchHunks(approvals: Approval[]): SessionPatchHunk[] {
