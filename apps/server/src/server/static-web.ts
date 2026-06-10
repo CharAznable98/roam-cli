@@ -13,7 +13,11 @@ export async function registerWebDist(
   });
 
   app.setNotFoundHandler(async (request, reply) => {
-    if (request.url.startsWith("/v1/")) {
+    const pathname = new URL(request.url, "http://localhost").pathname;
+    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    if (request.method !== "GET" || path.extname(pathname)) {
       return reply.code(404).send({ error: "not_found" });
     }
     const indexPath = path.join(webDistDir, "index.html");

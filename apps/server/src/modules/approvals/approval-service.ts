@@ -23,6 +23,9 @@ export class ApprovalService {
     if (!approval) {
       return fail("approval_not_found");
     }
+    if (approval.status !== "pending") {
+      return fail("approval_already_resolved");
+    }
     if (
       !this.signatures.isApprovalSignatureValid(
         approval.id,
@@ -40,15 +43,19 @@ export class ApprovalService {
       resolvedAt: nowIso(),
       clientSignature: response.signature,
     };
-    this.store.upsertApproval(updated);
-    this.hub.broadcast({ type: "approval:updated", approval: updated });
-    this.hub.sendToRunner(updated.runnerId, {
+    const sent = this.hub.sendToRunner(updated.runnerId, {
       type: "resolveApproval",
       approvalId: updated.id,
       approved: response.approved,
       signedAt: response.signedAt,
       signature: response.signature,
     });
+    if (!sent) {
+      return fail("runner_offline", { message: "runner is offline" });
+    }
+
+    this.store.upsertApproval(updated);
+    this.hub.broadcast({ type: "approval:updated", approval: updated });
 
     return ok({ approval: updated });
   }

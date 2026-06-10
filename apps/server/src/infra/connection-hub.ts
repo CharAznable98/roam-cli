@@ -28,7 +28,7 @@ export class ConnectionHub {
 
   addStream(socket: WebSocket): void {
     this.streamClients.add(socket);
-    for (const runner of this.store.listOnlineRunners()) {
+    for (const { runner } of this.runners.values()) {
       sendJson(socket, { type: "runner:online", runner });
     }
     socket.once("close", () => {

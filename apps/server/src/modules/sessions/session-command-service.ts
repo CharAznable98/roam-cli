@@ -67,6 +67,8 @@ export class SessionCommandService {
         const messages: Record<string, string> = {
           approval_not_found: "approval not found",
           invalid_signature: "invalid approval signature",
+          approval_already_resolved: "approval already resolved",
+          runner_offline: "runner is offline",
         };
         this.hub.broadcast({
           type: "error",
@@ -97,13 +99,18 @@ export class SessionCommandService {
     const message = createUserMessage(session.id, input.prompt);
     this.store.createSession(session);
     this.store.addMessage(message);
-    this.hub.broadcast({ type: "session:created", session });
-    this.hub.broadcast({ type: "message:created", message });
-    this.hub.sendToRunner(session.runnerId, {
+    const sent = this.hub.sendToRunner(session.runnerId, {
       type: "startSession",
       session,
       prompt: input.prompt,
     });
+    if (!sent) {
+      this.store.deleteSession(session.id);
+      return fail("runner_offline", { message: "runner is offline" });
+    }
+
+    this.hub.broadcast({ type: "session:created", session });
+    this.hub.broadcast({ type: "message:created", message });
 
     return ok({ session });
   }

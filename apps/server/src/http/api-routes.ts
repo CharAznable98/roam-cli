@@ -217,6 +217,12 @@ function registerApprovalRoutes(
       if (result.error === "invalid_signature") {
         return reply.code(403).send({ error: "invalid_signature" });
       }
+      if (result.error === "approval_already_resolved") {
+        return reply.code(409).send({ error: "approval_already_resolved" });
+      }
+      if (result.error === "runner_offline") {
+        return reply.code(409).send({ error: "runner_offline" });
+      }
       return reply.code(400).send({ error: result.error });
     }
     return result.value;

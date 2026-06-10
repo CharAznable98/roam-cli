@@ -171,6 +171,7 @@ export class ServerStore {
     sessionId: string,
     content: string,
     createdAt: string,
+    encrypted: boolean,
   ): Message {
     const streamPrefix = `stream_${sessionId}_`;
     const latest = this.db
@@ -178,7 +179,11 @@ export class ServerStore {
         "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
       )
       .get(sessionId) as MessageRow | undefined;
-    if (latest?.role === "assistant" && latest.id.startsWith(streamPrefix)) {
+    if (
+      latest?.role === "assistant" &&
+      latest.id.startsWith(streamPrefix) &&
+      Boolean(latest.encrypted) === encrypted
+    ) {
       const id = latest.id;
       this.db
         .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
@@ -194,7 +199,7 @@ export class ServerStore {
       sessionId,
       role: "assistant",
       content,
-      encrypted: false,
+      encrypted,
       createdAt,
     };
     return this.addMessage(message);
