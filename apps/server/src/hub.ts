@@ -16,10 +16,20 @@ interface RunnerConnection {
   socket: WebSocket;
 }
 
-type RunnerRpcResult = FileTreeResult | FileContentResult | FileWriteResult | PatchApplyResult;
+type RunnerRpcResult =
+  | FileTreeResult
+  | FileContentResult
+  | FileWriteResult
+  | PatchApplyResult;
 type RunnerRpcCommand = Extract<
   RunnerCommand,
-  { type: "readFileTree" | "readFileContent" | "writeFileContent" | "applyPatch" }
+  {
+    type:
+      | "readFileTree"
+      | "readFileContent"
+      | "writeFileContent"
+      | "applyPatch";
+  }
 >;
 
 interface PendingRunnerRpc<T extends RunnerRpcResult = RunnerRpcResult> {
@@ -32,7 +42,8 @@ interface PendingRunnerRpc<T extends RunnerRpcResult = RunnerRpcResult> {
 export class RunnerRpcError extends Error {
   constructor(
     message: string,
-    readonly code: "runner_offline" | "runner_timeout",
+    readonly code: "runner_offline" | "runner_timeout" | "runner_error",
+    readonly runnerCode?: string,
   ) {
     super(message);
   }
@@ -148,6 +159,18 @@ export class ConnectionHub {
     clearTimeout(pending.timer);
     this.pendingRunnerRpcs.delete(result.requestId);
     pending.resolve(result);
+    return true;
+  }
+
+  rejectRunnerResponse(requestId: string, error: RunnerRpcError): boolean {
+    const pending = this.pendingRunnerRpcs.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    clearTimeout(pending.timer);
+    this.pendingRunnerRpcs.delete(requestId);
+    pending.reject(error);
     return true;
   }
 

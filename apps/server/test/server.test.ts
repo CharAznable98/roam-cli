@@ -431,6 +431,7 @@ describe("server", () => {
     expect(treeCommand).toMatchObject({
       type: "readFileTree",
       sessionId,
+      cwd: "/workspace",
       path: "src",
       depth: 2,
     });
@@ -467,6 +468,7 @@ describe("server", () => {
     expect(contentCommand).toMatchObject({
       type: "readFileContent",
       sessionId,
+      cwd: "/workspace",
       path: "src/index.ts",
       maxBytes: 128,
     });
@@ -505,6 +507,7 @@ describe("server", () => {
     expect(writeCommand).toMatchObject({
       type: "writeFileContent",
       sessionId,
+      cwd: "/workspace",
       path: "src/index.ts",
       content: "console.log('saved');\n",
       encoding: "utf8",
@@ -555,6 +558,29 @@ describe("server", () => {
     });
     const sessionId = created.json().session.id as string;
     await nextJson(runner);
+
+    const unavailablePromise = app.inject({
+      method: "GET",
+      url: `/v1/sessions/${sessionId}/files?path=.&depth=1`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const unavailableCommand = await nextJson(runner);
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: unavailableCommand.requestId,
+        sessionId,
+        message: "Session cwd is unavailable",
+        code: "SESSION_NOT_FOUND",
+      }),
+    );
+    const unavailable = await unavailablePromise;
+    expect(unavailable.statusCode).toBe(409);
+    expect(unavailable.json()).toEqual({
+      error: "runner_error",
+      code: "SESSION_NOT_FOUND",
+      message: "Session cwd is unavailable",
+    });
 
     const timeout = await app.inject({
       method: "GET",

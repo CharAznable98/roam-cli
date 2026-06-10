@@ -165,6 +165,7 @@ export async function createServer(
           type: "readFileTree",
           requestId: newId("file_tree"),
           sessionId: session.id,
+          cwd: session.cwd,
           path: parsed.data.path,
           depth: parsed.data.depth,
         },
@@ -197,6 +198,7 @@ export async function createServer(
           type: "readFileContent",
           requestId: newId("file_content"),
           sessionId: session.id,
+          cwd: session.cwd,
           path: parsed.data.path,
           maxBytes: parsed.data.maxBytes,
         },
@@ -229,6 +231,7 @@ export async function createServer(
           type: "writeFileContent",
           requestId: newId("file_write"),
           sessionId: session.id,
+          cwd: session.cwd,
           path: parsed.data.path,
           content: parsed.data.content,
           encoding: parsed.data.encoding,
@@ -487,8 +490,12 @@ function handleClientCommand(
     store.addMessage(message);
     hub.broadcast({ type: "message:created", message });
     const runner = store.getRunner(session.runnerId);
-    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
-    const canResumeCodexJson = capability?.parser === "codex-json" && session.agentThreadId !== undefined;
+    const capability = runner?.capabilities.find(
+      (item) => item.kind === session.agent,
+    );
+    const canResumeCodexJson =
+      capability?.parser === "codex-json" &&
+      session.agentThreadId !== undefined;
     if (session.status !== "running" && session.status !== "waiting_approval") {
       if (!hub.isRunnerOnline(session.runnerId)) {
         hub.broadcast({
@@ -507,7 +514,11 @@ function handleClientCommand(
         return;
       }
 
-      const pending = store.updateSessionStatus(session.id, "pending", nowIso());
+      const pending = store.updateSessionStatus(
+        session.id,
+        "pending",
+        nowIso(),
+      );
       if (pending) {
         hub.broadcast({ type: "session:updated", session: pending });
       }
@@ -581,7 +592,11 @@ function handleClientCommand(
     return;
   }
 
-  if (command.signal === "resume" && session.status !== "running" && session.status !== "waiting_approval") {
+  if (
+    command.signal === "resume" &&
+    session.status !== "running" &&
+    session.status !== "waiting_approval"
+  ) {
     if (!hub.isRunnerOnline(session.runnerId)) {
       hub.broadcast({
         type: "error",
@@ -591,7 +606,9 @@ function handleClientCommand(
       return;
     }
     const runner = store.getRunner(session.runnerId);
-    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
+    const capability = runner?.capabilities.find(
+      (item) => item.kind === session.agent,
+    );
     if (capability?.supportsResume === false) {
       hub.broadcast({
         type: "error",
@@ -605,7 +622,8 @@ function handleClientCommand(
     if (pending) {
       hub.broadcast({ type: "session:updated", session: pending });
     }
-    const resumeThreadId = capability?.parser === "codex-json" ? session.agentThreadId : undefined;
+    const resumeThreadId =
+      capability?.parser === "codex-json" ? session.agentThreadId : undefined;
     hub.sendToRunner(session.runnerId, {
       type: "startSession",
       session: pending ?? { ...session, status: "pending" },
@@ -735,6 +753,13 @@ function handleRunnerEvent(
     return;
   }
 
+  if (event.requestId) {
+    hub.rejectRunnerResponse(
+      event.requestId,
+      new RunnerRpcError(event.message, "runner_error", event.code),
+    );
+  }
+
   hub.broadcast({
     type: "error",
     message: event.message,
@@ -759,6 +784,14 @@ function sendRunnerRpcError(reply: FastifyReply, error: unknown) {
   if (error instanceof RunnerRpcError && error.code === "runner_timeout") {
     return reply.code(504).send({ error: "runner_timeout" });
   }
+  if (error instanceof RunnerRpcError && error.code === "runner_error") {
+    const statusCode = error.runnerCode === "SESSION_NOT_FOUND" ? 409 : 502;
+    return reply.code(statusCode).send({
+      error: "runner_error",
+      ...(error.runnerCode ? { code: error.runnerCode } : {}),
+      message: error.message,
+    });
+  }
   throw error;
 }
 
@@ -772,7 +805,13 @@ function isValidApprovalSignature(
   if (!secret) {
     return true;
   }
-  return verifyApprovalSignature(secret, approvalId, approved, signedAt, signature);
+  return verifyApprovalSignature(
+    secret,
+    approvalId,
+    approved,
+    signedAt,
+    signature,
+  );
 }
 
 function patchSignatureTarget(sessionId: string, patch: string): string {
