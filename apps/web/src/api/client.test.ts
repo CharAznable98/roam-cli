@@ -88,7 +88,7 @@ describe("createRoamApiClient", () => {
       /returned HTML instead of JSON/,
     );
     await expect(client.loadInitialState()).rejects.toThrow(
-      /Start the server on http:\/\/127\.0\.0\.1:8787/,
+      /Check the API origin, reverse proxy, or WebSocket\/API routing configuration/,
     );
   });
 
@@ -104,7 +104,7 @@ describe("createRoamApiClient", () => {
     });
 
     await expect(client.loadInitialState()).rejects.toThrow(
-      /Vite dev proxy cannot reach it/,
+      /development proxy returned an empty server error/,
     );
   });
 });

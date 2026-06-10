@@ -27,6 +27,11 @@ import type { WorkspaceTab } from "./navigation";
 export type LoadState = "loading" | "ready" | "error";
 export type ConnectionState = "open" | "closed" | "error";
 
+export interface AppError {
+  title: string;
+  message: string;
+}
+
 export interface AppState {
   activeTab: WorkspaceTab;
   runners: RunnerRegistration[];
@@ -49,7 +54,7 @@ export interface AppState {
   mobileNewSessionOpen: boolean;
   loadState: LoadState;
   connectionState: ConnectionState;
-  error: string | undefined;
+  error: AppError | undefined;
 }
 
 export const initialAppState: AppState = {
@@ -114,7 +119,7 @@ export type AppAction =
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
-  | { type: "errorChanged"; message: string | undefined };
+  | { type: "errorChanged"; title?: string; message: string | undefined };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -140,7 +145,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         loadState: "ready",
       };
     case "bootstrapFailed":
-      return { ...state, loadState: "error", error: action.message };
+      return {
+        ...state,
+        loadState: "error",
+        error: makeError("RoamCli API request failed", action.message),
+      };
     case "connectionChanged":
       return { ...state, connectionState: action.status };
     case "runnerSelected":
@@ -185,7 +194,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         patchApplyState: action.applied ? "ready" : "error",
-        error: action.applied ? state.error : action.message,
+        error: action.applied
+          ? state.error
+          : makeError("Patch was not applied", action.message),
         hunks: state.hunks.map((hunk) =>
           hunk.sessionId === action.sessionId && hunk.status === "accepted"
             ? { ...hunk, status: action.applied ? "edited" : "pending" }
@@ -196,7 +207,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         patchApplyState: "error",
-        error: action.message,
+        error: makeError("Patch request failed", action.message),
       };
     case "sessionWorkspaceLoading":
       return {
@@ -226,7 +237,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "fileTreeFailed":
       return {
         ...state,
-        error: action.message,
+        error: makeError("File tree request failed", action.message),
         fileTreeState: {
           ...state.fileTreeState,
           [action.sessionId]: "error",
@@ -255,7 +266,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         fileContentState: "error",
-        error: action.message,
+        error: makeError("File content request failed", action.message),
       };
     case "editorContentChanged":
       return { ...state, editorContent: action.content };
@@ -267,12 +278,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         fileSaveState: "error",
-        error: action.message,
+        error: makeError("File save failed", action.message),
       };
     case "serverEventReceived":
       return applyServerEvent(state, action.event);
     case "errorChanged":
-      return { ...state, error: action.message };
+      return {
+        ...state,
+        error: makeError(
+          action.title ?? "RoamCli request failed",
+          action.message,
+        ),
+      };
   }
 }
 
@@ -280,7 +297,11 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "runner:online") {
     return {
       ...state,
-      runners: upsertBy(state.runners, event.runner, (runner) => runner.runnerId),
+      runners: upsertBy(
+        state.runners,
+        event.runner,
+        (runner) => runner.runnerId,
+      ),
       selectedRunnerId: state.selectedRunnerId || event.runner.runnerId,
     };
   }
@@ -330,7 +351,10 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       },
     };
   }
-  if (event.type === "approval:requested" || event.type === "approval:updated") {
+  if (
+    event.type === "approval:requested" ||
+    event.type === "approval:updated"
+  ) {
     return upsertApprovalState(state, event.approval);
   }
   if (event.type === "artifact:created") {
@@ -377,13 +401,25 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       patchApplyState: event.result.applied ? "ready" : "error",
-      error: event.result.applied ? state.error : event.result.message,
+      error: event.result.applied
+        ? state.error
+        : makeError("Patch was not applied", event.result.message),
     };
   }
   if (event.type === "error") {
-    return { ...state, error: event.message };
+    return {
+      ...state,
+      error: makeError("Runner request failed", event.message),
+    };
   }
   return state;
+}
+
+function makeError(
+  title: string,
+  message: string | undefined,
+): AppError | undefined {
+  return message === undefined ? undefined : { title, message };
 }
 
 function removeSessionState(state: AppState, sessionId: string): AppState {
@@ -392,7 +428,9 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     sessions: state.sessions.filter((session) => session.id !== sessionId),
     selectedSessionId:
       state.selectedSessionId === sessionId ? "" : state.selectedSessionId,
-    messages: state.messages.filter((message) => message.sessionId !== sessionId),
+    messages: state.messages.filter(
+      (message) => message.sessionId !== sessionId,
+    ),
     approvals: state.approvals.filter(
       (approval) => approval.sessionId !== sessionId,
     ),

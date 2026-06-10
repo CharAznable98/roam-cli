@@ -111,8 +111,10 @@ function deferred<T>(): Deferred<T> {
 }
 
 class TestWebSocket extends EventTarget {
+  static CONNECTING = 0;
   static OPEN = 1;
-  readonly readyState = TestWebSocket.OPEN;
+  static CLOSED = 3;
+  readyState = TestWebSocket.CONNECTING;
   sent: string[] = [];
 
   constructor(readonly url: URL) {
@@ -126,6 +128,16 @@ class TestWebSocket extends EventTarget {
 
   close() {
     this.dispatchEvent(new Event("close"));
+  }
+
+  dispatchEvent(event: Event) {
+    if (event.type === "open") {
+      this.readyState = TestWebSocket.OPEN;
+    }
+    if (event.type === "close") {
+      this.readyState = TestWebSocket.CLOSED;
+    }
+    return super.dispatchEvent(event);
   }
 }
 
@@ -284,6 +296,25 @@ describe("App", () => {
     expect(
       screen.getByRole("complementary", { name: "Workspace tools" }),
     ).toBeInTheDocument();
+  });
+
+  it("does not describe disconnected stream commands as an unreachable server", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat composer" }), {
+      target: { value: "hello while disconnected" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText("Event stream is disconnected"),
+    ).toBeInTheDocument();
+    expect(within(alert).getByText(/Message was not sent/)).toBeInTheDocument();
+    expect(
+      within(alert).queryByText(/pnpm --filter @roamcli\/server dev/),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes mobile parity tabs when real state is loaded", async () => {
