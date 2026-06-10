@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { buildArtifact, sha256File } from "../artifacts.js";
+import { buildArtifact, sha256File } from "../persistence/artifacts.js";
 
 describe("artifacts", () => {
   it("computes sha256 metadata for emitted artifacts", async () => {

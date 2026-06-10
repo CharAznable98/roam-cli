@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { readFile, stat } from "node:fs/promises";
-import { readFileContent, readFileTree, writeFileContent } from "../files.js";
+import { readFileContent, readFileTree, writeFileContent } from "../workspace/files.js";
 
 describe("runner file reads", () => {
   it("returns a bounded file tree and ignores large generated directories", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { spawnAgentProcess } from "../agent-process.js";
+import { spawnAgentProcess } from "../agents/process.js";
 
 vi.mock("node-pty", () => ({
   spawn: () => {
