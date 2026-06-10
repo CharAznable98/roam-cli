@@ -13,8 +13,20 @@ describe("parseCliArgs", () => {
       token: "t1",
       profile: "strict",
       runnerId: "r1",
-      workspace: "/tmp/work"
+      workspace: "/tmp/work",
+      agentPlugins: []
     });
+  });
+
+  it("parses repeatable agent plugin flags and env plugin lists", () => {
+    expect(
+      parseCliArgs(
+        ["--server", "wss://example.test", "--agent-plugin", "@roamcli/agent-codex", "--agent-plugin=@vendor/foo-agent"],
+        {},
+      ).agentPlugins,
+    ).toEqual(["@roamcli/agent-codex", "@vendor/foo-agent"]);
+
+    expect(parseCliArgs(["--server", "wss://example.test"], { ROAMCLI_AGENT_PLUGINS: "one,two" }).agentPlugins).toEqual(["one", "two"]);
   });
 
   it("rejects unsupported profiles", () => {

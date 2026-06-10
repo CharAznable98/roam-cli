@@ -319,7 +319,7 @@ async function createSessionFromUi(page, scenario, values) {
   await page
     .locator("label.field:visible", { hasText: "Agent" })
     .locator("select")
-    .selectOption("mock");
+    .selectOption("codex");
   await page
     .locator("label.field:visible", { hasText: "Working directory" })
     .locator("input")
@@ -405,6 +405,7 @@ async function ensureRunnerOnline() {
 
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  const fakeCodex = await createFakeCodexCommand();
   startChild(
     "runner",
     "pnpm",
@@ -429,6 +430,8 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_PROFILE: "trusted",
+      ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([fakeCodex]),
     },
   );
 
@@ -436,6 +439,46 @@ async function ensureRunnerOnline() {
     const payload = await requestJson("/v1/runners");
     return payload.runners?.find((runner) => runner.runnerId === runnerId);
   }, `runner ${runnerId} to come online`);
+}
+
+async function createFakeCodexCommand() {
+  const dir = await mkdtemp(resolve(tmpdir(), "roamcli-blackbox-codex-"));
+  tempDirs.push(dir);
+  const script = resolve(dir, "fake-codex.mjs");
+  await writeFile(
+    script,
+    [
+      "let item = 0;",
+      "let buffer = '';",
+      "const prompt = process.argv.at(-1) ?? '';",
+      "const resumed = process.argv.includes('resume');",
+      "console.log(JSON.stringify({ type: 'thread.started', thread_id: resumed ? 'codex-thread-resumed' : 'codex-thread-1' }));",
+      "emit(prompt);",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  buffer += chunk;",
+      "  const lines = buffer.split(/\\r?\\n/);",
+      "  buffer = lines.pop() ?? '';",
+      "  for (const line of lines) handleLine(line);",
+      "});",
+      "process.stdin.on('end', () => process.exit(0));",
+      "function handleLine(line) {",
+      "  const text = line.trim();",
+      "  if (text.length === 0) return;",
+      "  try {",
+      "    const event = JSON.parse(text);",
+      "    if (event && (event.type === 'approvalResponse' || event.type === 'controlSignal')) return;",
+      "  } catch {}",
+      "  emit(text);",
+      "}",
+      "function emit(text) {",
+      "  item += 1;",
+      "  console.log(JSON.stringify({ type: 'item.completed', item: { id: `item_${item}`, type: 'agent_message', text } }));",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  return script;
 }
 
 async function expectText(page, text) {

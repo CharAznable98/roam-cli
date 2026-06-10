@@ -15,7 +15,7 @@
 - [x] pnpm workspace 单仓结构：`apps/server`、`apps/runner`、`apps/web`、`packages/*`。
 - [x] TypeScript 严格配置与统一构建脚本。
 - [x] 共享协议包 `@roamcli/protocol`：Runner、Session、Message、Approval、Artifact、WebSocket 事件、HTTP payload 的 Zod schema 与 TS 类型。
-- [x] Parser SDK 包 `@roamcli/parser-sdk`：parser 接口、registry、基础行解析器、mock/shell/claude/codex/gemini/aider 默认 parser。
+- [x] Parser SDK 包 `@roamcli/parser-sdk`：parser 接口、registry、基础 Codex 行解析器。
 - [x] Security 包 `@roamcli/security`：X25519 密钥协商、AES-256-GCM JSON 加密、审批签名、审计 hash chain。
 - [~] 跨端协议版本治理：已有 schema，但还没有协议版本协商、兼容策略、迁移测试。
 - [ ] 独立 npm parser 包发布形态：目前是 monorepo 内部包，尚未拆成社区可贡献的 `@roamcli/parser-*` 模板和发布流程。
@@ -63,7 +63,7 @@
 - [x] 反向 WebSocket 连接。
 - [x] 指数退避重连。
 - [x] 断线事件本地缓存与重连 drain。
-- [x] capabilities 注册：claude、codex、gemini、aider、mock、shell。
+- [x] capabilities 注册：Runner 启动时通过 agent 插件注册，默认 Codex。
 - [x] spawn 子进程。
 - [x] stdin/stdout/stderr 接管。
 - [x] ANSI 输出清理与基础流式 token 解析。

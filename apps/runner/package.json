@@ -16,6 +16,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@roamcli/agent-codex": "workspace:*",
+    "@roamcli/agent-plugin-sdk": "workspace:*",
     "@roamcli/protocol": "workspace:*",
     "@roamcli/security": "workspace:*",
     "node-pty": "^1.1.0"

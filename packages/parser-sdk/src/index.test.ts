@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parserReplayFixtures } from "./__fixtures__/agent-replay-fixtures.js";
 import {
-  MockParser,
+  LineParser,
   createDefaultRegistry,
   type AgentParser,
   type ParsedAgentEvent,
@@ -9,14 +9,14 @@ import {
 
 describe("parser sdk", () => {
   it("parses line tokens and strips ansi", () => {
-    const parser = new MockParser();
+    const parser = new LineParser("codex", "codex");
     expect(parser.push("\u001b[32mhello\u001b[0m\n")).toEqual([
       { type: "token", content: "hello\n" },
     ]);
   });
 
   it("parses approval markers", () => {
-    const parser = new MockParser();
+    const parser = new LineParser("codex", "codex");
     expect(
       parser.push(
         'ROAMCLI_APPROVAL {"kind":"applyPatch","summary":"Patch"}\n',

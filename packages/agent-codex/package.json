@@ -1,5 +1,5 @@
 {
-  "name": "@roamcli/security",
+  "name": "@roamcli/agent-codex",
   "version": "1.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@roamcli/agent-plugin-sdk": "workspace:*",
+    "@roamcli/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

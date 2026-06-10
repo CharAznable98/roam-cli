@@ -65,6 +65,8 @@ async function runSmoke() {
   if (process.env.ROAMCLI_SMOKE_SKIP_BUILD !== "1") {
     await runCommand("build:protocol", "pnpm", ["--filter", "@roamcli/protocol", "build"]);
     await runCommand("build:security", "pnpm", ["--filter", "@roamcli/security", "build"]);
+    await runCommand("build:agent-plugin-sdk", "pnpm", ["--filter", "@roamcli/agent-plugin-sdk", "build"]);
+    await runCommand("build:agent-codex", "pnpm", ["--filter", "@roamcli/agent-codex", "build"]);
   }
 
   if (baseUrl === undefined) {
@@ -145,6 +147,7 @@ async function ensureRunnerOnline() {
 
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  const fakeCodex = await createFakeCodexCommand("smoke");
   startChild(
     "runner",
     "pnpm",
@@ -169,6 +172,8 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_PROFILE: "trusted",
+      ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([fakeCodex]),
     },
   );
 
@@ -183,7 +188,7 @@ async function createSession(activeRunnerId, prompt) {
     method: "POST",
     body: JSON.stringify({
       runnerId: activeRunnerId,
-      agent: "mock",
+      agent: "codex",
       cwd: workspace,
       prompt,
       title: "Smoke E2E",
@@ -191,6 +196,23 @@ async function createSession(activeRunnerId, prompt) {
   });
   assert(payload.session?.id, "create session response did not include session.id");
   return payload.session;
+}
+
+async function createFakeCodexCommand(label) {
+  const dir = await mkdtemp(resolve(tmpdir(), `roamcli-${label}-codex-`));
+  tempDirs.push(dir);
+  const script = resolve(dir, "fake-codex.mjs");
+  await writeFile(
+    script,
+    [
+      "const prompt = process.argv.at(-1) ?? '';",
+      "const resumed = process.argv.includes('resume');",
+      "console.log(JSON.stringify({ type: 'thread.started', thread_id: resumed ? 'codex-thread-resumed' : 'codex-thread-1' }));",
+      "console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: prompt } }));",
+    ].join("\n"),
+    "utf8",
+  );
+  return script;
 }
 
 async function waitForPersistedAssistantToken(sessionId, expected) {

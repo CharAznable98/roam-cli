@@ -107,20 +107,9 @@ export class LineParser implements AgentParser {
   }
 }
 
-export class MockParser extends LineParser {
-  constructor() {
-    super("mock", "mock");
-  }
-}
-
 export function createDefaultRegistry(): ParserRegistry {
   return new InMemoryParserRegistry({
-    mock: () => new MockParser(),
-    shell: () => new LineParser("shell", "shell"),
-    claude: () => new LineParser("claude", "claude"),
     codex: () => new LineParser("codex", "codex"),
-    gemini: () => new LineParser("gemini", "gemini"),
-    aider: () => new LineParser("aider", "aider"),
   });
 }
 

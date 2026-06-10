@@ -9,6 +9,7 @@ export interface RunnerCliOptions {
   profile: RunnerProfile;
   runnerId: string;
   workspace: string;
+  agentPlugins: string[];
 }
 
 export function parseCliArgs(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): RunnerCliOptions {
@@ -37,7 +38,12 @@ export function parseCliArgs(argv: readonly string[], env: NodeJS.ProcessEnv = p
     if (inlineValue === undefined) {
       index += 1;
     }
-    values.set(rawKey, value);
+    if (rawKey === "agent-plugin") {
+      const current = values.get(rawKey);
+      values.set(rawKey, current === undefined ? value : `${current},${value}`);
+    } else {
+      values.set(rawKey, value);
+    }
   }
 
   const server = values.get("server") ?? env.ROAM_RUNNER_SERVER;
@@ -54,7 +60,8 @@ export function parseCliArgs(argv: readonly string[], env: NodeJS.ProcessEnv = p
     token: values.get("token") ?? env.ROAM_RUNNER_TOKEN,
     profile,
     runnerId: values.get("runner-id") ?? env.ROAM_RUNNER_ID ?? `${hostname()}-${randomUUID()}`,
-    workspace
+    workspace,
+    agentPlugins: parsePluginList(values.get("agent-plugin") ?? env.ROAMCLI_AGENT_PLUGINS)
   };
 }
 
@@ -87,6 +94,17 @@ function helpText(): string {
     "  --token       Bearer token used during websocket registration.",
     "  --profile     Permission profile: strict, standard, trusted. Default: standard.",
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
-    "  --workspace   Workspace root exposed to sessions. Default: cwd."
+    "  --workspace   Workspace root exposed to sessions. Default: cwd.",
+    "  --agent-plugin Agent plugin package to load. Repeatable. Default: @roamcli/agent-codex."
   ].join("\n");
+}
+
+function parsePluginList(value: string | undefined): string[] {
+  if (value === undefined || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }

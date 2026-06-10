@@ -5,7 +5,7 @@ import type { RunnerCommand, RunnerRegistration } from "@roamcli/protocol";
 import { parseCliArgs } from "./cli.js";
 import { AuditLog } from "./audit.js";
 import { EventCache } from "./cache.js";
-import { buildCapabilities } from "./capabilities.js";
+import { loadAgentRegistry } from "./capabilities.js";
 import { RunnerConnection, type WebSocketFactory } from "./connection.js";
 import { SessionManager, type SessionManagerOptions } from "./session.js";
 
@@ -18,7 +18,7 @@ export async function createRunner(
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
   const cli = parseCliArgs(argv);
-  const capabilities = buildCapabilities(cli.profile);
+  const registry = await loadAgentRegistry(cli.profile, cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined);
   const publicKey = createPublicKey();
   const registration: RunnerRegistration = {
     runnerId: cli.runnerId,
@@ -27,7 +27,7 @@ export async function createRunner(
     workspaceRoot: cli.workspace,
     profile: cli.profile,
     publicKey,
-    capabilities,
+    capabilities: registry.capabilities,
     version: "1.1.0",
   };
 
@@ -37,7 +37,8 @@ export async function createRunner(
   let connection: RunnerConnection;
   const sessionOptions: Omit<SessionManagerOptions, "approvalSecret"> = {
     workspace: cli.workspace,
-    capabilities,
+    profile: cli.profile,
+    agents: registry.agents,
     emit: (event) => connection.send(event),
   };
   const sessions = new SessionManager(

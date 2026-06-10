@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCapabilities } from "../capabilities.js";
+import { loadAgentRegistry } from "../capabilities.js";
 import { getPermissionTemplate } from "../permissions.js";
 
 describe("capabilities", () => {
@@ -7,15 +7,11 @@ describe("capabilities", () => {
     vi.unstubAllEnvs();
   });
 
-  it("registers all supported agent wrappers", () => {
-    expect(buildCapabilities("standard").map((capability) => capability.kind)).toEqual([
-      "claude",
-      "codex",
-      "gemini",
-      "aider",
-      "mock",
-      "shell"
-    ]);
+  it("registers the default codex plugin", async () => {
+    const registry = await loadAgentRegistry("standard");
+
+    expect(registry.capabilities.map((capability) => capability.kind)).toEqual(["codex"]);
+    expect(registry.agents.map((agent) => agent.definition.kind)).toEqual(["codex"]);
   });
 
   it("defines strict, standard, and trusted permission templates", () => {
@@ -24,8 +20,8 @@ describe("capabilities", () => {
     expect(getPermissionTemplate("trusted").blockedCommands).toEqual([]);
   });
 
-  it("uses non-interactive codex exec by default", () => {
-    const codex = buildCapabilities("trusted").find((capability) => capability.kind === "codex");
+  it("uses non-interactive codex exec by default", async () => {
+    const codex = (await loadAgentRegistry("trusted")).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex).toMatchObject({
       command: "codex",
@@ -38,24 +34,31 @@ describe("capabilities", () => {
         "--dangerously-bypass-approvals-and-sandbox"
       ],
       parser: "codex-json",
-      supportsResume: true
+      supportsResume: true,
+      pluginName: "@roamcli/agent-codex"
     });
   });
 
-  it("supports per-agent command and args overrides", () => {
+  it("supports per-agent command and args overrides", async () => {
     vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", "local-codex");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", "exec --sandbox \"danger full\"");
 
-    const codex = buildCapabilities("standard").find((capability) => capability.kind === "codex");
+    const codex = (await loadAgentRegistry("standard")).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex).toMatchObject({ command: "local-codex", args: ["exec", "--sandbox", "danger full"] });
   });
 
-  it("supports JSON array args overrides", () => {
-    vi.stubEnv("ROAMCLI_AGENT_MOCK_ARGS", "[\"--one\",\"two words\"]");
+  it("supports JSON array args overrides", async () => {
+    vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", "[\"--one\",\"two words\"]");
 
-    const mock = buildCapabilities("standard").find((capability) => capability.kind === "mock");
+    const codex = (await loadAgentRegistry("standard")).capabilities.find((capability) => capability.kind === "codex");
 
-    expect(mock?.args).toEqual(["--one", "two words"]);
+    expect(codex?.args).toEqual(["--one", "two words"]);
+  });
+
+  it("fails clearly when an external plugin cannot be loaded", async () => {
+    await expect(loadAgentRegistry("standard", ["@roamcli/missing-agent"])).rejects.toThrow(
+      "Failed to load agent plugin @roamcli/missing-agent",
+    );
   });
 });

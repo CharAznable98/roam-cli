@@ -5,7 +5,7 @@ This implementation follows the PRD as a monorepo with four independently testab
 ## Track A: Shared Contracts
 
 - `packages/protocol`: Zod schemas and TypeScript types for runners, sessions, messages, approvals, artifacts, WebSocket events, and HTTP payloads.
-- `packages/parser-sdk`: pluggable CLI output parser contract plus baseline parsers for mock, shell, Claude, Codex, Gemini, and Aider.
+- `packages/parser-sdk`: pluggable CLI output parser contract plus a baseline Codex line parser.
 - `packages/security`: X25519 session key derivation, AES-256-GCM payload encryption, approval signing, and append-only audit hash chain verification.
 
 ## Track B: Server
