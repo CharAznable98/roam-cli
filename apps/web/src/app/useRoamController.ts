@@ -146,7 +146,9 @@ export function useRoamController() {
     if (!sent) {
       dispatch({
         type: "errorChanged",
-        message: "The event stream is not connected; message was not sent.",
+        title: "Event stream is disconnected",
+        message:
+          "Message was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
       });
     }
   };
@@ -215,8 +217,9 @@ export function useRoamController() {
     if (!sent) {
       dispatch({
         type: "errorChanged",
+        title: "Event stream is disconnected",
         message:
-          "The event stream is not connected; control signal was not sent.",
+          "Control signal was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
       });
     }
   };
@@ -249,8 +252,9 @@ export function useRoamController() {
     if (!sent) {
       dispatch({
         type: "errorChanged",
+        title: "Event stream is disconnected",
         message:
-          "The event stream is not connected; terminal input was not sent.",
+          "Terminal input was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
       });
     }
   };
@@ -294,7 +298,9 @@ export function useRoamController() {
   };
 
   const sessionMessages = selectedSession
-    ? state.messages.filter((message) => message.sessionId === selectedSession.id)
+    ? state.messages.filter(
+        (message) => message.sessionId === selectedSession.id,
+      )
     : [];
   const sessionApprovals = selectedSession
     ? state.approvals.filter(
@@ -328,8 +334,6 @@ export function useRoamController() {
     sessionTerminalLines,
     sessionFiles,
     sessionFileTreeState,
-    serverCommand:
-      "PORT=8787 ROAMCLI_AUTH_TOKEN=dev-token ROAMCLI_DATA_DIR=.roamcli-server pnpm --filter @roamcli/server dev",
     runnerCommand: `pnpm --filter @roamcli/runner dev --server ws://127.0.0.1:8787/v1/runner --token ${token || "dev-token"}`,
     selectRunner,
     createSession,

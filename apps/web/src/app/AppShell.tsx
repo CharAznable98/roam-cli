@@ -29,7 +29,6 @@ export function AppShell({ controller }: AppShellProps) {
     sessionTerminalLines,
     sessionFiles,
     sessionFileTreeState,
-    serverCommand,
     runnerCommand,
     selectRunner,
     createSession,
@@ -83,7 +82,7 @@ export function AppShell({ controller }: AppShellProps) {
             }`}
           >
             {state.loadState === "error"
-              ? "server offline"
+              ? "API error"
               : `${state.runners.length} runners online`}
           </span>
         </div>
@@ -92,10 +91,9 @@ export function AppShell({ controller }: AppShellProps) {
       {state.error ? (
         <div className="error-banner" role="alert">
           <div>
-            <strong>RoamCli server is not reachable</strong>
-            <p>{state.error}</p>
+            <strong>{state.error.title}</strong>
+            <p>{state.error.message}</p>
           </div>
-          <pre>{serverCommand}</pre>
         </div>
       ) : null}
 

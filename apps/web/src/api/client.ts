@@ -303,8 +303,8 @@ function formatUnexpectedResponse(
   if (isHtmlResponse(contentType, body)) {
     return [
       `RoamCli API request ${path} returned HTML instead of JSON.`,
-      "This usually means the web dev server is serving the React app for /v1 requests because the RoamCli server is not reachable.",
-      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app.",
+      "This usually means /v1 requests are being routed to the web app instead of the API.",
+      "Check the API origin, reverse proxy, or WebSocket/API routing configuration.",
     ].join(" ");
   }
   return `RoamCli API request ${path} returned ${received} instead of JSON.`;
@@ -319,8 +319,8 @@ function formatHttpError(
   if (!body && response.status >= 500) {
     return [
       `RoamCli API request ${path} failed with ${status}.`,
-      "The RoamCli server may not be running or the Vite dev proxy cannot reach it.",
-      "Start the server on http://127.0.0.1:8787, or set ROAMCLI_API_ORIGIN to the server URL before starting the web app.",
+      "The API route or development proxy returned an empty server error.",
+      "Check the API origin, reverse proxy, or WebSocket/API routing configuration.",
     ].join(" ");
   }
   return `${status}${body ? `: ${body}` : ""}`;
