@@ -26,6 +26,7 @@ interface RunningSession {
   child: AgentProcess;
   parser: AgentOutputParser;
   stopRequested: boolean;
+  outputQueue: Promise<void>;
   stopTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -115,23 +116,30 @@ export class SessionManager {
         session: { ...session, cwd },
         child,
         parser: agent.definition.createParser(),
-        stopRequested: false
+        stopRequested: false,
+        outputQueue: Promise.resolve()
       };
       this.#sessions.set(session.id, running);
       this.#sessionCwds.set(session.id, cwd);
 
-      child.onData((chunk) => void this.#handleOutput(running, chunk));
+      child.onData((chunk) => {
+        running.outputQueue = running.outputQueue
+          .then(() => this.#handleOutput(running, chunk))
+          .catch((error: unknown) => this.#handleOutputError(running, error));
+      });
       child.onError((error) => {
         void this.#emit({ type: "error", sessionId: session.id, message: error.message, code: "SPAWN_ERROR" });
       });
       child.onExit(({ code, signal }) => {
-        this.#sessions.delete(session.id);
-        this.#clearPendingApprovals(running);
-        if (running.stopTimer !== undefined) {
-          clearTimeout(running.stopTimer);
-        }
-        const status = code === 0 ? "completed" : running.stopRequested || signal === "SIGTERM" || signal === "SIGINT" ? "stopped" : "failed";
-        void this.#emit({ type: "sessionStatus", sessionId: session.id, status });
+        void running.outputQueue.then(() => {
+          this.#sessions.delete(session.id);
+          this.#clearPendingApprovals(running);
+          if (running.stopTimer !== undefined) {
+            clearTimeout(running.stopTimer);
+          }
+          const status = code === 0 ? "completed" : running.stopRequested || signal === "SIGTERM" || signal === "SIGINT" ? "stopped" : "failed";
+          void this.#emit({ type: "sessionStatus", sessionId: session.id, status });
+        });
       });
 
       await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "running" });
@@ -354,6 +362,11 @@ export class SessionManager {
         await this.#emit({ type: "error", sessionId: running.session.id, message, code: "ARTIFACT_ERROR" });
       }
     }
+  }
+
+  async #handleOutputError(running: RunningSession, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    await this.#emit({ type: "error", sessionId: running.session.id, message, code: "OUTPUT_ERROR" });
   }
 
   #resolveCwd(cwd: string): string {

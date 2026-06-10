@@ -2,23 +2,17 @@ import type {
   AgentKind,
   ApiCreateSession,
   Approval,
-  Artifact,
   ClientCommand,
   FileContentResult,
   FileNode,
   FileWriteResult,
-  Message,
   PatchApplyResult,
-  PatchHunk,
   RunnerRegistration,
   ServerEvent,
   Session,
 } from "@roamcli/protocol";
-import type {
-  InitialRemoteState,
-  SessionDetailPayload,
-  UiMessage,
-} from "../types";
+import type { InitialRemoteState, SessionDetailPayload } from "./contracts";
+import { toUiMessage } from "../features/conversation/model";
 
 export interface RoamApiOptions {
   baseUrl?: string;
@@ -286,13 +280,6 @@ export function sendStreamCommand(
   }
   socket.send(JSON.stringify(command));
   return true;
-}
-
-function toUiMessage(message: Message): UiMessage {
-  if (message.role === "tool") {
-    return { ...message, variant: "tool" };
-  }
-  return message;
 }
 
 function normalizeFileContent(

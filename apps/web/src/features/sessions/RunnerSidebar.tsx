@@ -1,7 +1,7 @@
 import type { RunnerRegistration, Session } from "@roamcli/protocol";
 import { Cpu, Laptop, ShieldCheck } from "lucide-react";
 import { NewSessionForm } from "./NewSessionForm";
-import { StatusPill } from "./StatusPill";
+import { StatusPill } from "../../shared/components/StatusPill";
 
 type RunnerSidebarProps = {
   runners: RunnerRegistration[];
