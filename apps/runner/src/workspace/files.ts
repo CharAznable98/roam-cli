@@ -1,6 +1,15 @@
 import { open, readdir, realpath, stat, writeFile } from "node:fs/promises";
-import { basename, relative, resolve, sep } from "node:path";
+import { basename, resolve } from "node:path";
 import type { FileContentResult, FileNode, FileTreeResult, FileWriteResult } from "@roamcli/protocol";
+import {
+  type FileRequestScope,
+  isInside,
+  resolveExistingPath,
+  resolveWritableExistingFilePath,
+  toNodePath
+} from "./scope.js";
+
+export type { FileRequestScope } from "./scope.js";
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
 const IGNORED_DIRECTORY_NAMES = new Set([
@@ -18,11 +27,6 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   "out",
   "target"
 ]);
-
-export interface FileRequestScope {
-  workspace: string;
-  sessionCwd: string;
-}
 
 export interface ReadFileTreeOptions extends FileRequestScope {
   requestId: string;
@@ -86,7 +90,7 @@ export async function readFileContent(options: ReadFileContentOptions): Promise<
 }
 
 export async function writeFileContent(options: WriteFileContentOptions): Promise<FileWriteResult> {
-  const target = await resolveWritableFilePath(options, options.path);
+  const target = await resolveWritableExistingFilePath(options, options.path);
   await writeFile(target.path, options.content, "utf8");
   return {
     requestId: options.requestId,
@@ -151,75 +155,6 @@ async function buildNode(
 
   node.children = children;
   return node;
-}
-
-async function resolveExistingPath(scope: FileRequestScope, path: string): Promise<{ path: string; realPath: string }> {
-  const workspace = resolve(scope.workspace);
-  const sessionCwd = resolve(scope.sessionCwd);
-  const candidate = resolve(sessionCwd, path);
-  if (!isInside(workspace, sessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-  if (!isInside(sessionCwd, candidate)) {
-    throw new Error(`Path escapes session cwd: ${path}`);
-  }
-
-  const [realWorkspace, realSessionCwd, realCandidate] = await Promise.all([
-    realpath(workspace),
-    realpath(sessionCwd),
-    realpath(candidate)
-  ]);
-  if (!isInside(realWorkspace, realSessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-  if (!isInside(realSessionCwd, realCandidate)) {
-    throw new Error(`Path escapes session cwd: ${path}`);
-  }
-  return { path: candidate, realPath: realCandidate };
-}
-
-async function resolveWritableFilePath(scope: FileRequestScope, path: string): Promise<{ path: string }> {
-  const workspace = resolve(scope.workspace);
-  const sessionCwd = resolve(scope.sessionCwd);
-  const candidate = resolve(sessionCwd, path);
-  if (!isInside(workspace, sessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-  if (!isInside(sessionCwd, candidate)) {
-    throw new Error(`Path escapes session cwd: ${path}`);
-  }
-
-  const [realWorkspace, realSessionCwd] = await Promise.all([realpath(workspace), realpath(sessionCwd)]);
-  if (!isInside(realWorkspace, realSessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-
-  try {
-    const realCandidate = await realpath(candidate);
-    const candidateStat = await stat(candidate);
-    if (!candidateStat.isFile()) {
-      throw new Error(`Path is not a file: ${path}`);
-    }
-    if (!isInside(realSessionCwd, realCandidate)) {
-      throw new Error(`Path escapes session cwd: ${path}`);
-    }
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`Path does not exist: ${path}`);
-    }
-    throw error;
-  }
-
-  return { path: candidate };
-}
-
-function isInside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${sep}`);
-}
-
-function toNodePath(sessionCwd: string, path: string): string {
-  const value = relative(sessionCwd, path);
-  return value.length === 0 ? "." : value.split(sep).join("/");
 }
 
 function compareDirents(left: { name: string; isDirectory(): boolean }, right: { name: string; isDirectory(): boolean }): number {

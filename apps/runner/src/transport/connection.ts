@@ -1,7 +1,7 @@
 import type { RunnerCommand, RunnerEvent, RunnerRegistration } from "@roamcli/protocol";
 import { RunnerCommandSchema } from "@roamcli/protocol";
-import type { AuditLog } from "./audit.js";
-import type { EventCache } from "./cache.js";
+import type { AuditLog } from "../persistence/audit.js";
+import type { EventCache } from "../persistence/cache.js";
 
 export interface WebSocketLike {
   readonly readyState: number;

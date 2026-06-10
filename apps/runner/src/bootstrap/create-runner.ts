@@ -1,13 +1,12 @@
-import { generateKeyPairSync } from "node:crypto";
-import { hostname } from "node:os";
 import { join } from "node:path";
-import type { RunnerCommand, RunnerRegistration } from "@roamcli/protocol";
+import type { RunnerCommand } from "@roamcli/protocol";
+import { loadAgentRegistry } from "../agents/registry.js";
+import { AuditLog } from "../persistence/audit.js";
+import { EventCache } from "../persistence/cache.js";
+import { SessionManager, type SessionManagerOptions } from "../sessions/manager.js";
+import { RunnerConnection, type WebSocketFactory } from "../transport/connection.js";
 import { parseCliArgs } from "./cli.js";
-import { AuditLog } from "./audit.js";
-import { EventCache } from "./cache.js";
-import { loadAgentRegistry } from "./capabilities.js";
-import { RunnerConnection, type WebSocketFactory } from "./connection.js";
-import { SessionManager, type SessionManagerOptions } from "./session.js";
+import { createRunnerRegistration, runnerStateDir } from "./registration.js";
 
 export interface CreateRunnerOptions {
   createSocket?: WebSocketFactory;
@@ -19,19 +18,14 @@ export async function createRunner(
 ): Promise<RunnerConnection> {
   const cli = parseCliArgs(argv);
   const registry = await loadAgentRegistry(cli.profile, cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined);
-  const publicKey = createPublicKey();
-  const registration: RunnerRegistration = {
+  const registration = createRunnerRegistration({
     runnerId: cli.runnerId,
-    displayName: `Runner ${cli.runnerId}`,
-    hostname: hostname(),
-    workspaceRoot: cli.workspace,
+    workspace: cli.workspace,
     profile: cli.profile,
-    publicKey,
-    capabilities: registry.capabilities,
-    version: "1.1.0",
-  };
+    capabilities: registry.capabilities
+  });
 
-  const stateDir = join(cli.workspace, ".roam-runner");
+  const stateDir = runnerStateDir(cli.workspace);
   const audit = new AuditLog(join(stateDir, "audit.jsonl"));
   const cache = new EventCache(join(stateDir, "pending-events.jsonl"));
   let connection: RunnerConnection;
@@ -61,9 +55,4 @@ export async function createRunner(
       : { ...connectionOptions, createSocket: options.createSocket },
   );
   return connection;
-}
-
-function createPublicKey(): string {
-  const { publicKey } = generateKeyPairSync("ed25519");
-  return publicKey.export({ format: "pem", type: "spki" }).toString();
 }

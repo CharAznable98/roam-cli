@@ -2,8 +2,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { AuditLog } from "../audit.js";
-import { EventCache } from "../cache.js";
+import { AuditLog } from "../persistence/audit.js";
+import { EventCache } from "../persistence/cache.js";
 
 describe("audit and disconnected cache", () => {
   it("appends an auditable sha256 hash chain", async () => {

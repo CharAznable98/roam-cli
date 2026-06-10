@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyUnifiedDiff, extractUnifiedDiffPaths } from "../patch.js";
+import { applyUnifiedDiff, extractUnifiedDiffPaths } from "../workspace/patch.js";
 
 describe("runner patch operations", () => {
   it("applies a unified diff inside the session cwd", async () => {

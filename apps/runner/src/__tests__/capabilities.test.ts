@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadAgentRegistry } from "../capabilities.js";
-import { getPermissionTemplate } from "../permissions.js";
+import { getPermissionTemplate } from "../agents/permissions.js";
+import { loadAgentRegistry } from "../agents/registry.js";
 
 describe("capabilities", () => {
   afterEach(() => {

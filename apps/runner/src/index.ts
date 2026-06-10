@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createRunner } from "./runner.js";
+import { createRunner } from "./bootstrap/create-runner.js";
 
 async function main(): Promise<void> {
   const runner = await createRunner(process.argv.slice(2));

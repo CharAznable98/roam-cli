@@ -178,7 +178,7 @@ async function runUserJourney(browser, scenario) {
     await expectText(page, terminalEcho);
     pass(`${scenario.name}: terminal input`);
 
-    await assertExecApprovals(page, scenario);
+    await assertExecApprovals(page, scenario, session);
     pass(`${scenario.name}: exec approval approve/reject`);
 
     const artifactFileName = `.roamcli-artifact-${scenario.name}-${process.pid}.log`;
@@ -229,6 +229,9 @@ async function runUserJourney(browser, scenario) {
     await expectText(page, "edited");
     pass(`${scenario.name}: patch review/apply`);
 
+    await assertResumeFromUi(page, scenario, session);
+    pass(`${scenario.name}: resume completed session`);
+
     if (consoleErrors.length > 0) {
       throw new Error(
         `${scenario.name} browser console errors:\n${consoleErrors.join("\n")}`,
@@ -252,6 +255,16 @@ async function runUserJourney(browser, scenario) {
   }
 }
 
+async function assertResumeFromUi(page, scenario, session) {
+  await openTab(page, scenario, "chat");
+  await page.getByRole("button", { name: "Resume session" }).click();
+  await expectText(page, `Resume session ${session.id}`);
+  await waitFor(async () => {
+    const payload = await requestJson(`/v1/sessions/${session.id}`);
+    return payload.session?.agentThreadId === "codex-thread-resumed";
+  }, `session ${session.id} to resume with codex-thread-resumed`);
+}
+
 async function runNoRunnerJourney(browser) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 760 },
@@ -269,7 +282,7 @@ async function runNoRunnerJourney(browser) {
   }
 }
 
-async function assertExecApprovals(page, scenario) {
+async function assertExecApprovals(page, scenario, session) {
   const approveSummary = `Approve exec ${scenario.name} ${Date.now()}`;
   await sendChatMessage(
     page,
@@ -288,6 +301,7 @@ async function assertExecApprovals(page, scenario) {
     .getByRole("button", { name: "Approve" })
     .click();
   await expectText(page, "approved");
+  await waitForSessionStatus(session.id, "completed");
 
   const rejectSummary = `Reject exec ${scenario.name} ${Date.now()}`;
   await sendChatMessage(
@@ -307,6 +321,7 @@ async function assertExecApprovals(page, scenario) {
     .getByRole("button", { name: "Reject" })
     .click();
   await expectText(page, "rejected");
+  await waitForSessionStatus(session.id, "completed");
 }
 
 async function createSessionFromUi(page, scenario, values) {
@@ -514,6 +529,13 @@ async function expectFileContent(sessionId, path, expected) {
     },
     `file ${path} to equal ${JSON.stringify(expected)}`,
   );
+}
+
+async function waitForSessionStatus(sessionId, status) {
+  await waitFor(async () => {
+    const payload = await requestJson(`/v1/sessions/${sessionId}`);
+    return payload.session?.status === status;
+  }, `session ${sessionId} status ${status}`);
 }
 
 async function waitForHttp(path) {

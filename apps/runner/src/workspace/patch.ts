@@ -1,8 +1,6 @@
 import { spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
 import type { PatchApplyResult } from "@roamcli/protocol";
-import type { FileRequestScope } from "./files.js";
+import { type FileRequestScope, resolvePatchTargetPath } from "./scope.js";
 
 export interface ApplyPatchOptions extends FileRequestScope {
   requestId: string;
@@ -22,7 +20,7 @@ export async function applyUnifiedDiff(options: ApplyPatchOptions): Promise<Patc
       throw new Error("Patch contains no file paths");
     }
 
-    await Promise.all(changedFiles.map((path) => resolveWritablePath(options, path)));
+    await Promise.all(changedFiles.map((path) => resolvePatchTargetPath(options, path)));
 
     const strip = clampStrip(options.strip);
     const check = await runGitApply(options.sessionCwd, ["apply", `-p${strip}`, "--check", "--whitespace=nowarn", "-"], options.patch);
@@ -82,75 +80,6 @@ export function extractUnifiedDiffPaths(patch: string): Set<string> {
     }
   }
   return paths;
-}
-
-async function resolveWritablePath(scope: FileRequestScope, path: string): Promise<{ path: string; nodePath: string }> {
-  if (path.trim().length === 0 || path === "." || path.endsWith("/")) {
-    throw new Error(`Invalid file path: ${path}`);
-  }
-
-  const workspace = resolve(scope.workspace);
-  const sessionCwd = resolve(scope.sessionCwd);
-  const candidate = resolve(sessionCwd, path);
-  if (!isInside(workspace, sessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-  if (!isInside(sessionCwd, candidate)) {
-    throw new Error(`Path escapes session cwd: ${path}`);
-  }
-
-  const [realWorkspace, realSessionCwd] = await Promise.all([realpath(workspace), realpath(sessionCwd)]);
-  if (!isInside(realWorkspace, realSessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
-
-  try {
-    const realCandidate = await realpath(candidate);
-    if (!isInside(realSessionCwd, realCandidate)) {
-      throw new Error(`Path escapes session cwd: ${path}`);
-    }
-    const candidateStat = await stat(realCandidate);
-    if (candidateStat.isDirectory()) {
-      throw new Error(`Path is a directory: ${path}`);
-    }
-  } catch (error: unknown) {
-    if (!isMissingPathError(error)) {
-      throw error;
-    }
-    const ancestor = await nearestExistingAncestor(candidate, sessionCwd);
-    const realAncestor = await realpath(ancestor);
-    if (!isInside(realSessionCwd, realAncestor)) {
-      throw new Error(`Path escapes session cwd: ${path}`);
-    }
-  }
-
-  return {
-    path: candidate,
-    nodePath: toNodePath(sessionCwd, candidate)
-  };
-}
-
-async function nearestExistingAncestor(path: string, root: string): Promise<string> {
-  let current = dirname(path);
-  while (isInside(root, current)) {
-    try {
-      const currentStat = await stat(current);
-      if (!currentStat.isDirectory()) {
-        throw new Error(`Path parent is not a directory: ${current}`);
-      }
-      return current;
-    } catch (error: unknown) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      const next = dirname(current);
-      if (next === current) {
-        break;
-      }
-      current = next;
-    }
-  }
-  throw new Error(`Path escapes session cwd: ${path}`);
 }
 
 function runGitApply(cwd: string, args: readonly string[], input: string): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string }> {
@@ -239,19 +168,6 @@ function unquotePath(path: string): string {
     }
   }
   return path;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${sep}`);
-}
-
-function toNodePath(sessionCwd: string, path: string): string {
-  const value = relative(sessionCwd, path);
-  return value.length === 0 ? "." : value.split(sep).join("/");
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT";
 }
 
 function clampStrip(strip: number | undefined): number {
