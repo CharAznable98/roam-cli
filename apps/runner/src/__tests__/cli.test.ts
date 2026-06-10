@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCliArgs } from "../cli.js";
+import { parseCliArgs } from "../bootstrap/cli.js";
 
 describe("parseCliArgs", () => {
   it("parses required runner flags and normalizes https to wss", () => {

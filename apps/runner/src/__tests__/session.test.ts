@@ -5,8 +5,8 @@ import type { AgentOutputParser, AgentParseResult } from "@roamcli/agent-plugin-
 import type { RunnerEvent, Session } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadAgentRegistry, type LoadedAgent } from "../capabilities.js";
-import { SessionManager } from "../session.js";
+import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
+import { SessionManager } from "../sessions/manager.js";
 
 const approvalSecret = "runner-test-secret";
 

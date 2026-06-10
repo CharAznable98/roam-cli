@@ -2,13 +2,13 @@ import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import { AuditLog } from "../audit.js";
-import { EventCache } from "../cache.js";
+import { AuditLog } from "../persistence/audit.js";
+import { EventCache } from "../persistence/cache.js";
 import {
   backoffDelay,
   RunnerConnection,
   type WebSocketLike,
-} from "../connection.js";
+} from "../transport/connection.js";
 
 class FakeSocket implements WebSocketLike {
   public readyState = 0;
