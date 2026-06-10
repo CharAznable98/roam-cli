@@ -1,156 +1,99 @@
-import type { AgentKind, RunnerCapability, RunnerProfile } from "@roamcli/protocol";
+import { agentPlugin as codexPlugin } from "@roamcli/agent-codex";
+import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/agent-plugin-sdk";
+import type { RunnerCapability, RunnerProfile } from "@roamcli/protocol";
 import { getPermissionTemplate } from "./permissions.js";
 
-const AGENTS: readonly AgentKind[] = ["claude", "codex", "gemini", "aider", "mock", "shell"];
+export const DEFAULT_AGENT_PLUGINS = ["@roamcli/agent-codex"] as const;
 
-export function buildCapabilities(profile: RunnerProfile): RunnerCapability[] {
+export interface LoadedAgent {
+  definition: AgentDefinition;
+  capability: RunnerCapability;
+}
+
+export interface AgentRegistry {
+  capabilities: RunnerCapability[];
+  agents: LoadedAgent[];
+}
+
+export async function loadAgentRegistry(
+  profile: RunnerProfile,
+  pluginNames: readonly string[] | undefined = DEFAULT_AGENT_PLUGINS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<AgentRegistry> {
   getPermissionTemplate(profile);
-  return AGENTS.map((kind) => ({
-    kind,
-    label: labelFor(kind),
-    command: commandFor(kind),
-    args: argsFor(kind),
-    parser: parserFor(kind),
-    supportsResume: supportsResume(kind)
-  }));
-}
+  const context: AgentPluginContext = { profile, env };
+  const selectedPluginNames = pluginNames ?? DEFAULT_AGENT_PLUGINS;
+  const plugins = await Promise.all(selectedPluginNames.map((name) => loadAgentPlugin(name)));
+  const agents: LoadedAgent[] = [];
+  const seen = new Set<string>();
 
-function labelFor(kind: AgentKind): string {
-  switch (kind) {
-    case "claude":
-      return "Claude Code";
-    case "codex":
-      return "Codex";
-    case "gemini":
-      return "Gemini CLI";
-    case "aider":
-      return "Aider";
-    case "mock":
-      return "Mock Agent";
-    case "shell":
-      return "Shell";
-  }
-}
-
-function commandFor(kind: AgentKind): string {
-  const override = process.env[`ROAMCLI_AGENT_${kind.toUpperCase()}_COMMAND`];
-  if (override !== undefined && override.trim().length > 0) {
-    return override.trim();
-  }
-
-  switch (kind) {
-    case "claude":
-      return "claude";
-    case "codex":
-      return "codex";
-    case "gemini":
-      return "gemini";
-    case "aider":
-      return "aider";
-    case "mock":
-      return process.execPath;
-    case "shell":
-      return process.env.SHELL ?? "sh";
-  }
-}
-
-function argsFor(kind: AgentKind): string[] {
-  const override = process.env[`ROAMCLI_AGENT_${kind.toUpperCase()}_ARGS`];
-  if (override !== undefined) {
-    return parseArgs(override);
-  }
-
-  if (kind === "codex") {
-    return [
-      "exec",
-      "--json",
-      "--color",
-      "never",
-      "--skip-git-repo-check",
-      "--dangerously-bypass-approvals-and-sandbox"
-    ];
-  }
-  if (kind === "mock") {
-    return [
-      "-e",
-      [
-        "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
-        "process.stdin.resume();",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.on('data', (chunk) => process.stdout.write(chunk));"
-      ].join("")
-    ];
-  }
-  if (kind === "shell") {
-    return ["-i"];
-  }
-  return [];
-}
-
-function parserFor(kind: AgentKind): string {
-  return kind === "codex" ? "codex-json" : kind;
-}
-
-function supportsResume(kind: AgentKind): boolean {
-  return kind !== "shell";
-}
-
-function parseArgs(value: string): string[] {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return [];
-  }
-  if (trimmed.startsWith("[")) {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
-      throw new Error("Agent args override must be a JSON string array");
-    }
-    return parsed;
-  }
-
-  const args: string[] = [];
-  let current = "";
-  let quote: "'" | "\"" | undefined;
-  let escaped = false;
-  for (const char of trimmed) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote !== undefined) {
-      if (char === quote) {
-        quote = undefined;
-      } else {
-        current += char;
+  for (const plugin of plugins) {
+    for (const definition of plugin.agents(context)) {
+      if (seen.has(definition.kind)) {
+        throw new Error(`Duplicate agent plugin kind: ${definition.kind}`);
       }
-      continue;
+      seen.add(definition.kind);
+      const capability = definition.buildCapability(context);
+      agents.push({
+        definition,
+        capability: {
+          ...capability,
+          pluginName: capability.pluginName ?? plugin.name,
+          pluginVersion: capability.pluginVersion ?? plugin.version,
+        },
+      });
     }
-    if (char === "'" || char === "\"") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current.length > 0) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
   }
-  if (escaped) {
-    current += "\\";
+
+  if (agents.length === 0) {
+    throw new Error("No agent capabilities were registered by configured plugins");
   }
-  if (quote !== undefined) {
-    throw new Error("Unterminated quote in agent args override");
+
+  return {
+    agents,
+    capabilities: agents.map((agent) => agent.capability),
+  };
+}
+
+async function loadAgentPlugin(name: string): Promise<AgentPlugin> {
+  if (name === "@roamcli/agent-codex") {
+    return codexPlugin;
   }
-  if (current.length > 0) {
-    args.push(current);
+
+  let loaded: unknown;
+  try {
+    loaded = await import(name);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load agent plugin ${name}: ${message}`);
   }
-  return args;
+
+  const candidate = normalizePluginExport(loaded);
+  if (!isAgentPlugin(candidate)) {
+    throw new Error(`Agent plugin ${name} must export an AgentPlugin as default or agentPlugin`);
+  }
+  return candidate;
+}
+
+function normalizePluginExport(value: unknown): unknown {
+  if (isRecord(value) && "agentPlugin" in value) {
+    return value.agentPlugin;
+  }
+  if (isRecord(value) && "default" in value) {
+    return value.default;
+  }
+  return value;
+}
+
+function isAgentPlugin(value: unknown): value is AgentPlugin {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.version === "string" &&
+    typeof value.agents === "function"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

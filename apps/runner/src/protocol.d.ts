@@ -1,19 +1,7 @@
 declare module "@roamcli/protocol" {
-  export type AgentKind =
-    | "claude"
-    | "codex"
-    | "gemini"
-    | "aider"
-    | "shell"
-    | "mock";
+  export type AgentKind = string;
   export type RunnerProfile = "strict" | "standard" | "trusted";
-  export type SessionStatus =
-    | "pending"
-    | "running"
-    | "waiting_approval"
-    | "completed"
-    | "failed"
-    | "stopped";
+  export type SessionStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "stopped";
   export type ChatRole = "user" | "assistant" | "system" | "tool";
   export type ApprovalKind = "execCommand" | "applyPatch";
   export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
@@ -33,6 +21,8 @@ declare module "@roamcli/protocol" {
     args: string[];
     parser: string;
     supportsResume: boolean;
+    pluginName?: string;
+    pluginVersion?: string;
   }
 
   export interface RunnerRegistration {
@@ -133,70 +123,20 @@ declare module "@roamcli/protocol" {
   }
 
   export type RunnerCommand =
-    | {
-        type: "startSession";
-        session: Session;
-        prompt: string;
-        resumeThreadId?: string;
-      }
+    | { type: "startSession"; session: Session; prompt: string; resumeThreadId?: string }
     | { type: "deliverInput"; sessionId: string; content: string }
-    | {
-        type: "readFileTree";
-        requestId: string;
-        sessionId: string;
-        cwd?: string;
-        path?: string;
-        depth?: number;
-      }
-    | {
-        type: "readFileContent";
-        requestId: string;
-        sessionId: string;
-        cwd?: string;
-        path: string;
-        maxBytes?: number;
-      }
-    | {
-        type: "writeFileContent";
-        requestId: string;
-        sessionId: string;
-        cwd?: string;
-        path: string;
-        content: string;
-        encoding?: "utf8";
-      }
-    | {
-        type: "applyPatch";
-        requestId: string;
-        sessionId: string;
-        patch: string;
-        strip?: number;
-        signedAt: string;
-        signature: string;
-      }
-    | {
-        type: "resolveApproval";
-        approvalId: string;
-        approved: boolean;
-        signedAt: string;
-        signature: string;
-      }
-    | {
-        type: "controlSignal";
-        sessionId: string;
-        signal: "interrupt" | "stop" | "resume";
-      };
+    | { type: "readFileTree"; requestId: string; sessionId: string; cwd?: string; path?: string; depth?: number }
+    | { type: "readFileContent"; requestId: string; sessionId: string; cwd?: string; path: string; maxBytes?: number }
+    | { type: "writeFileContent"; requestId: string; sessionId: string; cwd?: string; path: string; content: string; encoding?: "utf8" }
+    | { type: "applyPatch"; requestId: string; sessionId: string; patch: string; strip?: number; signedAt: string; signature: string }
+    | { type: "resolveApproval"; approvalId: string; approved: boolean; signedAt: string; signature: string }
+    | { type: "controlSignal"; sessionId: string; signal: "interrupt" | "stop" | "resume" };
 
   export type RunnerEvent =
     | { type: "registered"; runner: RunnerRegistration }
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
     | { type: "sessionThread"; sessionId: string; threadId: string }
-    | {
-        type: "assistantMessage";
-        sessionId: string;
-        content: string;
-        encrypted: boolean;
-      }
+    | { type: "assistantMessage"; sessionId: string; content: string; encrypted: boolean }
     | { type: "token"; sessionId: string; content: string; encrypted: boolean }
     | { type: "terminalData"; sessionId: string; chunk: string }
     | { type: "fileTreeResult"; result: FileTreeResult }
@@ -205,13 +145,7 @@ declare module "@roamcli/protocol" {
     | { type: "patchApplyResult"; result: PatchApplyResult }
     | { type: "approvalRequested"; approval: Approval }
     | { type: "artifactCreated"; artifact: Artifact }
-    | {
-        type: "error";
-        requestId?: string;
-        sessionId?: string;
-        message: string;
-        code?: string;
-      };
+    | { type: "error"; requestId?: string; sessionId?: string; message: string; code?: string };
 
   export function nowIso(): string;
 }

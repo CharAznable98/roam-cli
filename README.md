@@ -55,7 +55,7 @@ pnpm smoke:e2e
 pnpm blackbox:browser
 ```
 
-`pnpm smoke:e2e` starts its own local Server and Runner by default, creates a real session with the `mock` agent, and verifies the MVP path without relying on mock HTTP responses.
+`pnpm smoke:e2e` starts its own local Server and Runner by default, creates a real session with the `codex` agent, and verifies the MVP path without relying on mock HTTP responses.
 
 `pnpm blackbox:browser` builds the app, starts a local Server and Runner, opens the real Web UI in Chromium, and verifies the empty-runner state plus desktop, tablet, and mobile user paths: chat, file browse/edit/save, terminal input, exec approval approve/reject, artifact display, and patch review/apply. By default it uses an isolated temporary Runner workspace; set `ROAMCLI_BLACKBOX_WORKSPACE` to point it at a specific workspace.
 
@@ -94,7 +94,7 @@ Use `dev-token` in the Web UI token field if it is not already filled.
 ## Create A Session
 
 1. Confirm the runner appears in the left sidebar.
-2. Create a new session with agent `mock` for local validation, or select `claude`, `codex`, `gemini`, `aider`, or `shell` when the corresponding CLI is installed on the runner machine.
+2. Create a new session with agent `codex`. Additional agents can be added by installing runner agent plugins.
 3. Set the working directory to a path inside the runner workspace.
 4. Use the Files panel to browse and edit UTF-8 text files.
 5. Use the Terminal panel to send input to the active session.
@@ -120,21 +120,20 @@ ROAM_RUNNER_ID
 ROAM_RUNNER_WORKSPACE
 ```
 
+Runner agent plugins are loaded at startup. By default the runner loads `@roamcli/agent-codex`.
+
+```text
+ROAMCLI_AGENT_PLUGINS
+--agent-plugin <package>
+```
+
 Agent commands and arguments can be overridden per agent kind:
 
 ```text
-ROAMCLI_AGENT_CLAUDE_COMMAND
-ROAMCLI_AGENT_CLAUDE_ARGS
 ROAMCLI_AGENT_CODEX_COMMAND
 ROAMCLI_AGENT_CODEX_ARGS
-ROAMCLI_AGENT_GEMINI_COMMAND
-ROAMCLI_AGENT_GEMINI_ARGS
-ROAMCLI_AGENT_AIDER_COMMAND
-ROAMCLI_AGENT_AIDER_ARGS
-ROAMCLI_AGENT_MOCK_COMMAND
-ROAMCLI_AGENT_MOCK_ARGS
-ROAMCLI_AGENT_SHELL_COMMAND
-ROAMCLI_AGENT_SHELL_ARGS
+ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_COMMAND
+ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_ARGS
 ```
 
 `*_ARGS` accepts either a shell-like string or a JSON string array.

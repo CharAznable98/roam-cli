@@ -6,6 +6,7 @@ import {
   FileTreeResultSchema,
   FileWriteResultSchema,
   PatchApplyResultSchema,
+  ApiCreateSessionSchema,
   RunnerCommandSchema,
   RunnerRegistrationSchema,
   ServerEventSchema,
@@ -22,12 +23,41 @@ describe("protocol schemas", () => {
       profile: "strict",
       publicKey: "0123456789abcdef",
       capabilities: [
-        { kind: "mock", label: "Mock", command: "node", parser: "mock" },
+        {
+          kind: "vendor.custom-agent",
+          label: "Custom",
+          command: "custom-agent",
+          parser: "custom-json",
+          pluginName: "@vendor/custom-agent",
+          pluginVersion: "1.0.0",
+        },
       ],
       version: "1.0.0",
     });
 
     expect(runner.capabilities[0]?.supportsResume).toBe(false);
+    expect(runner.capabilities[0]?.kind).toBe("vendor.custom-agent");
+    expect(runner.capabilities[0]?.pluginName).toBe("@vendor/custom-agent");
+  });
+
+  it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {
+    expect(
+      ApiCreateSessionSchema.parse({
+        runnerId: "runner-local",
+        agent: "vendor.custom-agent",
+        cwd: "/workspace",
+        prompt: "run",
+      }).agent,
+    ).toBe("vendor.custom-agent");
+
+    expect(() =>
+      ApiCreateSessionSchema.parse({
+        runnerId: "runner-local",
+        agent: "",
+        cwd: "/workspace",
+        prompt: "run",
+      }),
+    ).toThrow();
   });
 
   it("validates event discriminators", () => {
@@ -38,7 +68,7 @@ describe("protocol schemas", () => {
           id: "s1",
           title: "Task",
           runnerId: "r1",
-          agent: "mock",
+          agent: "codex",
           status: "running",
           cwd: "/tmp",
           createdAt: nowIso(),

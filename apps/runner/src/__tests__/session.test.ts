@@ -1,23 +1,27 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentOutputParser, AgentParseResult } from "@roamcli/agent-plugin-sdk";
 import type { RunnerEvent, Session } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
-import { describe, expect, it, vi } from "vitest";
-import { buildCapabilities } from "../capabilities.js";
-import { codexJsonArgs, SessionManager } from "../session.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadAgentRegistry, type LoadedAgent } from "../capabilities.js";
+import { SessionManager } from "../session.js";
 
 const approvalSecret = "runner-test-secret";
 
 describe("SessionManager", () => {
-  it("runs the mock agent through the process adapter and accepts interactive input", async () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("runs the codex plugin through the process adapter and extracts codex json output", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-"));
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       approvalSecret,
       emit: (event) => {
         events.push(event);
@@ -25,65 +29,31 @@ describe("SessionManager", () => {
     });
 
     await manager.start(makeSession(workspace), "hello");
-    await vi.waitFor(() => {
-      expect(
-        events.some(
-          (event) => event.type === "token" && event.content.includes("hello"),
-        ),
-      ).toBe(true);
-    });
 
-    manager.deliverInput("s1", "again");
     await vi.waitFor(() => {
-      expect(
-        events.some(
-          (event) => event.type === "token" && event.content.includes("again"),
-        ),
-      ).toBe(true);
-    });
-
-    manager.control("s1", "stop");
-    await vi.waitFor(() => {
-      expect(events).toContainEqual({
-        type: "sessionStatus",
-        sessionId: "s1",
-        status: "stopped",
-      });
+      expect(events).toContainEqual({ type: "sessionThread", sessionId: "s1", threadId: "codex-thread-1" });
+      expect(events.some((event) => event.type === "token" && event.content.includes("codex answer: hello"))).toBe(true);
+      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
     });
   });
 
-  it("handles file tree and content commands scoped to a started session cwd", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-files-"),
-    );
+  it("handles file tree and content commands scoped to a started codex session cwd", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-files-"));
     await mkdir(join(workspace, "src"), { recursive: true });
     await writeFile(join(workspace, "src", "main.ts"), "console.log('ok');");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       emit: (event) => {
         events.push(event);
       },
     });
 
     await manager.start(makeSession(workspace), "ready");
-    await manager.handle({
-      type: "readFileTree",
-      requestId: "tree1",
-      sessionId: "s1",
-      path: ".",
-      depth: 1,
-    });
-    await manager.handle({
-      type: "readFileContent",
-      requestId: "content1",
-      sessionId: "s1",
-      path: "src/main.ts",
-      maxBytes: 7,
-    });
+    await manager.handle({ type: "readFileTree", requestId: "tree1", sessionId: "s1", path: ".", depth: 1 });
+    await manager.handle({ type: "readFileContent", requestId: "content1", sessionId: "s1", path: "src/main.ts", maxBytes: 7 });
     await manager.handle({
       type: "writeFileContent",
       requestId: "write1",
@@ -91,15 +61,11 @@ describe("SessionManager", () => {
       path: "src/main.ts",
       content: "console.log('saved');",
     });
-    manager.control("s1", "stop");
 
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "fileTreeResult",
-        result: expect.objectContaining({
-          requestId: "tree1",
-          sessionId: "s1",
-        }),
+        result: expect.objectContaining({ requestId: "tree1", sessionId: "s1" }),
       }),
     );
     expect(events).toContainEqual({
@@ -123,58 +89,52 @@ describe("SessionManager", () => {
         encoding: "utf8",
       },
     });
-    await expect(
-      readFile(join(workspace, "src", "main.ts"), "utf8"),
-    ).resolves.toBe("console.log('saved');");
+    await expect(readFile(join(workspace, "src", "main.ts"), "utf8")).resolves.toBe("console.log('saved');");
   });
 
-  it("uses cwd hints for file commands against rehydrated sessions", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-missing-files-"),
-    );
+  it("recovers file command cwd from the command payload when the session is not cached", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-cwd-"));
     await mkdir(join(workspace, "src"), { recursive: true });
     await writeFile(join(workspace, "src", "main.ts"), "console.log('ok');");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       emit: (event) => {
         events.push(event);
       },
     });
 
     await manager.handle({
-      type: "readFileTree",
-      requestId: "tree1",
-      sessionId: "rehydrated",
-      cwd: ".",
-      path: ".",
-      depth: 1,
+      type: "readFileContent",
+      requestId: "content1",
+      sessionId: "s1",
+      cwd: workspace,
+      path: "src/main.ts",
+      maxBytes: 7,
     });
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "fileTreeResult",
-        result: expect.objectContaining({
-          requestId: "tree1",
-          sessionId: "rehydrated",
-        }),
-      }),
-    );
+    expect(events).toContainEqual({
+      type: "fileContentResult",
+      result: {
+        requestId: "content1",
+        sessionId: "s1",
+        path: "src/main.ts",
+        content: "console",
+        truncated: true,
+        encoding: "utf8",
+      },
+    });
   });
 
   it("returns request-scoped errors for file commands without cwd context", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-missing-files-"),
-    );
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-missing-cwd-"));
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       emit: (event) => {
         events.push(event);
       },
@@ -197,34 +157,22 @@ describe("SessionManager", () => {
     });
   });
 
-  it("resolves emitted artifact paths inside the started session cwd", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-artifact-"),
-    );
+  it("resolves plugin-emitted artifact paths inside the started codex session cwd", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-artifact-"));
     const sessionCwd = join(workspace, "task");
     await mkdir(sessionCwd, { recursive: true });
     await writeFile(join(sessionCwd, "result.log"), "artifact output", "utf8");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: [artifactCodexAgent()],
       emit: (event) => {
         events.push(event);
       },
     });
 
     await manager.start(makeSession(sessionCwd), "ready");
-    manager.deliverInput(
-      "s1",
-      `ROAMCLI_ARTIFACT: ${JSON.stringify({
-        type: "artifact",
-        path: "result.log",
-        kind: "log",
-        mimeType: "text/plain",
-      })}`,
-    );
 
     await vi.waitFor(() => {
       expect(events).toContainEqual(
@@ -239,50 +187,50 @@ describe("SessionManager", () => {
         }),
       );
     });
-    expect(
-      events.some(
-        (event) => event.type === "error" && event.code === "ARTIFACT_ERROR",
-      ),
-    ).toBe(false);
-    manager.control("s1", "stop");
+    expect(events.some((event) => event.type === "error" && event.code === "ARTIFACT_ERROR")).toBe(false);
   });
 
-  it("builds codex json resume args with the stored thread id and prompt argument", () => {
-    expect(
-      codexJsonArgs(
-        [
-          "exec",
-          "--json",
-          "--color",
-          "never",
-          "--skip-git-repo-check",
-          "--dangerously-bypass-approvals-and-sandbox",
-        ],
-        "next prompt",
-        "thread-1",
-      ),
-    ).toEqual([
-      "exec",
-      "resume",
-      "--json",
-      "--skip-git-repo-check",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "thread-1",
-      "next prompt",
-    ]);
+  it("does not mark an exited one-shot codex process running when a stale approval is resolved", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-stale-approval-"));
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [approvalCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(makeSession(workspace), "approval please");
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.type === "approvalRequested")).toBe(true);
+      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    });
+    const approval = events.find((event) => event.type === "approvalRequested");
+    if (approval?.type !== "approvalRequested") {
+      throw new Error("approval was not emitted");
+    }
+
+    manager.resolveApproval(approval.approval.id, true, "2026-06-05T00:00:00.000Z", "signature");
+
+    const statusEvents = events.filter((event) => event.type === "sessionStatus");
+    expect(statusEvents.at(-1)).toEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    expect(statusEvents.slice(2)).not.toContainEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "running",
+    });
   });
 
   it("handles patch commands with structured results", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-patch-"),
-    );
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-"));
     await writeFile(join(workspace, "README.md"), "old\n");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       emit: (event) => {
         events.push(event);
       },
@@ -299,7 +247,6 @@ describe("SessionManager", () => {
       "",
     ].join("\n");
     await manager.handle(signedPatchCommand(patch));
-    manager.control("s1", "stop");
 
     expect(events).toContainEqual({
       type: "patchApplyResult",
@@ -312,22 +259,17 @@ describe("SessionManager", () => {
         rejected: [],
       },
     });
-    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
-      "new\n",
-    );
+    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe("new\n");
   });
 
   it("rejects patch commands whose forwarded signature does not match the patch body", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-patch-signature-"),
-    );
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-signature-"));
     await writeFile(join(workspace, "README.md"), "old\n");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
-      capabilities: buildCapabilities("standard").filter(
-        (capability) => capability.kind === "mock",
-      ),
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
       approvalSecret,
       emit: (event) => {
         events.push(event);
@@ -344,10 +286,7 @@ describe("SessionManager", () => {
       "",
     ].join("\n");
     await manager.start(makeSession(workspace), "ready");
-    await manager.handle(
-      signedPatchCommand(patch, `${patch}\n# tampered-target`),
-    );
-    manager.control("s1", "stop");
+    await manager.handle(signedPatchCommand(patch, `${patch}\n# tampered-target`));
 
     expect(events).toContainEqual({
       type: "patchApplyResult",
@@ -360,18 +299,128 @@ describe("SessionManager", () => {
         rejected: ["Patch signature is invalid"],
       },
     });
-    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
-      "old\n",
-    );
+    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe("old\n");
   });
 });
+
+async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
+  const script = join(workspace, "fake-codex.mjs");
+  await writeFile(
+    script,
+    [
+      "const prompt = process.argv.at(-1) ?? '';",
+      "const resumed = process.argv.includes('resume');",
+      "console.log(JSON.stringify({ type: 'thread.started', thread_id: resumed ? 'codex-thread-resumed' : 'codex-thread-1' }));",
+      "console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: `codex answer: ${prompt}` } }));",
+    ].join("\n"),
+  );
+  vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", process.execPath);
+  vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", JSON.stringify([script]));
+  return (await loadAgentRegistry("standard")).agents;
+}
+
+function artifactCodexAgent(): LoadedAgent {
+  let emitted = false;
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-artifact",
+    supportsResume: true,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      buildLaunch() {
+        return {
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('artifact-ready\\n')"],
+          preferPty: false,
+          requirePty: false,
+          promptDelivery: "argument",
+        };
+      },
+      createParser(): AgentOutputParser {
+        return {
+          feed(): AgentParseResult {
+            if (emitted) {
+              return { text: "", approvals: [], artifacts: [] };
+            }
+            emitted = true;
+            return {
+              text: "",
+              approvals: [],
+              artifacts: [{ path: "result.log", kind: "log", mimeType: "text/plain" }],
+            };
+          },
+        };
+      },
+    },
+  };
+}
+
+function approvalCodexAgent(): LoadedAgent {
+  let emitted = false;
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-approval",
+    supportsResume: true,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      buildLaunch() {
+        return {
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('approval-ready\\n')"],
+          preferPty: false,
+          requirePty: false,
+          promptDelivery: "argument",
+        };
+      },
+      createParser(): AgentOutputParser {
+        return {
+          feed(): AgentParseResult {
+            if (emitted) {
+              return { text: "", approvals: [], artifacts: [] };
+            }
+            emitted = true;
+            return {
+              text: "",
+              approvals: [{ kind: "execCommand", summary: "Approve stale command", payload: { command: "echo ok" } }],
+              artifacts: [],
+            };
+          },
+        };
+      },
+    },
+  };
+}
 
 function makeSession(workspace: string): Session {
   return {
     id: "s1",
     title: "Session",
     runnerId: "r1",
-    agent: "mock",
+    agent: "codex",
     status: "pending",
     cwd: workspace,
     createdAt: "2026-06-05T00:00:00.000Z",
@@ -387,11 +436,6 @@ function signedPatchCommand(patch: string, signedPatch = patch) {
     sessionId: "s1",
     patch,
     signedAt,
-    signature: signApproval(
-      approvalSecret,
-      `patch:s1:${hashPayload(signedPatch)}`,
-      true,
-      signedAt,
-    ),
+    signature: signApproval(approvalSecret, `patch:s1:${hashPayload(signedPatch)}`, true, signedAt),
   };
 }

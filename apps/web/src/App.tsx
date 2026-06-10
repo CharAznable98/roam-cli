@@ -75,6 +75,7 @@ export function App() {
   const [patchApplyState, setPatchApplyState] = useState<AsyncState>("idle");
   const [selectedRunnerId, setSelectedRunnerId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [mobileNewSessionOpen, setMobileNewSessionOpen] = useState(false);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -227,6 +228,7 @@ export function App() {
         upsertSession(session);
         setSelectedSessionId(session.id);
         setActiveTab("chat");
+        setMobileNewSessionOpen(false);
       })
       .catch((createError: unknown) =>
         setError(
@@ -657,7 +659,10 @@ export function App() {
                 ))}
               </select>
             </label>
-            <details>
+            <details
+              open={mobileNewSessionOpen}
+              onToggle={(event) => setMobileNewSessionOpen(event.currentTarget.open)}
+            >
               <summary>New session</summary>
               <NewSessionForm
                 key={selectedRunner.runnerId}

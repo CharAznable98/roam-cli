@@ -12,7 +12,7 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
   const [cwd, setCwd] = useState(runner.workspaceRoot);
   const [prompt, setPrompt] = useState("");
   const agentOptions = useMemo(() => runner.capabilities.map((capability) => capability.kind), [runner.capabilities]);
-  const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "mock");
+  const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

@@ -70,7 +70,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "implement server",
         title: "Server work",
@@ -270,7 +270,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "start once",
       },
@@ -414,7 +414,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "inspect files",
       },
@@ -551,7 +551,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "inspect files",
       },
@@ -615,7 +615,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "needs approval",
       },
@@ -697,7 +697,7 @@ describe("server", () => {
       id: "session-delete",
       title: "Delete me",
       runnerId: "runner-1",
-      agent: "mock",
+      agent: "codex",
       status: "running",
       cwd: "/workspace",
       createdAt: now,
@@ -774,7 +774,7 @@ describe("server", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: {
         runnerId: "runner-1",
-        agent: "mock",
+        agent: "codex",
         cwd: "/workspace",
         prompt: "apply patch",
       },
@@ -861,11 +861,11 @@ describe("server", () => {
 function runnerRegistration(
   options: {
     supportsResume?: boolean;
-    agent?: "mock" | "codex";
+    agent?: string;
     parser?: string;
   } = {},
 ): RunnerRegistration {
-  const agent = options.agent ?? "mock";
+  const agent = options.agent ?? "codex";
   return {
     runnerId: "runner-1",
     displayName: "Test Runner",
@@ -877,7 +877,7 @@ function runnerRegistration(
     capabilities: [
       {
         kind: agent,
-        label: agent === "codex" ? "Codex" : "Mock",
+        label: agent === "codex" ? "Codex" : agent,
         command: agent,
         args: [],
         parser: options.parser ?? agent,

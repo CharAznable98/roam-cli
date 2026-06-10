@@ -55,7 +55,7 @@ pnpm smoke:e2e
 pnpm blackbox:browser
 ```
 
-`pnpm smoke:e2e` 默认会启动自己的本地 Server 和 Runner，使用 `mock` agent 创建真实 session，并验证 MVP 主路径，不依赖 mock HTTP 响应。
+`pnpm smoke:e2e` 默认会启动自己的本地 Server 和 Runner，使用 `codex` agent 创建真实 session，并验证 MVP 主路径，不依赖 mock HTTP 响应。
 
 `pnpm blackbox:browser` 会构建应用、启动本地 Server 和 Runner、在 Chromium 中打开真实 Web UI，并验证空 Runner 状态以及桌面/平板/移动端用户路径：聊天、文件浏览/编辑/保存、终端输入、exec 审批通过/拒绝、artifact 展示、patch review/apply。默认使用隔离的临时 Runner 工作区；可以设置 `ROAMCLI_BLACKBOX_WORKSPACE` 指向指定工作区。
 
@@ -94,7 +94,7 @@ http://127.0.0.1:8787
 ## 创建 Session
 
 1. 确认左侧边栏中能看到 Runner。
-2. 本地验证可选择 `mock` agent；如果 Runner 机器上安装了对应 CLI，也可以选择 `claude`、`codex`、`gemini`、`aider` 或 `shell`。
+2. 创建新 session 时选择 `codex` agent。其他 agent 后续可通过安装 Runner agent 插件接入。
 3. 将工作目录设置为 Runner workspace 内部的路径。
 4. 使用 Files 面板浏览和编辑 UTF-8 文本文件。
 5. 使用 Terminal 面板向当前 session 发送输入。
@@ -120,21 +120,20 @@ ROAM_RUNNER_ID
 ROAM_RUNNER_WORKSPACE
 ```
 
+Runner 会在启动时加载 agent 插件。默认加载 `@roamcli/agent-codex`。
+
+```text
+ROAMCLI_AGENT_PLUGINS
+--agent-plugin <package>
+```
+
 每类 agent 的命令和参数可通过环境变量覆盖：
 
 ```text
-ROAMCLI_AGENT_CLAUDE_COMMAND
-ROAMCLI_AGENT_CLAUDE_ARGS
 ROAMCLI_AGENT_CODEX_COMMAND
 ROAMCLI_AGENT_CODEX_ARGS
-ROAMCLI_AGENT_GEMINI_COMMAND
-ROAMCLI_AGENT_GEMINI_ARGS
-ROAMCLI_AGENT_AIDER_COMMAND
-ROAMCLI_AGENT_AIDER_ARGS
-ROAMCLI_AGENT_MOCK_COMMAND
-ROAMCLI_AGENT_MOCK_ARGS
-ROAMCLI_AGENT_SHELL_COMMAND
-ROAMCLI_AGENT_SHELL_ARGS
+ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_COMMAND
+ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_ARGS
 ```
 
 `*_ARGS` 支持类 shell 字符串，也支持 JSON 字符串数组。

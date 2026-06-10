@@ -96,6 +96,10 @@ export async function createServer(
     if (!hub.isRunnerOnline(parsed.data.runnerId)) {
       return reply.code(409).send({ error: "runner_offline" });
     }
+    const runner = store.getRunner(parsed.data.runnerId);
+    if (!runnerSupportsAgent(runner, parsed.data.agent)) {
+      return reply.code(400).send({ error: "unsupported_agent" });
+    }
 
     const session = createSessionRecord(parsed.data);
     store.createSession(session);
@@ -462,6 +466,15 @@ function handleClientCommand(
       });
       return;
     }
+    const runner = store.getRunner(command.runnerId);
+    if (!runnerSupportsAgent(runner, command.agent)) {
+      hub.broadcast({
+        type: "error",
+        message: `Unsupported agent: ${command.agent}`,
+        code: "unsupported_agent",
+      });
+      return;
+    }
     const session = createSessionRecord(command);
     const message = createUserMessage(session.id, command.prompt);
     store.createSession(session);
@@ -490,12 +503,8 @@ function handleClientCommand(
     store.addMessage(message);
     hub.broadcast({ type: "message:created", message });
     const runner = store.getRunner(session.runnerId);
-    const capability = runner?.capabilities.find(
-      (item) => item.kind === session.agent,
-    );
-    const canResumeCodexJson =
-      capability?.parser === "codex-json" &&
-      session.agentThreadId !== undefined;
+    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
+    const canResume = capability?.supportsResume === true;
     if (session.status !== "running" && session.status !== "waiting_approval") {
       if (!hub.isRunnerOnline(session.runnerId)) {
         hub.broadcast({
@@ -505,7 +514,7 @@ function handleClientCommand(
         });
         return;
       }
-      if (!canResumeCodexJson) {
+      if (!canResume) {
         hub.broadcast({
           type: "error",
           message: `${session.agent} session is not running`,
@@ -514,11 +523,7 @@ function handleClientCommand(
         return;
       }
 
-      const pending = store.updateSessionStatus(
-        session.id,
-        "pending",
-        nowIso(),
-      );
+      const pending = store.updateSessionStatus(session.id, "pending", nowIso());
       if (pending) {
         hub.broadcast({ type: "session:updated", session: pending });
       }
@@ -526,7 +531,7 @@ function handleClientCommand(
         type: "startSession",
         session: pending ?? { ...session, status: "pending" },
         prompt: command.content,
-        resumeThreadId: session.agentThreadId,
+        ...(session.agentThreadId ? { resumeThreadId: session.agentThreadId } : {}),
       });
       return;
     }
@@ -592,11 +597,7 @@ function handleClientCommand(
     return;
   }
 
-  if (
-    command.signal === "resume" &&
-    session.status !== "running" &&
-    session.status !== "waiting_approval"
-  ) {
+  if (command.signal === "resume" && session.status !== "running" && session.status !== "waiting_approval") {
     if (!hub.isRunnerOnline(session.runnerId)) {
       hub.broadcast({
         type: "error",
@@ -606,9 +607,7 @@ function handleClientCommand(
       return;
     }
     const runner = store.getRunner(session.runnerId);
-    const capability = runner?.capabilities.find(
-      (item) => item.kind === session.agent,
-    );
+    const capability = runner?.capabilities.find((item) => item.kind === session.agent);
     if (capability?.supportsResume === false) {
       hub.broadcast({
         type: "error",
@@ -622,13 +621,11 @@ function handleClientCommand(
     if (pending) {
       hub.broadcast({ type: "session:updated", session: pending });
     }
-    const resumeThreadId =
-      capability?.parser === "codex-json" ? session.agentThreadId : undefined;
     hub.sendToRunner(session.runnerId, {
       type: "startSession",
       session: pending ?? { ...session, status: "pending" },
       prompt: `Resume session ${session.id}`,
-      ...(resumeThreadId ? { resumeThreadId } : {}),
+      ...(session.agentThreadId ? { resumeThreadId: session.agentThreadId } : {}),
     });
     return;
   }
@@ -638,6 +635,10 @@ function handleClientCommand(
     sessionId: session.id,
     signal: command.signal,
   });
+}
+
+function runnerSupportsAgent(runner: RunnerRegistration | undefined, agent: string): boolean {
+  return runner?.capabilities.some((capability) => capability.kind === agent) === true;
 }
 
 function handleRunnerEvent(
@@ -805,13 +806,7 @@ function isValidApprovalSignature(
   if (!secret) {
     return true;
   }
-  return verifyApprovalSignature(
-    secret,
-    approvalId,
-    approved,
-    signedAt,
-    signature,
-  );
+  return verifyApprovalSignature(secret, approvalId, approved, signedAt, signature);
 }
 
 function patchSignatureTarget(sessionId: string, patch: string): string {
