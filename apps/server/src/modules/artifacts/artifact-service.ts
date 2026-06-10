@@ -25,7 +25,11 @@ export class ArtifactService {
     try {
       this.store.addArtifact(artifact);
     } catch (error) {
-      this.artifacts.deleteArtifact(artifact);
+      try {
+        this.artifacts.deleteArtifact(artifact);
+      } catch {
+        // Best-effort cleanup; preserve original persistence error.
+      }
       throw error;
     }
     this.hub.broadcast({ type: "artifact:created", artifact });
