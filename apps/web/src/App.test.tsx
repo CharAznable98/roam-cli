@@ -42,12 +42,32 @@ const backupRunner = {
   hostname: "backup.local",
 };
 
+const project = {
+  id: "project-1",
+  name: "Real Project",
+  runnerId: "real-runner",
+  directory: "/workspace",
+  createdAt: "2026-06-05T00:00:00.000Z",
+  updatedAt: "2026-06-05T00:00:00.000Z",
+  lastActiveAt: "2026-06-05T00:00:00.000Z",
+};
+
+const backupProject = {
+  ...project,
+  id: "project-backup",
+  name: "Backup Project",
+  runnerId: "backup-runner",
+};
+
 const session = {
   id: "session-1",
   title: "Real session",
+  projectId: "project-1",
   runnerId: "real-runner",
   agent: "codex",
   status: "running",
+  executionMode: "direct",
+  executionFolder: "/workspace",
   cwd: "/workspace",
   createdAt: "2026-06-05T00:00:00.000Z",
   updatedAt: "2026-06-05T00:00:00.000Z",
@@ -167,6 +187,9 @@ describe("App", () => {
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [runner] });
         }
+        if (requestUrl.pathname === "/v1/projects") {
+          return jsonResponse({ projects: [project] });
+        }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({ sessions: [session] });
         }
@@ -277,7 +300,8 @@ describe("App", () => {
   it("renders real remote state from the API", async () => {
     render(<App />);
 
-    expect(await screen.findAllByText("Real Runner")).toHaveLength(2);
+    expect(await screen.findAllByText("Real Project")).toHaveLength(2);
+    expect(screen.getByText("Real Runner")).toBeInTheDocument();
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getAllByText("执行中").length).toBeGreaterThan(0);
@@ -289,7 +313,7 @@ describe("App", () => {
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("complementary", { name: "Runners and sessions" }),
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("region", { name: "Conversation" }),
@@ -386,7 +410,7 @@ describe("App", () => {
 
   it("exposes mobile parity tabs when real state is loaded", async () => {
     render(<App />);
-    await screen.findAllByText("Real Runner");
+    await screen.findAllByText("Real Project");
     const mobileTabs = within(
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     );
@@ -617,7 +641,7 @@ describe("App", () => {
     });
   });
 
-  it("shows the active fallback runner after the selected runner goes offline", async () => {
+  it("keeps the selected project stable when its runner goes offline", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -627,16 +651,24 @@ describe("App", () => {
           data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
         }),
       );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
     });
 
     const mobileControls = within(
-      screen.getByRole("region", { name: "Mobile runner controls" }),
+      screen.getByRole("region", { name: "Mobile project controls" }),
     );
-    fireEvent.change(mobileControls.getByLabelText("Runner"), {
-      target: { value: "backup-runner" },
+    fireEvent.change(mobileControls.getByLabelText("Project"), {
+      target: { value: "project-backup" },
     });
-    expect(mobileControls.getByLabelText("Runner")).toHaveValue(
-      "backup-runner",
+    expect(mobileControls.getByLabelText("Project")).toHaveValue(
+      "project-backup",
     );
 
     act(() => {
@@ -650,7 +682,9 @@ describe("App", () => {
       );
     });
 
-    expect(mobileControls.getByLabelText("Runner")).toHaveValue("real-runner");
+    expect(mobileControls.getByLabelText("Project")).toHaveValue(
+      "project-backup",
+    );
   });
 
   it("renders interleaved user and streamed assistant turns in chronological order", async () => {
@@ -788,7 +822,7 @@ describe("App", () => {
       expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
     );
     expect(
-      screen.getByText("Create a session on the selected runner."),
+      screen.getByText("Create a session in the selected project."),
     ).toBeInTheDocument();
     const deleteCall = fetchCalls.find(
       (call) =>

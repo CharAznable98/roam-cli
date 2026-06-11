@@ -152,11 +152,11 @@ describe("SessionCommandService", () => {
       new ApprovalSignatureVerifier(undefined),
     );
     const service = new SessionCommandService(store, hub, approvals);
+    store.createProject(projectRecord());
 
     const offline = service.createSession({
-      runnerId: "runner-1",
+      projectId: "project-1",
       agent: "codex",
-      cwd: "/workspace",
       prompt: "hello",
     });
     expect(offline).toMatchObject({ ok: false, error: "runner_offline" });
@@ -164,9 +164,8 @@ describe("SessionCommandService", () => {
     const runnerMessages: RunnerCommand[] = [];
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const unsupported = service.createSession({
-      runnerId: "runner-1",
+      projectId: "project-1",
       agent: "gemini",
-      cwd: "/workspace",
       prompt: "hello",
     });
     expect(unsupported).toMatchObject({
@@ -175,9 +174,8 @@ describe("SessionCommandService", () => {
     });
 
     const created = service.createSession({
-      runnerId: "runner-1",
+      projectId: "project-1",
       agent: "codex",
-      cwd: "/workspace",
       prompt: "hello",
     });
     expect(created.ok).toBe(true);
@@ -202,17 +200,59 @@ describe("SessionCommandService", () => {
       new ApprovalSignatureVerifier(undefined),
     );
     const service = new SessionCommandService(store, hub, approvals);
+    store.createProject(projectRecord());
     hub.registerRunner(runnerRegistration(), fakeSocket<RunnerCommand>([], 3));
 
     const result = service.createSession({
-      runnerId: "runner-1",
+      projectId: "project-1",
       agent: "codex",
-      cwd: "/workspace",
       prompt: "hello",
     });
 
     expect(result).toMatchObject({ ok: false, error: "runner_offline" });
     expect(store.listSessions()).toEqual([]);
+  });
+
+  it("creates managed worktree sessions under the owning project directory", () => {
+    const hub = new ConnectionHub(store);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(store, hub, approvals);
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const result = service.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "hello",
+      executionMode: "managed_worktree",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("managed worktree session was not created");
+    }
+    expect(result.value.session).toMatchObject({
+      projectId: "project-1",
+      runnerId: "runner-1",
+      executionMode: "managed_worktree",
+      cwd: "/workspace",
+    });
+    expect(result.value.session.executionFolder).toBe(
+      `/workspace/.roamcli-worktrees/${result.value.session.id}`,
+    );
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "startSession",
+      session: {
+        id: result.value.session.id,
+        cwd: "/workspace",
+        executionFolder: result.value.session.executionFolder,
+      },
+    });
   });
 });
 
@@ -237,6 +277,7 @@ describe("ApprovalService", () => {
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
+    store.createProject(projectRecord());
     const session = store.createSession(sessionRecord());
     store.upsertApproval({
       id: "approval-1",
@@ -374,6 +415,7 @@ describe("RunnerEventService", () => {
     const service = new RunnerEventService(store, hub, rpc);
     const runnerMessages: RunnerCommand[] = [];
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    store.createProject(projectRecord());
     const session = store.createSession(sessionRecord());
 
     service.handle({
@@ -547,14 +589,30 @@ function runnerRegistration(): RunnerRegistration {
   };
 }
 
+function projectRecord() {
+  const now = new Date().toISOString();
+  return {
+    id: "project-1",
+    name: "Project",
+    runnerId: "runner-1",
+    directory: "/workspace",
+    createdAt: now,
+    updatedAt: now,
+    lastActiveAt: now,
+  };
+}
+
 function sessionRecord(): Session {
   const now = new Date().toISOString();
   return {
     id: "session-1",
     title: "Session",
+    projectId: "project-1",
     runnerId: "runner-1",
     agent: "codex",
     status: "running",
+    executionMode: "direct",
+    executionFolder: "/workspace",
     cwd: "/workspace",
     createdAt: now,
     updatedAt: now,

@@ -33,14 +33,33 @@ export type RunnerRegistration = z.infer<typeof RunnerRegistrationSchema>;
 export const SessionStatusSchema = z.enum(["pending", "running", "waiting_approval", "completed", "failed", "stopped"]);
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
+export const ProjectSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  runnerId: z.string().min(1),
+  directory: z.string().min(1),
+  archivedAt: z.string().datetime().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  lastActiveAt: z.string().datetime()
+});
+export type Project = z.infer<typeof ProjectSchema>;
+
+export const ExecutionModeSchema = z.enum(["direct", "managed_worktree", "remote"]);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
+
 export const SessionSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
+  projectId: z.string().min(1),
   runnerId: z.string().min(1),
   agent: AgentKindSchema,
   status: SessionStatusSchema,
+  executionMode: ExecutionModeSchema.default("direct"),
+  executionFolder: z.string().min(1),
   cwd: z.string().min(1),
   agentThreadId: z.string().min(1).optional(),
+  archivedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -196,9 +215,9 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("createSession"),
     requestId: z.string().min(1),
-    runnerId: z.string().min(1),
+    projectId: z.string().min(1),
     agent: AgentKindSchema,
-    cwd: z.string().min(1),
+    executionMode: ExecutionModeSchema.default("direct"),
     prompt: z.string().min(1)
   }),
   z.object({
@@ -275,6 +294,8 @@ export type RunnerCommand = z.infer<typeof RunnerCommandSchema>;
 export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("runner:online"), runner: RunnerRegistrationSchema }),
   z.object({ type: z.literal("runner:offline"), runnerId: z.string().min(1) }),
+  z.object({ type: z.literal("project:created"), project: ProjectSchema }),
+  z.object({ type: z.literal("project:updated"), project: ProjectSchema }),
   z.object({ type: z.literal("session:created"), session: SessionSchema }),
   z.object({ type: z.literal("session:updated"), session: SessionSchema }),
   z.object({ type: z.literal("session:deleted"), sessionId: z.string().min(1) }),
@@ -316,13 +337,26 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
 export type RunnerEvent = z.infer<typeof RunnerEventSchema>;
 
 export const ApiCreateSessionSchema = z.object({
-  runnerId: z.string().min(1),
+  projectId: z.string().min(1),
   agent: AgentKindSchema,
-  cwd: z.string().min(1),
+  executionMode: ExecutionModeSchema.default("direct"),
   prompt: z.string().min(1),
   title: z.string().min(1).optional()
 });
 export type ApiCreateSession = z.infer<typeof ApiCreateSessionSchema>;
+
+export const ApiCreateProjectSchema = z.object({
+  name: z.string().min(1),
+  runnerId: z.string().min(1),
+  directory: z.string().min(1)
+});
+export type ApiCreateProject = z.infer<typeof ApiCreateProjectSchema>;
+
+export const ApiUpdateProjectSchema = z.object({
+  name: z.string().min(1).optional(),
+  directory: z.string().min(1).optional()
+});
+export type ApiUpdateProject = z.infer<typeof ApiUpdateProjectSchema>;
 
 export const ApiApprovalResponseSchema = z.object({
   approved: z.boolean(),

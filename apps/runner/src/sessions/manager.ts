@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { mkdir, stat } from "node:fs/promises";
+import { dirname } from "node:path";
+import { promisify } from "node:util";
 import type { AgentKind, RunnerCommand, RunnerProfile, Session } from "@roamcli/protocol";
 import { spawnAgentProcess, type AgentProcess } from "../agents/process.js";
 import type { LoadedAgent } from "../agents/registry.js";
@@ -6,6 +10,8 @@ import { resolveWorkspaceChild } from "../workspace/scope.js";
 import { SessionOutputHandler } from "./output.js";
 import type { RunnerEventSink, RunningSession } from "./types.js";
 import { WorkspaceCommandHandler } from "./workspace-commands.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface SessionManagerOptions {
   workspace: string;
@@ -88,7 +94,7 @@ export class SessionManager {
 
     let cwd: string;
     try {
-      cwd = this.#resolveCwd(session.cwd);
+      cwd = await this.#prepareExecutionFolder(session);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       await this.#emit({ type: "error", sessionId: session.id, message, code: "INVALID_CWD" });
@@ -229,6 +235,30 @@ export class SessionManager {
 
   #resolveCwd(cwd: string): string {
     return resolveWorkspaceChild(this.#workspace, cwd);
+  }
+
+  async #prepareExecutionFolder(session: Session): Promise<string> {
+    if (session.executionMode !== "managed_worktree") {
+      return this.#resolveCwd(session.executionFolder ?? session.cwd);
+    }
+
+    const projectCwd = this.#resolveCwd(session.cwd);
+    const worktreeCwd = this.#resolveCwd(session.executionFolder);
+    const existing = await stat(worktreeCwd).catch((error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    });
+    if (existing !== undefined) {
+      if (!existing.isDirectory()) {
+        throw new Error(`Managed worktree path is not a directory: ${session.executionFolder}`);
+      }
+      return worktreeCwd;
+    }
+    await mkdir(dirname(worktreeCwd), { recursive: true });
+    await execFileAsync("git", ["-C", projectCwd, "worktree", "add", "--detach", worktreeCwd, "HEAD"]);
+    return worktreeCwd;
   }
 
   #getSessionCwd(sessionId: string, cwd: string | undefined): string | undefined {

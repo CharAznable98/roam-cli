@@ -3,7 +3,6 @@ import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import { FilePanel } from "../features/files/FilePanel";
 import { PushSettings } from "../features/pwa/PushSettings";
-import { NewSessionForm } from "../features/sessions/NewSessionForm";
 import { RunnerSidebar } from "../features/sessions/RunnerSidebar";
 import { TerminalPanel } from "../features/terminal/TerminalPanel";
 import { BottomTabs } from "./BottomTabs";
@@ -21,6 +20,7 @@ export function AppShell({ controller }: AppShellProps) {
     setToken,
     dispatch,
     selectedRunner,
+    selectedProject,
     runnerSessions,
     selectedSession,
     sessionMessages,
@@ -30,7 +30,8 @@ export function AppShell({ controller }: AppShellProps) {
     sessionFiles,
     sessionFileTreeState,
     runnerCommand,
-    selectRunner,
+    selectProject,
+    createProject,
     createSession,
     sendMessage,
     resolveApproval,
@@ -47,7 +48,6 @@ export function AppShell({ controller }: AppShellProps) {
     dispatch({ type: "activeTabChanged", tab });
   const setSelectedSessionId = (sessionId: string) =>
     dispatch({ type: "sessionSelected", sessionId });
-  const activeRunnerId = selectedRunner?.runnerId ?? "";
 
   return (
     <div className={`app-shell active-${state.activeTab}`}>
@@ -114,26 +114,26 @@ export function AppShell({ controller }: AppShellProps) {
         </div>
       ) : null}
 
-      {selectedRunner ? (
+      {state.loadState === "ready" && state.runners.length > 0 ? (
         <>
           <section
             className="mobile-controls"
-            aria-label="Mobile runner controls"
+            aria-label="Mobile project controls"
           >
             <label>
-              <span>Runner</span>
+              <span>Project</span>
               <select
-                value={activeRunnerId}
-                onChange={(event) => selectRunner(event.target.value)}
+                value={selectedProject?.id ?? ""}
+                onChange={(event) => selectProject(event.target.value)}
               >
-                {state.runners.map((runner) => (
-                  <option key={runner.runnerId} value={runner.runnerId}>
-                    {runner.displayName}
+                {state.projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
                   </option>
                 ))}
               </select>
             </label>
-            <label>
+            {selectedProject ? <label>
               <span>Session</span>
               <select
                 value={selectedSession?.id ?? ""}
@@ -145,23 +145,7 @@ export function AppShell({ controller }: AppShellProps) {
                   </option>
                 ))}
               </select>
-            </label>
-            <details
-              open={state.mobileNewSessionOpen}
-              onToggle={(event) =>
-                dispatch({
-                  type: "mobileNewSessionOpenChanged",
-                  open: event.currentTarget.open,
-                })
-              }
-            >
-              <summary>New session</summary>
-              <NewSessionForm
-                key={selectedRunner.runnerId}
-                runner={selectedRunner}
-                onCreate={createSession}
-              />
-            </details>
+            </label> : null}
           </section>
 
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
@@ -177,12 +161,14 @@ export function AppShell({ controller }: AppShellProps) {
 
           <main className="app-grid">
             <RunnerSidebar
+              projects={state.projects}
               runners={state.runners}
-              selectedRunnerId={activeRunnerId}
+              selectedProjectId={selectedProject?.id ?? ""}
               sessions={state.sessions}
               selectedSessionId={selectedSession?.id ?? ""}
-              onSelectRunner={selectRunner}
+              onSelectProject={selectProject}
               onSelectSession={setSelectedSessionId}
+              onCreateProject={createProject}
               onCreateSession={createSession}
             />
             {selectedSession ? (
@@ -196,7 +182,7 @@ export function AppShell({ controller }: AppShellProps) {
             ) : (
               <section className="chat-column" aria-label="Conversation">
                 <div className="empty-state compact">
-                  Create a session on the selected runner.
+                  {selectedProject ? "Create a session in the selected project." : "Create a project to start a session."}
                 </div>
               </section>
             )}

@@ -1,16 +1,17 @@
-import type { AgentKind, RunnerCapability, RunnerRegistration } from "@roamcli/protocol";
+import type { AgentKind, ExecutionMode, Project, RunnerCapability, RunnerRegistration } from "@roamcli/protocol";
 import { Send } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
 type NewSessionFormProps = {
+  project: Project;
   runner: RunnerRegistration;
-  onCreate: (values: { title: string; cwd: string; prompt: string; agent: AgentKind }) => void;
+  onCreate: (values: { title: string; prompt: string; agent: AgentKind; executionMode: ExecutionMode }) => void;
 };
 
-export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
+export function NewSessionForm({ project, runner, onCreate }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
-  const [cwd, setCwd] = useState(runner.workspaceRoot);
   const [prompt, setPrompt] = useState("");
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
   const agentOptions = useMemo(() => runner.capabilities.map((capability: RunnerCapability) => capability.kind), [runner.capabilities]);
   const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
 
@@ -23,9 +24,9 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
 
     onCreate({
       title: title.trim() || cleanPrompt.slice(0, 48),
-      cwd: cwd.trim() || runner.workspaceRoot,
       prompt: cleanPrompt,
-      agent
+      agent,
+      executionMode
     });
     setTitle("");
     setPrompt("");
@@ -54,8 +55,15 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
         </select>
       </label>
       <label className="field">
-        <span>Working directory</span>
-        <input value={cwd} onChange={(event) => setCwd(event.target.value)} />
+        <span>Project directory</span>
+        <input value={project.directory} readOnly />
+      </label>
+      <label className="field">
+        <span>Execution</span>
+        <select value={executionMode} onChange={(event) => setExecutionMode(event.target.value as ExecutionMode)}>
+          <option value="direct">Direct</option>
+          <option value="managed_worktree">Managed worktree</option>
+        </select>
       </label>
       <label className="field">
         <span>Prompt</span>

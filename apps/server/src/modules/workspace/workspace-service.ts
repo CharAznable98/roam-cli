@@ -45,7 +45,7 @@ export class WorkspaceService {
         type: "readFileTree",
         requestId: newId("file_tree"),
         sessionId: session.id,
-        cwd: session.cwd,
+        cwd: session.executionFolder,
         path: query.path,
         depth: query.depth,
       },
@@ -69,7 +69,7 @@ export class WorkspaceService {
         type: "readFileContent",
         requestId: newId("file_content"),
         sessionId: session.id,
-        cwd: session.cwd,
+        cwd: session.executionFolder,
         path: query.path,
         maxBytes: query.maxBytes,
       },
@@ -93,7 +93,7 @@ export class WorkspaceService {
         type: "writeFileContent",
         requestId: newId("file_write"),
         sessionId: session.id,
-        cwd: session.cwd,
+        cwd: session.executionFolder,
         path: body.path,
         content: body.content,
         encoding: body.encoding,
@@ -136,5 +136,20 @@ export class WorkspaceService {
       this.runnerRpcTimeoutMs,
     );
     return ok({ result });
+  }
+
+  async validateRunnerDirectory(runnerId: string, directory: string): Promise<void> {
+    await this.rpc.requestRunner<FileTreeResult>(
+      runnerId,
+      {
+        type: "readFileTree",
+        requestId: newId("project_directory"),
+        sessionId: `project-directory-${newId("check")}`,
+        cwd: directory,
+        path: ".",
+        depth: 0,
+      },
+      this.runnerRpcTimeoutMs,
+    );
   }
 }

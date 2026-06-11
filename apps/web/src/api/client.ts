@@ -1,12 +1,16 @@
 import type {
   AgentKind,
+  ApiCreateProject,
   ApiCreateSession,
+  ApiUpdateProject,
   Approval,
   ClientCommand,
+  ExecutionMode,
   FileContentResult,
   FileNode,
   FileWriteResult,
   PatchApplyResult,
+  Project,
   RunnerRegistration,
   ServerEvent,
   Session,
@@ -23,10 +27,14 @@ export interface RoamApiOptions {
 
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
+  createProject(input: ApiCreateProject): Promise<Project>;
+  updateProject(projectId: string, input: ApiUpdateProject): Promise<Project>;
+  archiveProject(projectId: string): Promise<Project>;
+  restoreProject(projectId: string): Promise<Project>;
   createSession(input: {
-    runnerId: string;
+    projectId: string;
     agent: AgentKind;
-    cwd: string;
+    executionMode?: ExecutionMode;
     prompt: string;
     title?: string;
   }): Promise<Session>;
@@ -59,6 +67,14 @@ interface SessionsResponse {
 
 interface RunnersResponse {
   runners: RunnerRegistration[];
+}
+
+interface ProjectsResponse {
+  projects: Project[];
+}
+
+interface ProjectResponse {
+  project: Project;
 }
 
 interface CreateSessionResponse {
@@ -131,8 +147,9 @@ export function createRoamApiClient(
 
   return {
     async loadInitialState() {
-      const [{ runners }, { sessions }] = await Promise.all([
+      const [{ runners }, { projects }, { sessions }] = await Promise.all([
         request<RunnersResponse>("/v1/runners"),
+        request<ProjectsResponse>("/v1/projects"),
         request<SessionsResponse>("/v1/sessions"),
       ]);
       const details = await Promise.all(
@@ -141,6 +158,7 @@ export function createRoamApiClient(
         ),
       );
       return {
+        projects,
         runners,
         sessions,
         messages: details.flatMap((detail) => detail.messages.map(toUiMessage)),
@@ -149,19 +167,54 @@ export function createRoamApiClient(
       };
     },
 
+    async createProject(input) {
+      const { project } = await request<ProjectResponse>("/v1/projects", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return project;
+    },
+
+    async updateProject(projectId, input) {
+      const { project } = await request<ProjectResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        },
+      );
+      return project;
+    },
+
+    async archiveProject(projectId) {
+      const { project } = await request<ProjectResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/archive`,
+        { method: "POST" },
+      );
+      return project;
+    },
+
+    async restoreProject(projectId) {
+      const { project } = await request<ProjectResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/restore`,
+        { method: "POST" },
+      );
+      return project;
+    },
+
     async createSession(input) {
       const payload: ApiCreateSession = input.title
         ? {
-            runnerId: input.runnerId,
+            projectId: input.projectId,
             agent: input.agent,
-            cwd: input.cwd,
+            executionMode: input.executionMode ?? "direct",
             prompt: input.prompt,
             title: input.title,
           }
         : {
-            runnerId: input.runnerId,
+            projectId: input.projectId,
             agent: input.agent,
-            cwd: input.cwd,
+            executionMode: input.executionMode ?? "direct",
             prompt: input.prompt,
           };
       const { session } = await request<CreateSessionResponse>("/v1/sessions", {

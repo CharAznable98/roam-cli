@@ -43,18 +43,16 @@ describe("protocol schemas", () => {
   it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {
     expect(
       ApiCreateSessionSchema.parse({
-        runnerId: "runner-local",
+        projectId: "project-1",
         agent: "vendor.custom-agent",
-        cwd: "/workspace",
         prompt: "run",
       }).agent,
     ).toBe("vendor.custom-agent");
 
     expect(() =>
       ApiCreateSessionSchema.parse({
-        runnerId: "runner-local",
+        projectId: "project-1",
         agent: "",
-        cwd: "/workspace",
         prompt: "run",
       }),
     ).toThrow();
@@ -67,9 +65,12 @@ describe("protocol schemas", () => {
         session: {
           id: "s1",
           title: "Task",
+          projectId: "project-1",
           runnerId: "r1",
           agent: "codex",
           status: "running",
+          executionMode: "direct",
+          executionFolder: "/tmp",
           cwd: "/tmp",
           createdAt: nowIso(),
           updatedAt: nowIso(),

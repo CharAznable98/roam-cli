@@ -17,6 +17,9 @@ describe("createRoamApiClient", () => {
         if (String(url).endsWith("/v1/runners")) {
           return Response.json({ runners: [] });
         }
+        if (String(url).endsWith("/v1/projects")) {
+          return Response.json({ projects: [] });
+        }
         if (String(url).endsWith("/v1/sessions")) {
           return Response.json({ sessions: [] });
         }
@@ -27,8 +30,9 @@ describe("createRoamApiClient", () => {
     await client.loadInitialState();
     await client.deleteSession("session-1");
 
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(4);
     expect(requests.map((request) => request.method)).toEqual([
+      "GET",
       "GET",
       "GET",
       "DELETE",
@@ -54,9 +58,12 @@ describe("createRoamApiClient", () => {
           session: {
             id: "session-1",
             title: "Test",
+            projectId: "project-1",
             runnerId: "runner-1",
             agent: "codex",
             status: "pending",
+            executionMode: "direct",
+            executionFolder: ".",
             cwd: ".",
             createdAt: "2026-06-10T00:00:00.000Z",
             updatedAt: "2026-06-10T00:00:00.000Z",
@@ -66,9 +73,8 @@ describe("createRoamApiClient", () => {
     });
 
     await client.createSession({
-      runnerId: "runner-1",
+      projectId: "project-1",
       agent: "codex",
-      cwd: ".",
       prompt: "hello",
     });
 

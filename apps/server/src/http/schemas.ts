@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const SessionParamsSchema = z.object({ id: z.string().min(1) });
+export const ProjectParamsSchema = z.object({ id: z.string().min(1) });
 export const ApprovalParamsSchema = z.object({ id: z.string().min(1) });
 
 export const FileTreeQuerySchema = z.object({
