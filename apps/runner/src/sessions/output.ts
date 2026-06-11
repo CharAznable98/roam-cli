@@ -25,6 +25,9 @@ export class SessionOutputHandler {
     if (parsed.threadId !== undefined) {
       await this.#emit({ type: "sessionThread", sessionId: running.session.id, threadId: parsed.threadId });
     }
+    for (const message of parsed.messages ?? []) {
+      await this.#emit({ type: "assistantMessage", sessionId: running.session.id, content: message, encrypted: false });
+    }
     if (parsed.text.length > 0) {
       await this.#emit({ type: "token", sessionId: running.session.id, content: parsed.text, encrypted: false });
     }

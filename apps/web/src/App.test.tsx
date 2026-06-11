@@ -280,6 +280,7 @@ describe("App", () => {
     expect(await screen.findAllByText("Real Runner")).toHaveLength(2);
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+    expect(screen.getAllByText("执行中").length).toBeGreaterThan(0);
     expect(screen.getByText("changes.patch")).toBeInTheDocument();
     expect(
       screen.getByText(/artifacts\/session-1\/changes.patch/),
@@ -315,6 +316,72 @@ describe("App", () => {
     expect(
       within(alert).queryByText(/pnpm --filter @roamcli\/server dev/),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders agent messages as markdown while keeping user messages literal", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-agent-markdown",
+              sessionId: "session-1",
+              role: "assistant",
+              content: [
+                "# Agent result",
+                "",
+                "- markdown item",
+                "",
+                "```ts",
+                "const answer = 42;",
+                "```",
+                "",
+                "<div>raw html stays text</div>",
+              ].join("\n"),
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-user-literal",
+              sessionId: "session-1",
+              role: "user",
+              content: "**literal user markdown**",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 2000).toISOString(),
+            },
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    expect(
+      await within(conversation).findByRole("heading", {
+        name: "Agent result",
+      }),
+    ).toBeInTheDocument();
+    expect(within(conversation).getByText("markdown item")).toBeInTheDocument();
+    expect(
+      within(conversation).getByRole("button", { name: "Copy ts code" }),
+    ).toBeInTheDocument();
+    expect(
+      within(conversation).getByText("<div>raw html stays text</div>"),
+    ).toBeInTheDocument();
+    const userArticle = within(conversation)
+      .getByText("**literal user markdown**")
+      .closest("article");
+    expect(userArticle?.querySelector("strong")).toBeNull();
   });
 
   it("exposes mobile parity tabs when real state is loaded", async () => {
@@ -661,6 +728,28 @@ describe("App", () => {
       "second question",
       "second answer",
     ]);
+  });
+
+  it("renders streamed assistant token previews as markdown", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "token",
+            sessionId: "session-1",
+            content: "**draft preview**",
+            encrypted: false,
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    const preview = await within(conversation).findByText("draft preview");
+    expect(preview.tagName.toLowerCase()).toBe("strong");
   });
 
   it("sends terminal control signals for interrupt and stop", async () => {

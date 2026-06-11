@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -17,6 +17,15 @@ const children = [];
 const tempDirs = [];
 const tempPaths = [];
 const logs = [];
+const runStartedAt = new Date();
+const artifactDir = resolve(
+  repoRoot,
+  "artifacts",
+  "blackbox-browser",
+  runStartedAt.toISOString().replace(/[:.]/g, "-"),
+);
+const reportRows = [];
+const screenshots = [];
 let baseUrl = suppliedBaseUrl?.replace(/\/$/, "");
 let workspace =
   process.env.ROAMCLI_BLACKBOX_WORKSPACE === undefined
@@ -32,9 +41,13 @@ process.on("SIGTERM", () => {
 
 try {
   await run();
+  await writeReport("passed");
   console.log("[pass] RoamCli browser blackbox completed");
+  console.log(`[pass] report: ${resolve(artifactDir, "report.md")}`);
 } catch (error) {
+  await writeReport("failed", error).catch(() => undefined);
   console.error("[fail] RoamCli browser blackbox failed");
+  console.error(`[fail] report: ${resolve(artifactDir, "report.md")}`);
   console.error(
     error instanceof Error ? (error.stack ?? error.message) : error,
   );
@@ -48,6 +61,8 @@ try {
 }
 
 async function run() {
+  await mkdir(artifactDir, { recursive: true });
+
   if (workspace === undefined) {
     workspace = await mkdtemp(resolve(tmpdir(), "roamcli-blackbox-workspace-"));
     tempDirs.push(workspace);
@@ -159,6 +174,7 @@ async function runUserJourney(browser, scenario) {
       prompt: `blackbox prompt ${scenario.name} ${Date.now()}`,
     });
     await expectText(page, `Blackbox ${scenario.name}`);
+    await captureScreenshot(page, scenario, "session-created");
 
     await assertSessionResume(page, scenario, session);
     pass(`${scenario.name}: resume completed session`);
@@ -172,7 +188,13 @@ async function runUserJourney(browser, scenario) {
       chatEcho,
       chatEcho,
     );
+    await captureScreenshot(page, scenario, "chat-round-trip");
     pass(`${scenario.name}: chat round-trip`);
+    await waitForSessionStatus(session.id, "completed");
+
+    await assertMarkdownRendering(page, scenario, session.id);
+    await captureScreenshot(page, scenario, "markdown-rendering");
+    pass(`${scenario.name}: markdown rendering`);
     await waitForSessionStatus(session.id, "completed");
 
     await openTab(page, scenario, "files");
@@ -182,6 +204,7 @@ async function runUserJourney(browser, scenario) {
     await page.getByRole("button", { name: "Save file" }).click();
     await expectFileContent(session.id, fileName, `${editedValue}\n`);
     await expectText(page, "Saved");
+    await captureScreenshot(page, scenario, "file-edit-save");
     pass(`${scenario.name}: file browse/edit/save`);
 
     await openTab(page, scenario, "terminal");
@@ -191,10 +214,12 @@ async function runUserJourney(browser, scenario) {
       .fill(terminalEcho);
     await page.getByRole("button", { name: "Send terminal input" }).click();
     await expectText(page, terminalEcho);
+    await captureScreenshot(page, scenario, "terminal-input");
     pass(`${scenario.name}: terminal input`);
 
     await waitForSessionStatus(session.id, "completed");
     await assertExecApprovals(page, scenario, session.id);
+    await captureScreenshot(page, scenario, "exec-approval");
     pass(`${scenario.name}: exec approval approve/reject`);
 
     const artifactFileName = `.roamcli-artifact-${scenario.name}-${process.pid}.log`;
@@ -217,6 +242,7 @@ async function runUserJourney(browser, scenario) {
     );
     await openTab(page, scenario, "approvals");
     await expectText(page, "text/plain");
+    await captureScreenshot(page, scenario, "artifact-display");
     pass(`${scenario.name}: artifact display`);
 
     const hunkId = `hunk-${scenario.name}-${Date.now()}`;
@@ -252,9 +278,11 @@ async function runUserJourney(browser, scenario) {
     await page.getByRole("button", { name: "Apply" }).click();
     await expectFileContent(session.id, fileName, `${patchedValue}\n`);
     await expectText(page, "edited");
+    await captureScreenshot(page, scenario, "patch-review-apply");
     pass(`${scenario.name}: patch review/apply`);
 
     await assertResumeFromUi(page, scenario, session);
+    await captureScreenshot(page, scenario, "resume-completed-session");
     pass(`${scenario.name}: resume completed session`);
 
     if (consoleErrors.length > 0) {
@@ -263,10 +291,7 @@ async function runUserJourney(browser, scenario) {
       );
     }
   } catch (error) {
-    const screenshot = resolve(
-      tmpdir(),
-      `roamcli-blackbox-${scenario.name}-${process.pid}.png`,
-    );
+    const screenshot = resolve(artifactDir, `${scenario.name}-failure.png`);
     await page
       .screenshot({ path: screenshot, fullPage: true })
       .catch(() => undefined);
@@ -302,6 +327,7 @@ async function runNoRunnerJourney(browser) {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await expectText(page, "No runners are online");
     await expectText(page, "pnpm --filter @roamcli/runner dev");
+    await captureScreenshot(page, { name: "no-runner" }, "empty-runner-state");
   } finally {
     await context.close();
   }
@@ -356,9 +382,47 @@ async function assertExecApprovals(page, scenario, sessionId) {
 async function assertSessionResume(page, scenario, session) {
   await openTab(page, scenario, "chat");
   const conversation = page.getByRole("region", { name: "Conversation" });
-  await expectText(page, "completed");
+  await expectText(page, "已结束");
   await conversation.getByRole("button", { name: "Resume session" }).click();
   await expectText(page, `Resume session ${session.id}`);
+}
+
+async function assertMarkdownRendering(page, scenario, sessionId) {
+  const heading = `Markdown browser ${scenario.name} ${Date.now()}`;
+  const markdown = [
+    `# ${heading}`,
+    "",
+    "- rendered list item",
+    "",
+    "```ts",
+    "const rendered = true;",
+    "```",
+    "",
+    "<div>raw html remains text</div>",
+  ].join("\n");
+  await sendChatMessageUntil(
+    page,
+    scenario,
+    sessionId,
+    markdown,
+    async () => {
+      const headingVisible = await page
+        .getByRole("heading", { name: heading })
+        .isVisible()
+        .catch(() => false);
+      const copyVisible = await page
+        .getByRole("button", { name: "Copy ts code" })
+        .last()
+        .isVisible()
+        .catch(() => false);
+      const rawHtmlVisible = await hasVisibleText(
+        page,
+        "<div>raw html remains text</div>",
+      );
+      return headingVisible && copyVisible && rawHtmlVisible;
+    },
+    `markdown response ${heading} to render`,
+  );
 }
 
 async function createSessionFromUi(page, scenario, values) {
@@ -764,5 +828,83 @@ function delay(ms) {
 }
 
 function pass(message) {
+  reportRows.push({ status: "PASS", message });
   console.log(`[pass] ${message}`);
+}
+
+async function captureScreenshot(page, scenario, label) {
+  await mkdir(artifactDir, { recursive: true });
+  const sequence = String(screenshots.length + 1).padStart(2, "0");
+  const name = `${sequence}-${slugify(scenario.name)}-${slugify(label)}.png`;
+  const path = resolve(artifactDir, name);
+  await page.screenshot({ path, fullPage: true });
+  screenshots.push({
+    scenario: scenario.name,
+    label,
+    relativePath: `./${name}`,
+  });
+}
+
+async function writeReport(status, error) {
+  await mkdir(artifactDir, { recursive: true });
+  const reportPath = resolve(artifactDir, "report.md");
+  const finishedAt = new Date();
+  const lines = [
+    "# RoamCli Browser Blackbox Report",
+    "",
+    `- Status: ${status}`,
+    `- Started: ${runStartedAt.toISOString()}`,
+    `- Finished: ${finishedAt.toISOString()}`,
+    `- Base URL: ${baseUrl ?? "(not initialized)"}`,
+    `- Runner ID: ${runnerId}`,
+    `- Workspace: ${workspace ?? "(not initialized)"}`,
+    "",
+    "## Assertions",
+    "",
+    "| Result | Check |",
+    "| --- | --- |",
+    ...reportRows.map(
+      (row) => `| ${row.status} | ${escapeTableCell(row.message)} |`,
+    ),
+    "",
+    "## Screenshots",
+    "",
+  ];
+
+  if (screenshots.length === 0) {
+    lines.push("No screenshots were captured.");
+  } else {
+    for (const screenshot of screenshots) {
+      lines.push(
+        `### ${screenshot.scenario}: ${screenshot.label}`,
+        "",
+        `![${screenshot.scenario} ${screenshot.label}](${screenshot.relativePath})`,
+        "",
+      );
+    }
+  }
+
+  if (error !== undefined) {
+    lines.push(
+      "## Failure",
+      "",
+      "```text",
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+      "```",
+      "",
+    );
+  }
+
+  await writeFile(reportPath, `${lines.join("\n")}\n`, "utf8");
+}
+
+function slugify(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function escapeTableCell(value) {
+  return String(value).replace(/\|/g, "\\|").replace(/\n/g, "<br>");
 }

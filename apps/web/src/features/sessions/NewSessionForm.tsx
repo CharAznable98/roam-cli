@@ -1,4 +1,4 @@
-import type { AgentKind, RunnerRegistration } from "@roamcli/protocol";
+import type { AgentKind, RunnerCapability, RunnerRegistration } from "@roamcli/protocol";
 import { Send } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
@@ -11,7 +11,7 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [cwd, setCwd] = useState(runner.workspaceRoot);
   const [prompt, setPrompt] = useState("");
-  const agentOptions = useMemo(() => runner.capabilities.map((capability) => capability.kind), [runner.capabilities]);
+  const agentOptions = useMemo(() => runner.capabilities.map((capability: RunnerCapability) => capability.kind), [runner.capabilities]);
   const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -46,7 +46,7 @@ export function NewSessionForm({ runner, onCreate }: NewSessionFormProps) {
       <label className="field">
         <span>Agent</span>
         <select value={agent} onChange={(event) => setAgent(event.target.value as AgentKind)}>
-          {agentOptions.map((option) => (
+          {agentOptions.map((option: AgentKind) => (
             <option key={option} value={option}>
               {option}
             </option>

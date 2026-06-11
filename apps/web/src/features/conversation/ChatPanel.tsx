@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import type { UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { VoiceButton } from "./VoiceButton";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 type ChatPanelProps = {
   session: Session;
@@ -108,7 +109,7 @@ function MessageBubble({ message }: { message: UiMessage }) {
       <div className="message-avatar">{isUser ? <User size={16} /> : <Bot size={16} />}</div>
       <div className="message-body">
         <div className="message-meta">{message.role}</div>
-        <p>{message.content}</p>
+        {isUser ? <p>{message.content}</p> : <MarkdownMessage content={message.content} />}
       </div>
     </article>
   );

@@ -38,7 +38,7 @@ export function PatchReview({ hunks, onResolveHunk, onApplyPatch, applyState }: 
             <span className={`hunk-status ${hunk.status}`}>{hunk.status}</span>
           </div>
           <pre>
-            {hunk.lines.map((line) => (
+            {hunk.lines.map((line: string) => (
               <code key={`${hunk.id}-${line}`}>{line}</code>
             ))}
           </pre>
