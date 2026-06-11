@@ -69,7 +69,7 @@ export function isPatchHunk(value: unknown): value is PatchHunk {
     typeof hunk.filePath === "string" &&
     typeof hunk.header === "string" &&
     Array.isArray(hunk.lines) &&
-    hunk.lines.every((line) => typeof line === "string") &&
+    hunk.lines.every((line: unknown) => typeof line === "string") &&
     (hunk.status === undefined ||
       hunk.status === "pending" ||
       hunk.status === "accepted" ||

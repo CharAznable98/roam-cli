@@ -122,8 +122,8 @@ async function runSmoke() {
     const session = await createSession(runner.runnerId, prompt);
     pass(`session created: ${session.id}`);
 
-    await waitForPersistedAssistantToken(session.id, prompt);
-    pass("assistant token persisted");
+    await waitForPersistedAssistantMessage(session.id, prompt);
+    pass("assistant message persisted");
 
     const tree = await requestJson(
       `/v1/sessions/${session.id}/files?path=.&depth=2`,
@@ -171,7 +171,7 @@ async function runSmoke() {
       }),
     );
     await terminalSeen;
-    await waitForPersistedAssistantToken(session.id, terminalInput);
+    await waitForPersistedAssistantMessage(session.id, terminalInput);
     pass("terminal input delivered and persisted");
 
     await patchApplyAssertionEntry(session.id);
@@ -269,7 +269,7 @@ async function createFakeCodexCommand(label) {
   return script;
 }
 
-async function waitForPersistedAssistantToken(sessionId, expected) {
+async function waitForPersistedAssistantMessage(sessionId, expected) {
   return waitFor(
     async () => {
       const payload = await requestJson(`/v1/sessions/${sessionId}`);
@@ -278,7 +278,7 @@ async function waitForPersistedAssistantToken(sessionId, expected) {
           message.role === "assistant" && message.content.includes(expected),
       );
     },
-    `assistant token containing ${JSON.stringify(expected)} to persist`,
+    `assistant message containing ${JSON.stringify(expected)} to persist`,
   );
 }
 

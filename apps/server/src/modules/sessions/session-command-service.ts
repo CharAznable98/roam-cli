@@ -99,6 +99,9 @@ export class SessionCommandService {
     const message = createUserMessage(session.id, input.prompt);
     this.store.createSession(session);
     this.store.addMessage(message);
+    this.hub.broadcast({ type: "session:created", session });
+    this.hub.broadcast({ type: "message:created", message });
+
     const sent = this.hub.sendToRunner(session.runnerId, {
       type: "startSession",
       session,
@@ -106,11 +109,9 @@ export class SessionCommandService {
     });
     if (!sent) {
       this.store.deleteSession(session.id);
+      this.hub.broadcast({ type: "session:deleted", sessionId: session.id });
       return fail("runner_offline", { message: "runner is offline" });
     }
-
-    this.hub.broadcast({ type: "session:created", session });
-    this.hub.broadcast({ type: "message:created", message });
 
     return ok({ session });
   }

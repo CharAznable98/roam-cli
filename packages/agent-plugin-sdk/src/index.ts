@@ -34,6 +34,7 @@ export interface ArtifactDraft {
 
 export interface AgentParseResult {
   text: string;
+  messages?: readonly string[];
   approvals: readonly ApprovalRequestDraft[];
   artifacts: readonly ArtifactDraft[];
   threadId?: string;

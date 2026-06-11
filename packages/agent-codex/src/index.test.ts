@@ -43,7 +43,7 @@ describe("codex agent plugin", () => {
     ]);
   });
 
-  it("extracts readable assistant text from codex json events", () => {
+  it("extracts complete assistant messages from codex json events", () => {
     const parser = new CodexJsonParser();
 
     const result = parser.feed(
@@ -55,7 +55,22 @@ describe("codex agent plugin", () => {
     );
 
     expect(result.threadId).toBe("codex-thread-1");
-    expect(result.text).toBe("Projects:\n- roam-cli\n");
+    expect(result.text).toBe("");
+    expect(result.messages).toEqual(["Projects:\n- roam-cli"]);
+  });
+
+  it("keeps multiple completed codex messages separated", () => {
+    const parser = new CodexJsonParser();
+
+    const result = parser.feed(
+      [
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"first\"}}",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"second\"}}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(result.messages).toEqual(["first", "second"]);
   });
 
   it("extracts approval directives from codex assistant text", () => {

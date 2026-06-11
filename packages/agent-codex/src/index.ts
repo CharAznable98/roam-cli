@@ -68,7 +68,7 @@ export class CodexJsonParser implements AgentOutputParser {
 
   feed(chunk: string | Buffer): AgentParseResult {
     this.#buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-    let text = "";
+    const messages: string[] = [];
     let threadId: string | undefined;
     const approvals: ApprovalRequestDraft[] = [];
     const artifacts: ArtifactDraft[] = [];
@@ -88,12 +88,9 @@ export class CodexJsonParser implements AgentOutputParser {
       const directives = parseTextDirectives(event.item.text);
       approvals.push(...directives.approvals);
       artifacts.push(...directives.artifacts);
-      text += event.item.text;
-      if (!text.endsWith("\n")) {
-        text += "\n";
-      }
+      messages.push(event.item.text);
     }
-    return { text, approvals, artifacts, ...(threadId ? { threadId } : {}) };
+    return { text: "", messages, approvals, artifacts, ...(threadId ? { threadId } : {}) };
   }
 
   #completeLines(): string[] {

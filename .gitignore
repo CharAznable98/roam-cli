@@ -42,6 +42,7 @@ doc/
 test-results/
 playwright-report/
 blob-report/
+artifacts/
 tmp-playwright-*.png
 *.har
 *.trace.zip

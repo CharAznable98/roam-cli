@@ -32,7 +32,7 @@ describe("SessionManager", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({ type: "sessionThread", sessionId: "s1", threadId: "codex-thread-1" });
-      expect(events.some((event) => event.type === "token" && event.content.includes("codex answer: hello"))).toBe(true);
+      expect(events.some((event) => event.type === "assistantMessage" && event.content.includes("codex answer: hello"))).toBe(true);
       expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
     });
   });
