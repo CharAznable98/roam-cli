@@ -51,4 +51,17 @@ describe("session model", () => {
     expect(getSelectedSession([session], visibleSessions, "")).toBe(session);
     expect(getProjectSessions([session], "project-1")).toEqual([session]);
   });
+
+  it("keeps selected session fallback inside the visible project scope", () => {
+    const otherSession: Session = {
+      ...session,
+      id: "session-2",
+      title: "Session Two",
+      projectId: "project-2",
+    };
+    const visibleSessions = getProjectSessions([session, otherSession], "project-1");
+
+    expect(getSelectedSession([session, otherSession], visibleSessions, "session-2")).toBe(session);
+    expect(getSelectedSession([otherSession], [], "session-2")).toBeUndefined();
+  });
 });

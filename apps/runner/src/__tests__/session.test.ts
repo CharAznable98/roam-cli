@@ -149,6 +149,44 @@ describe("SessionManager", () => {
     expect(events.some((event) => event.type === "error" && event.code === "SPAWN_ERROR")).toBe(false);
   });
 
+  it("rejects an existing managed worktree folder that is not a registered git worktree", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-invalid-worktree-"));
+    await writeFile(join(workspace, "README.md"), "hello\n", "utf8");
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "init"]);
+    const executionFolder = join(workspace, ".roamcli-worktrees", "s1");
+    await mkdir(executionFolder, { recursive: true });
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(
+      {
+        ...makeSession(workspace),
+        executionMode: "managed_worktree",
+        executionFolder,
+        cwd: workspace,
+      },
+      "managed",
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      sessionId: "s1",
+      message: `Managed worktree path is not registered for the project: ${executionFolder}`,
+      code: "INVALID_CWD",
+    });
+  });
+
   it("recovers file command cwd from the command payload when the session is not cached", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-cwd-"));
     await mkdir(join(workspace, "src"), { recursive: true });

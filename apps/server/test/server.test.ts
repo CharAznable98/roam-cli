@@ -135,6 +135,13 @@ describe("server", () => {
       updatedAt: now,
     };
     app.roam.store.createSession(session);
+    const userArchivedSession: Session = {
+      ...session,
+      id: "session-user-archive",
+      title: "User archived session",
+    };
+    app.roam.store.createSession(userArchivedSession);
+    app.roam.store.archiveSession(userArchivedSession.id, now);
 
     const archived = await app.inject({
       method: "POST",
@@ -168,6 +175,9 @@ describe("server", () => {
     expect(restored.statusCode).toBe(200);
     expect(restored.json().project.archivedAt).toBeUndefined();
     expect(app.roam.store.getSession(session.id)?.archivedAt).toBeUndefined();
+    expect(app.roam.store.getSession(userArchivedSession.id)?.archivedAt).toBe(
+      now,
+    );
   });
 
   it("returns API 404s for /v1 and asset 404s without SPA fallback", async () => {

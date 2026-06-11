@@ -37,15 +37,14 @@ export function getProjectSessions(
 }
 
 export function getSelectedSession(
-  sessions: Session[],
+  _sessions: Session[],
   visibleSessions: Session[],
   selectedSessionId: string,
 ): Session | undefined {
   return (
-    sessions.find(
+    visibleSessions.find(
       (session) => session.id === selectedSessionId && !session.archivedAt,
     ) ??
-    visibleSessions[0] ??
-    sessions.find((session) => !session.archivedAt)
+    visibleSessions[0]
   );
 }

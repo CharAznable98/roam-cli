@@ -40,6 +40,7 @@ interface SessionRow {
   cwd: string;
   agent_thread_id: string | null;
   archived_at: string | null;
+  archived_by_project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -169,9 +170,9 @@ export class ServerStore {
       .run(archivedAt, archivedAt, id);
     this.db
       .prepare(
-        "UPDATE sessions SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE project_id = ?",
+        "UPDATE sessions SET archived_at = ?, archived_by_project_id = ?, updated_at = ? WHERE project_id = ? AND archived_at IS NULL",
       )
-      .run(archivedAt, archivedAt, id);
+      .run(archivedAt, id, archivedAt, id);
     return this.getProject(id);
   }
 
@@ -183,9 +184,9 @@ export class ServerStore {
       .run(restoredAt, id);
     this.db
       .prepare(
-        "UPDATE sessions SET archived_at = NULL, updated_at = ? WHERE project_id = ?",
+        "UPDATE sessions SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ? WHERE project_id = ? AND archived_by_project_id = ?",
       )
-      .run(restoredAt, id);
+      .run(restoredAt, id, id);
     return this.getProject(id);
   }
 
@@ -247,14 +248,14 @@ export class ServerStore {
 
   archiveSession(id: string, archivedAt: string): Session | undefined {
     this.db
-      .prepare("UPDATE sessions SET archived_at = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE sessions SET archived_at = ?, archived_by_project_id = NULL, updated_at = ? WHERE id = ?")
       .run(archivedAt, archivedAt, id);
     return this.getSession(id);
   }
 
   restoreSession(id: string, restoredAt: string): Session | undefined {
     this.db
-      .prepare("UPDATE sessions SET archived_at = NULL, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE sessions SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ? WHERE id = ?")
       .run(restoredAt, id);
     return this.getSession(id);
   }
@@ -488,6 +489,7 @@ export class ServerStore {
         cwd TEXT NOT NULL,
         agent_thread_id TEXT,
         archived_at TEXT,
+        archived_by_project_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -553,6 +555,7 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "execution_folder", "TEXT");
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
+    this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
     this.discardLegacySessionsWithoutProjects();
   }
 

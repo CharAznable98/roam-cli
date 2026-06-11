@@ -1,8 +1,41 @@
-import type { ServerEvent } from "@roamcli/protocol";
+import type { Project, RunnerRegistration, ServerEvent, Session } from "@roamcli/protocol";
 import { describe, expect, it } from "vitest";
 import { appReducer, initialAppState, type AppState } from "./state";
 
 describe("app reducer", () => {
+  it("bootstraps a selected session from the selected project only", () => {
+    const projects: Project[] = [
+      makeProject("project-1"),
+      makeProject("project-2"),
+    ];
+    const sessions: Session[] = [
+      makeSession("session-2", "project-2"),
+      makeSession("session-1", "project-1"),
+    ];
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-2",
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects,
+          runners: [runner],
+          sessions,
+          messages: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-1");
+    expect(next.selectedSessionId).toBe("session-1");
+  });
+
   it("applies message and terminal server events", () => {
     const withMessage = appReducer(initialAppState, {
       type: "serverEventReceived",
@@ -114,3 +147,42 @@ describe("app reducer", () => {
     expect(next.fileContentState).toBe("loading");
   });
 });
+
+const runner: RunnerRegistration = {
+  runnerId: "runner-1",
+  displayName: "Runner One",
+  hostname: "devbox.local",
+  workspaceRoot: "/workspace",
+  profile: "trusted",
+  publicKey: "0123456789abcdef",
+  capabilities: [],
+  version: "1.1.0",
+};
+
+function makeProject(id: string): Project {
+  return {
+    id,
+    name: id,
+    runnerId: "runner-1",
+    directory: `/workspace/${id}`,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
+    lastActiveAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function makeSession(id: string, projectId: string): Session {
+  return {
+    id,
+    title: id,
+    projectId,
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "completed",
+    executionMode: "direct",
+    executionFolder: `/workspace/${projectId}`,
+    cwd: `/workspace/${projectId}`,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
+  };
+}

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 import type { AgentKind, RunnerCommand, RunnerProfile, Session } from "@roamcli/protocol";
@@ -254,11 +254,41 @@ export class SessionManager {
       if (!existing.isDirectory()) {
         throw new Error(`Managed worktree path is not a directory: ${session.executionFolder}`);
       }
+      await this.#assertManagedWorktree(projectCwd, worktreeCwd);
       return worktreeCwd;
     }
     await mkdir(dirname(worktreeCwd), { recursive: true });
     await execFileAsync("git", ["-C", projectCwd, "worktree", "add", "--detach", worktreeCwd, "HEAD"]);
     return worktreeCwd;
+  }
+
+  async #assertManagedWorktree(projectCwd: string, worktreeCwd: string): Promise<void> {
+    const [projectRealPath, worktreeRealPath] = await Promise.all([
+      realpath(projectCwd),
+      realpath(worktreeCwd),
+    ]);
+    if (projectRealPath === worktreeRealPath) {
+      throw new Error(`Managed worktree path points at the project directory: ${worktreeCwd}`);
+    }
+
+    const inside = await execFileAsync("git", ["-C", worktreeCwd, "rev-parse", "--is-inside-work-tree"])
+      .then(({ stdout }) => String(stdout).trim())
+      .catch(() => "false");
+    if (inside !== "true") {
+      throw new Error(`Managed worktree path is not a git worktree: ${worktreeCwd}`);
+    }
+
+    const { stdout } = await execFileAsync("git", ["-C", projectCwd, "worktree", "list", "--porcelain"]);
+    const worktreePaths = String(stdout)
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length));
+    const realWorktreePaths = await Promise.all(
+      worktreePaths.map((path) => realpath(path).catch(() => path)),
+    );
+    if (!realWorktreePaths.includes(worktreeRealPath)) {
+      throw new Error(`Managed worktree path is not registered for the project: ${worktreeCwd}`);
+    }
   }
 
   #getSessionCwd(sessionId: string, cwd: string | undefined): string | undefined {

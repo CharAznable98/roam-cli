@@ -137,7 +137,25 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, mobileNewSessionOpen: action.open };
     case "bootstrapStarted":
       return { ...state, loadState: "loading", error: undefined };
-    case "bootstrapSucceeded":
+    case "bootstrapSucceeded": {
+      const selectedProjectId =
+        action.remote.projects.some(
+          (project) => project.id === state.selectedProjectId,
+        )
+          ? state.selectedProjectId
+          : action.remote.projects[0]?.id || "";
+      const selectedSessionId =
+        action.remote.sessions.find(
+          (session) =>
+            session.id === state.selectedSessionId &&
+            session.projectId === selectedProjectId &&
+            !session.archivedAt,
+        )?.id ??
+        action.remote.sessions.find(
+          (session) =>
+            session.projectId === selectedProjectId && !session.archivedAt,
+        )?.id ??
+        "";
       return {
         ...state,
         projects: action.remote.projects,
@@ -149,12 +167,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         hunks: extractPatchHunks(action.remote.approvals),
         selectedRunnerId:
           state.selectedRunnerId || action.remote.runners[0]?.runnerId || "",
-        selectedProjectId:
-          state.selectedProjectId || action.remote.projects[0]?.id || "",
-        selectedSessionId:
-          state.selectedSessionId || action.remote.sessions[0]?.id || "",
+        selectedProjectId,
+        selectedSessionId,
         loadState: "ready",
       };
+    }
     case "bootstrapFailed":
       return {
         ...state,
