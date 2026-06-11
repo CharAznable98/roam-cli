@@ -143,13 +143,18 @@ async function launchBrowser() {
 }
 
 async function runUserJourney(browser, scenario) {
-  const fileName = `.roamcli-blackbox-${scenario.name}-${process.pid}.txt`;
-  const filePath = resolve(workspace, fileName);
+  const projectName = `Blackbox Project ${scenario.name} ${process.pid}`;
+  const projectDir = resolve(
+    workspace,
+    `.roamcli-blackbox-project-${scenario.name}-${process.pid}`,
+  );
+  const fileName = `roamcli-blackbox-${scenario.name}-${process.pid}.txt`;
   const initialValue = `initial-${scenario.name}-${Date.now()}`;
   const editedValue = `edited-${scenario.name}-${Date.now()}`;
   const patchedValue = `patched-${scenario.name}-${Date.now()}`;
-  await writeFile(filePath, `${initialValue}\n`, "utf8");
-  tempPaths.push(filePath);
+  const executionMode = scenario.name === "desktop" ? "managed_worktree" : "direct";
+  await prepareProjectDirectory(projectDir, fileName, initialValue);
+  tempDirs.push(projectDir);
 
   const context = await browser.newContext({ viewport: scenario.viewport });
   const page = await context.newPage();
@@ -169,12 +174,35 @@ async function runUserJourney(browser, scenario) {
     await expectText(page, "stream connected");
     await expectText(page, "1 runners online");
 
+    const project = await createProjectFromUi(page, scenario, {
+      name: projectName,
+      directory: projectDir,
+    });
+    if (!scenario.mobile) {
+      await expectText(page, projectName);
+    }
+    pass(`${scenario.name}: project created`);
+
     const session = await createSessionFromUi(page, scenario, {
       title: `Blackbox ${scenario.name}`,
       prompt: `blackbox prompt ${scenario.name} ${Date.now()}`,
+      executionMode,
+      projectId: project.id,
     });
     await expectText(page, `Blackbox ${scenario.name}`);
     await captureScreenshot(page, scenario, "session-created");
+    if (scenario.name === "desktop") {
+      if (
+        session.executionMode !== "managed_worktree" ||
+        session.executionFolder === projectDir ||
+        !session.executionFolder.includes(".roamcli-worktrees")
+      ) {
+        throw new Error(
+          `desktop session did not use a managed worktree: ${JSON.stringify(session)}`,
+        );
+      }
+      pass(`${scenario.name}: managed worktree execution folder`);
+    }
 
     await assertSessionResume(page, scenario, session);
     pass(`${scenario.name}: resume completed session`);
@@ -191,6 +219,15 @@ async function runUserJourney(browser, scenario) {
     await captureScreenshot(page, scenario, "chat-round-trip");
     pass(`${scenario.name}: chat round-trip`);
     await waitForSessionStatus(session.id, "completed");
+    if (executionMode === "managed_worktree") {
+      if (consoleErrors.length > 0) {
+        throw new Error(
+          `${scenario.name} browser console errors:\n${consoleErrors.join("\n")}`,
+        );
+      }
+      pass(`${scenario.name}: managed worktree browser journey`);
+      return;
+    }
 
     await assertMarkdownRendering(page, scenario, session.id);
     await captureScreenshot(page, scenario, "markdown-rendering");
@@ -222,8 +259,8 @@ async function runUserJourney(browser, scenario) {
     await captureScreenshot(page, scenario, "exec-approval");
     pass(`${scenario.name}: exec approval approve/reject`);
 
-    const artifactFileName = `.roamcli-artifact-${scenario.name}-${process.pid}.log`;
-    const artifactPath = resolve(workspace, artifactFileName);
+    const artifactFileName = `roamcli-artifact-${scenario.name}-${process.pid}.log`;
+    const artifactPath = resolve(session.executionFolder, artifactFileName);
     const artifactContent = `artifact ${scenario.name} ${Date.now()}\n`;
     await writeFile(artifactPath, artifactContent, "utf8");
     tempPaths.push(artifactPath);
@@ -425,31 +462,81 @@ async function assertMarkdownRendering(page, scenario, sessionId) {
   );
 }
 
+async function createProjectFromUi(page, scenario, values) {
+  if (scenario.mobile) {
+    const created = await requestJson("/v1/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: values.name,
+        runnerId,
+        directory: values.directory,
+      }),
+    });
+    const project = created.project;
+    await page
+      .getByRole("region", { name: "Mobile project controls" })
+      .getByLabel("Project")
+      .selectOption(project.id);
+    return project;
+  }
+
+  const form = page.locator("form", { hasText: "New Project" }).filter({
+    has: page.getByRole("button", { name: "Create project" }),
+  });
+  await form.locator('input[placeholder="Optional project name"]').fill(values.name);
+  await form
+    .locator("label.field", { hasText: "Directory" })
+    .locator("input")
+    .fill(values.directory);
+  await form.getByRole("button", { name: "Create project" }).click();
+  return waitFor(async () => {
+    const payload = await requestJson("/v1/projects");
+    return payload.projects?.find((project) => project.name === values.name);
+  }, `project ${values.name} to be persisted`);
+}
+
 async function createSessionFromUi(page, scenario, values) {
   if (scenario.mobile) {
-    await page.getByLabel("Mobile runner controls").locator("summary").click();
+    const created = await requestJson("/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: values.projectId,
+        title: values.title,
+        prompt: values.prompt,
+        agent: "codex",
+        executionMode: values.executionMode,
+      }),
+    });
+    const session = created.session;
+    await page
+      .getByRole("region", { name: "Mobile project controls" })
+      .getByLabel("Session")
+      .selectOption(session.id);
+    await expectText(page, values.prompt);
+    return session;
   }
-  await page
-    .locator('input[placeholder="Optional task name"]:visible')
-    .fill(values.title);
-  await page
+  const form = page.locator("form", { hasText: "New Session" }).filter({
+    has: page.getByRole("button", { name: "Create session" }),
+  });
+  await form.locator('input[placeholder="Optional task name"]').fill(values.title);
+  await form
     .locator("label.field:visible", { hasText: "Agent" })
     .locator("select")
     .selectOption("codex");
-  await page
-    .locator("label.field:visible", { hasText: "Working directory" })
-    .locator("input")
-    .fill(workspace);
-  await page
-    .locator('textarea[placeholder="Describe the work"]:visible')
-    .fill(values.prompt);
-  await page.getByRole("button", { name: "Create session" }).click();
+  await form
+    .locator("label.field:visible", { hasText: "Execution" })
+    .locator("select")
+    .selectOption(values.executionMode);
+  await form.locator('textarea[placeholder="Describe the work"]').fill(values.prompt);
+  await form.getByRole("button", { name: "Create session" }).click();
   await expectText(page, values.prompt);
   return waitFor(async () => {
     const payload = await requestJson("/v1/sessions");
     return payload.sessions?.find(
       (session) =>
-        session.runnerId === runnerId && session.title === values.title,
+        session.runnerId === runnerId &&
+        session.projectId === values.projectId &&
+        session.title === values.title,
     );
   }, `session ${values.title} to be persisted`);
 }
@@ -638,6 +725,22 @@ async function createFakeCodexCommand() {
   return script;
 }
 
+async function prepareProjectDirectory(projectDir, fileName, initialValue) {
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(resolve(projectDir, fileName), `${initialValue}\n`, "utf8");
+  await runCommand("git", ["init"], { cwd: projectDir });
+  await runCommand("git", ["config", "user.email", "blackbox@example.test"], {
+    cwd: projectDir,
+  });
+  await runCommand("git", ["config", "user.name", "RoamCli Blackbox"], {
+    cwd: projectDir,
+  });
+  await runCommand("git", ["add", fileName], { cwd: projectDir });
+  await runCommand("git", ["commit", "-m", "blackbox initial file"], {
+    cwd: projectDir,
+  });
+}
+
 async function expectText(page, text) {
   await waitFor(
     async () => {
@@ -774,6 +877,38 @@ function startChild(label, command, args, env = {}) {
     );
   });
   return child;
+}
+
+async function runCommand(command, args, options = {}) {
+  await new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd ?? repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", rejectCommand);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolveCommand();
+        return;
+      }
+      rejectCommand(
+        new Error(
+          `${command} ${args.join(" ")} failed code=${code ?? "null"} signal=${signal ?? "null"}\n${stdout}${stderr}`,
+        ),
+      );
+    });
+  });
 }
 
 async function cleanup() {

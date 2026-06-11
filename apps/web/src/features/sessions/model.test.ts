@@ -1,6 +1,7 @@
 import type { RunnerRegistration, Session } from "@roamcli/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  getProjectSessions,
   getRunnerSessions,
   getSelectedRunner,
   getSelectedSession,
@@ -29,9 +30,12 @@ const runner: RunnerRegistration = {
 const session: Session = {
   id: "session-1",
   title: "Session One",
+  projectId: "project-1",
   runnerId: "runner-1",
   agent: "codex",
   status: "running",
+  executionMode: "direct",
+  executionFolder: "/workspace",
   cwd: "/workspace",
   createdAt: "2026-06-05T00:00:00.000Z",
   updatedAt: "2026-06-05T00:00:00.000Z",
@@ -45,5 +49,19 @@ describe("session model", () => {
     const visibleSessions = getRunnerSessions([session], "runner-1");
     expect(visibleSessions).toEqual([session]);
     expect(getSelectedSession([session], visibleSessions, "")).toBe(session);
+    expect(getProjectSessions([session], "project-1")).toEqual([session]);
+  });
+
+  it("keeps selected session fallback inside the visible project scope", () => {
+    const otherSession: Session = {
+      ...session,
+      id: "session-2",
+      title: "Session Two",
+      projectId: "project-2",
+    };
+    const visibleSessions = getProjectSessions([session, otherSession], "project-1");
+
+    expect(getSelectedSession([session, otherSession], visibleSessions, "session-2")).toBe(session);
+    expect(getSelectedSession([otherSession], [], "session-2")).toBeUndefined();
   });
 });

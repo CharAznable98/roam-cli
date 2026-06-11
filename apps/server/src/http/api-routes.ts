@@ -2,9 +2,13 @@ import type { FastifyInstance } from "fastify";
 import {
   ApiApplyPatchSchema,
   ApiApprovalResponseSchema,
+  ApiCreateProjectSchema,
   ApiCreateSessionSchema,
+  ApiUpdateProjectSchema,
   ApiWriteFileSchema,
+  nowIso,
 } from "@roamcli/protocol";
+import { newId } from "../infra/ids.js";
 import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js";
 import type { AppContext } from "../server/context.js";
 import { sendRunnerRpcError } from "./errors.js";
@@ -12,6 +16,7 @@ import {
   ApprovalParamsSchema,
   FileContentQuerySchema,
   FileTreeQuerySchema,
+  ProjectParamsSchema,
   SessionParamsSchema,
 } from "./schemas.js";
 
@@ -20,6 +25,7 @@ export async function registerApiRoutes(
   context: AppContext,
 ): Promise<void> {
   registerRunnerRoutes(app, context);
+  registerProjectRoutes(app, context);
   registerSessionRoutes(app, context);
   registerWorkspaceRoutes(app, context);
   registerApprovalRoutes(app, context);
@@ -56,6 +62,12 @@ function registerSessionRoutes(
       if (result.error === "unsupported_agent") {
         return reply.code(400).send({ error: "unsupported_agent" });
       }
+      if (result.error === "project_not_found") {
+        return reply.code(404).send({ error: "project_not_found" });
+      }
+      if (result.error === "unsupported_execution_mode") {
+        return reply.code(400).send({ error: "unsupported_execution_mode" });
+      }
       return reply.code(400).send({ error: result.error });
     }
 
@@ -85,8 +97,107 @@ function registerSessionRoutes(
       }
       return reply.code(400).send({ error: result.error });
     }
-    context.services.artifacts.deleteSessionArtifacts(params.id);
     return reply.code(204).send();
+  });
+}
+
+function registerProjectRoutes(app: FastifyInstance, context: AppContext): void {
+  app.get("/v1/projects", async () => ({
+    projects: context.store.listProjects(),
+  }));
+
+  app.post("/v1/projects", async (request, reply) => {
+    const parsed = ApiCreateProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    if (!context.hub.isRunnerOnline(parsed.data.runnerId)) {
+      return reply.code(409).send({ error: "runner_offline" });
+    }
+    const runner = context.store.getRunner(parsed.data.runnerId);
+    if (!runner) {
+      return reply.code(404).send({ error: "runner_not_found" });
+    }
+    try {
+      await context.services.workspace.validateRunnerDirectory(
+        parsed.data.runnerId,
+        parsed.data.directory,
+      );
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+    const now = nowIso();
+    const project = context.store.createProject({
+      id: newId("project"),
+      name: parsed.data.name,
+      runnerId: parsed.data.runnerId,
+      directory: parsed.data.directory,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now,
+    });
+    context.hub.broadcast({ type: "project:created", project });
+    return reply.code(201).send({ project });
+  });
+
+  app.patch("/v1/projects/:id", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const parsed = ApiUpdateProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const existing = context.store.getProject(params.id);
+    if (!existing) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    if (parsed.data.directory !== undefined) {
+      if (!context.hub.isRunnerOnline(existing.runnerId)) {
+        return reply.code(409).send({ error: "runner_offline" });
+      }
+      try {
+        await context.services.workspace.validateRunnerDirectory(
+          existing.runnerId,
+          parsed.data.directory,
+        );
+      } catch (error) {
+        return sendRunnerRpcError(reply, error);
+      }
+    }
+    const update = {
+      ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
+      ...(parsed.data.directory === undefined ? {} : { directory: parsed.data.directory }),
+      updatedAt: nowIso(),
+    };
+    const project = context.store.updateProject(params.id, update);
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    context.hub.broadcast({ type: "project:updated", project });
+    return { project };
+  });
+
+  app.post("/v1/projects/:id/archive", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const project = context.store.archiveProject(params.id, nowIso());
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    context.hub.broadcast({ type: "project:updated", project });
+    return { project };
+  });
+
+  app.post("/v1/projects/:id/restore", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const project = context.store.restoreProject(params.id, nowIso());
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    context.hub.broadcast({ type: "project:updated", project });
+    return { project };
   });
 }
 

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { RunnerRegistration } from "@roamcli/protocol";
+import type { RunnerRegistration, Session } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -43,6 +43,141 @@ describe("server", () => {
     });
     expect(authorized.statusCode).toBe(200);
     expect(authorized.json()).toEqual({ sessions: [] });
+  });
+
+  it("creates projects only after validating the runner directory", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    expect(await nextJson(stream)).toMatchObject({ type: "runner:online" });
+    const streamEvents: Array<Record<string, any>> = [];
+    stream.on("message", (data) => {
+      streamEvents.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+
+    const createdPromise = app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: "API Project",
+        runnerId: "runner-1",
+        directory: "/workspace/api-project",
+      },
+    });
+    const validationCommand = await nextJson(runner);
+    expect(validationCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace/api-project",
+      path: ".",
+      depth: 0,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "fileTreeResult",
+        result: {
+          requestId: validationCommand.requestId,
+          sessionId: validationCommand.sessionId,
+          root: {
+            path: ".",
+            name: "api-project",
+            type: "directory",
+            children: [],
+          },
+        },
+      }),
+    );
+
+    const created = await createdPromise;
+    expect(created.statusCode).toBe(201);
+    expect(created.json().project).toMatchObject({
+      name: "API Project",
+      runnerId: "runner-1",
+      directory: "/workspace/api-project",
+    });
+    await vi.waitFor(() => {
+      expect(streamEvents).toContainEqual(
+        expect.objectContaining({
+          type: "project:created",
+          project: expect.objectContaining({ name: "API Project" }),
+        }),
+      );
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listed.json().projects).toHaveLength(1);
+
+    stream.close();
+    runner.close();
+  });
+
+  it("archives and restores a project together with its sessions", async () => {
+    createTestProject(app);
+    const now = new Date().toISOString();
+    const session: Session = {
+      id: "session-project-archive",
+      title: "Project session",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "completed",
+      executionMode: "direct",
+      executionFolder: "/workspace",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+    };
+    app.roam.store.createSession(session);
+    const userArchivedSession: Session = {
+      ...session,
+      id: "session-user-archive",
+      title: "User archived session",
+    };
+    app.roam.store.createSession(userArchivedSession);
+    app.roam.store.archiveSession(userArchivedSession.id, now);
+
+    const archived = await app.inject({
+      method: "POST",
+      url: "/v1/projects/project-1/archive",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().project.archivedAt).toEqual(expect.any(String));
+    expect(app.roam.store.getSession(session.id)?.archivedAt).toEqual(
+      expect.any(String),
+    );
+
+    const hiddenProjects = await app.inject({
+      method: "GET",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(hiddenProjects.json().projects).toEqual([]);
+    const hiddenSessions = await app.inject({
+      method: "GET",
+      url: "/v1/sessions",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(hiddenSessions.json().sessions).toEqual([]);
+
+    const restored = await app.inject({
+      method: "POST",
+      url: "/v1/projects/project-1/restore",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().project.archivedAt).toBeUndefined();
+    expect(app.roam.store.getSession(session.id)?.archivedAt).toBeUndefined();
+    expect(app.roam.store.getSession(userArchivedSession.id)?.archivedAt).toBe(
+      now,
+    );
   });
 
   it("returns API 404s for /v1 and asset 404s without SPA fallback", async () => {
@@ -115,14 +250,15 @@ describe("server", () => {
     expect(runners.json().runners).toHaveLength(1);
     expect(runners.json().runners[0].runnerId).toBe("runner-1");
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "implement server",
         title: "Server work",
       },
@@ -200,14 +336,15 @@ describe("server", () => {
         event.type === "runner:online" && event.runner.runnerId === "runner-1",
     );
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "first question",
       },
     });
@@ -315,14 +452,15 @@ describe("server", () => {
         event.type === "runner:online" && event.runner.runnerId === "runner-1",
     );
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "start once",
       },
     });
@@ -383,14 +521,15 @@ describe("server", () => {
         event.type === "runner:online" && event.runner.runnerId === "runner-1",
     );
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "first prompt",
       },
     });
@@ -459,14 +598,15 @@ describe("server", () => {
         event.type === "runner:online" && event.runner.runnerId === "runner-1",
     );
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "inspect files",
       },
     });
@@ -596,14 +736,15 @@ describe("server", () => {
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "inspect files",
       },
     });
@@ -660,14 +801,15 @@ describe("server", () => {
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "needs approval",
       },
     });
@@ -742,14 +884,18 @@ describe("server", () => {
     runner.close();
   });
 
-  it("deletes a session, cascades persisted children, removes artifacts, and broadcasts deletion", async () => {
+  it("archives a session, keeps persisted children and broadcasts an update", async () => {
     const now = new Date().toISOString();
+    createTestProject(app);
     app.roam.store.createSession({
       id: "session-delete",
       title: "Delete me",
+      projectId: "project-1",
       runnerId: "runner-1",
       agent: "codex",
       status: "running",
+      executionMode: "direct",
+      executionFolder: "/workspace",
       cwd: "/workspace",
       createdAt: now,
       updatedAt: now,
@@ -795,20 +941,24 @@ describe("server", () => {
       signal: "stop",
     });
     expect(broadcast).toHaveBeenCalledWith({
-      type: "session:deleted",
-      sessionId: "session-delete",
+      type: "session:updated",
+      session: expect.objectContaining({
+        id: "session-delete",
+        archivedAt: expect.any(String),
+      }),
     });
 
-    expect(app.roam.store.getSession("session-delete")).toBeUndefined();
-    expect(app.roam.store.getApproval("approval-delete")).toBeUndefined();
-    expect(fs.existsSync(artifactPath)).toBe(false);
+    expect(app.roam.store.getSession("session-delete")?.archivedAt).toEqual(expect.any(String));
+    expect(app.roam.store.getApproval("approval-delete")).toBeDefined();
+    expect(fs.existsSync(artifactPath)).toBe(true);
 
     const detail = await app.inject({
       method: "GET",
       url: "/v1/sessions/session-delete",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(detail.statusCode).toBe(404);
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().session.archivedAt).toEqual(expect.any(String));
   });
 
   it("rejects invalid approval signatures and applies signed patches through runner RPC", async () => {
@@ -819,14 +969,15 @@ describe("server", () => {
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
 
+    createTestProject(app);
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        runnerId: "runner-1",
+        projectId: "project-1",
         agent: "codex",
-        cwd: "/workspace",
         prompt: "apply patch",
       },
     });
@@ -936,6 +1087,22 @@ function runnerRegistration(
       },
     ],
   };
+}
+
+function createTestProject(app: RoamServer): void {
+  if (app.roam.store.getProject("project-1")) {
+    return;
+  }
+  const now = new Date().toISOString();
+  app.roam.store.createProject({
+    id: "project-1",
+    name: "Test Project",
+    runnerId: "runner-1",
+    directory: "/workspace",
+    createdAt: now,
+    updatedAt: now,
+    lastActiveAt: now,
+  });
 }
 
 function localBaseUrl(app: RoamServer): string {

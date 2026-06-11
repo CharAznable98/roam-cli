@@ -1,4 +1,4 @@
-import type { AgentKind } from "@roamcli/protocol";
+import type { AgentKind, ExecutionMode } from "@roamcli/protocol";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   createRoamApiClient,
@@ -8,6 +8,8 @@ import {
 import { buildPatchFromHunks } from "../features/approvals/model";
 import {
   getRunnerSessions,
+  getProjectSessions,
+  getSelectedProject,
   getSelectedRunner,
   getSelectedSession,
 } from "../features/sessions/model";
@@ -56,22 +58,29 @@ export function useRoamController() {
     };
   }, [token]);
 
-  const selectedRunner = useMemo(
-    () => getSelectedRunner(state.runners, state.selectedRunnerId),
-    [state.runners, state.selectedRunnerId],
+  const selectedProject = useMemo(
+    () => getSelectedProject(state.projects, state.selectedProjectId),
+    [state.projects, state.selectedProjectId],
   );
-  const runnerSessions = useMemo(
-    () => getRunnerSessions(state.sessions, selectedRunner?.runnerId),
-    [selectedRunner?.runnerId, state.sessions],
+  const selectedRunner = useMemo(
+    () =>
+      selectedProject
+        ? state.runners.find((runner) => runner.runnerId === selectedProject.runnerId)
+        : getSelectedRunner(state.runners, state.selectedRunnerId),
+    [selectedProject, state.runners, state.selectedRunnerId],
+  );
+  const projectSessions = useMemo(
+    () => getProjectSessions(state.sessions, selectedProject?.id),
+    [selectedProject?.id, state.sessions],
   );
   const selectedSession = useMemo(
     () =>
       getSelectedSession(
         state.sessions,
-        runnerSessions,
+        projectSessions,
         state.selectedSessionId,
       ),
-    [runnerSessions, state.selectedSessionId, state.sessions],
+    [projectSessions, state.selectedSessionId, state.sessions],
   );
 
   useEffect(() => {
@@ -81,6 +90,10 @@ export function useRoamController() {
     }
 
     const sessionId = selectedSession.id;
+    if (selectedSession.executionMode === "managed_worktree" && selectedSession.status === "pending") {
+      dispatch({ type: "sessionWorkspaceCleared" });
+      return;
+    }
     let cancelled = false;
     dispatch({ type: "sessionWorkspaceLoading", sessionId });
 
@@ -104,7 +117,7 @@ export function useRoamController() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSession?.id]);
+  }, [selectedSession?.executionMode, selectedSession?.id, selectedSession?.status]);
 
   const selectRunner = (runnerId: string) => {
     const nextSession = state.sessions.find(
@@ -117,15 +130,43 @@ export function useRoamController() {
     });
   };
 
+  const selectProject = (projectId: string) => {
+    const nextSession = state.sessions.find(
+      (session) => session.projectId === projectId && !session.archivedAt,
+    );
+    dispatch({
+      type: "projectSelected",
+      projectId,
+      nextSessionId: nextSession?.id ?? "",
+    });
+  };
+
+  const createProject = (values: {
+    name: string;
+    runnerId: string;
+    directory: string;
+  }) => {
+    if (!apiRef.current) return;
+    void apiRef.current
+      .createProject(values)
+      .then((project) => dispatch({ type: "projectCreated", project }))
+      .catch((createError: unknown) =>
+        dispatch({
+          type: "errorChanged",
+          message: errorMessage(createError),
+        }),
+      );
+  };
+
   const createSession = (values: {
     title: string;
-    cwd: string;
     prompt: string;
     agent: AgentKind;
+    executionMode: ExecutionMode;
   }) => {
-    if (!selectedRunner || !apiRef.current) return;
+    if (!selectedProject || !apiRef.current) return;
     void apiRef.current
-      .createSession({ runnerId: selectedRunner.runnerId, ...values })
+      .createSession({ projectId: selectedProject.id, ...values })
       .then((session) => dispatch({ type: "sessionCreated", session }))
       .catch((createError: unknown) =>
         dispatch({
@@ -326,7 +367,8 @@ export function useRoamController() {
     setToken,
     dispatch,
     selectedRunner,
-    runnerSessions,
+    selectedProject,
+    runnerSessions: projectSessions,
     selectedSession,
     sessionMessages,
     sessionApprovals,
@@ -336,6 +378,8 @@ export function useRoamController() {
     sessionFileTreeState,
     runnerCommand: `pnpm --filter @roamcli/runner dev --server ws://127.0.0.1:8787/v1/runner --token ${token || "dev-token"}`,
     selectRunner,
+    selectProject,
+    createProject,
     createSession,
     sendMessage,
     resolveApproval,

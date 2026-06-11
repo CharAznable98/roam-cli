@@ -2,6 +2,7 @@ import type {
   Approval,
   Artifact,
   Message,
+  Project,
   RunnerRegistration,
   Session,
 } from "@roamcli/protocol";
@@ -15,6 +16,7 @@ export interface SessionDetailPayload {
 }
 
 export interface InitialRemoteState {
+  projects: Project[];
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];

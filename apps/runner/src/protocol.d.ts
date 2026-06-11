@@ -1,6 +1,7 @@
 declare module "@roamcli/protocol" {
   export type AgentKind = string;
   export type RunnerProfile = "strict" | "standard" | "trusted";
+  export type ExecutionMode = "direct" | "managed_worktree" | "remote";
   export type SessionStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "stopped";
   export type ChatRole = "user" | "assistant" | "system" | "tool";
   export type ApprovalKind = "execCommand" | "applyPatch";
@@ -39,11 +40,15 @@ declare module "@roamcli/protocol" {
   export interface Session {
     id: string;
     title: string;
+    projectId: string;
     runnerId: string;
     agent: AgentKind;
     status: SessionStatus;
+    executionMode: ExecutionMode;
+    executionFolder: string;
     cwd: string;
     agentThreadId?: string;
+    archivedAt?: string;
     createdAt: string;
     updatedAt: string;
   }

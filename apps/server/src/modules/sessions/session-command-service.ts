@@ -14,7 +14,6 @@ import {
   runnerCanResume,
   runnerExplicitlyCannotResume,
   runnerSupportsAgent,
-  type SessionCreateInput,
 } from "./session-records.js";
 
 export class SessionCommandService {
@@ -39,8 +38,10 @@ export class SessionCommandService {
       sessionId: session.id,
       signal: "stop",
     });
-    this.store.deleteSession(session.id);
-    this.hub.broadcast({ type: "session:deleted", sessionId: session.id });
+    const archived = this.store.archiveSession(session.id, nowIso());
+    if (archived) {
+      this.hub.broadcast({ type: "session:updated", session: archived });
+    }
     return ok(undefined);
   }
 
@@ -83,19 +84,37 @@ export class SessionCommandService {
   }
 
   private createAndStartSession(
-    input: SessionCreateInput,
+    input: ApiCreateSession | Extract<ClientCommand, { type: "createSession" }>,
   ): ServiceResult<{ session: Session }> {
-    if (!this.hub.isRunnerOnline(input.runnerId)) {
+    const project = this.store.getProject(input.projectId);
+    if (!project || project.archivedAt) {
+      return fail("project_not_found", { message: "project not found" });
+    }
+    if (!this.hub.isRunnerOnline(project.runnerId)) {
       return fail("runner_offline", { message: "runner is offline" });
     }
-    const runner = this.store.getRunner(input.runnerId);
+    const runner = this.store.getRunner(project.runnerId);
     if (!runnerSupportsAgent(runner, input.agent)) {
       return fail("unsupported_agent", {
         message: `Unsupported agent: ${input.agent}`,
       });
     }
+    if (input.executionMode === "remote") {
+      return fail("unsupported_execution_mode", {
+        message: `${input.executionMode} execution is not available yet`,
+      });
+    }
 
-    const session = createSessionRecord(input);
+    const session = createSessionRecord({
+      ...input,
+      runnerId: project.runnerId,
+      executionMode: input.executionMode,
+      executionFolder: project.directory,
+      projectDirectory: project.directory,
+      ...(runner?.workspaceRoot === undefined
+        ? {}
+        : { managedWorktreeBaseDirectory: runner.workspaceRoot }),
+    });
     const message = createUserMessage(session.id, input.prompt);
     this.store.createSession(session);
     this.store.addMessage(message);

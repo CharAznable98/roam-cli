@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { AgentOutputParser, AgentParseResult } from "@roamcli/agent-plugin-sdk";
 import type { RunnerEvent, Session } from "@roamcli/protocol";
 import { hashPayload, signApproval } from "@roamcli/security";
@@ -9,6 +11,7 @@ import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
 import { SessionManager } from "../sessions/manager.js";
 
 const approvalSecret = "runner-test-secret";
+const execFileAsync = promisify(execFile);
 
 describe("SessionManager", () => {
   afterEach(() => {
@@ -90,6 +93,98 @@ describe("SessionManager", () => {
       },
     });
     await expect(readFile(join(workspace, "src", "main.ts"), "utf8")).resolves.toBe("console.log('saved');");
+  });
+
+  it("creates managed git worktrees and scopes the session to the execution folder", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-worktree-"));
+    await writeFile(join(workspace, "README.md"), "hello\n", "utf8");
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "init"]);
+    const executionFolder = join(workspace, ".roamcli-worktrees", "s1");
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    const managedSession: Session = {
+      ...makeSession(workspace),
+      executionMode: "managed_worktree",
+      executionFolder,
+      cwd: workspace,
+    };
+
+    await manager.start(managedSession, "managed");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    });
+    await manager.handle({ type: "readFileContent", requestId: "content1", sessionId: "s1", path: "README.md", maxBytes: 256 });
+
+    await expect(readFile(join(executionFolder, "README.md"), "utf8")).resolves.toBe("hello\n");
+    expect(events).toContainEqual({
+      type: "fileContentResult",
+      result: {
+        requestId: "content1",
+        sessionId: "s1",
+        path: "README.md",
+        content: "hello\n",
+        truncated: false,
+        encoding: "utf8",
+      },
+    });
+
+    events.length = 0;
+    await manager.start(managedSession, "resume managed", "codex-thread-1");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "sessionThread", sessionId: "s1", threadId: "codex-thread-resumed" });
+      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    });
+    expect(events.some((event) => event.type === "error" && event.code === "SPAWN_ERROR")).toBe(false);
+  });
+
+  it("rejects an existing managed worktree folder that is not a registered git worktree", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-invalid-worktree-"));
+    await writeFile(join(workspace, "README.md"), "hello\n", "utf8");
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "init"]);
+    const executionFolder = join(workspace, ".roamcli-worktrees", "s1");
+    await mkdir(executionFolder, { recursive: true });
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(
+      {
+        ...makeSession(workspace),
+        executionMode: "managed_worktree",
+        executionFolder,
+        cwd: workspace,
+      },
+      "managed",
+    );
+
+    expect(events).toContainEqual({
+      type: "error",
+      sessionId: "s1",
+      message: `Managed worktree path is not registered for the project: ${executionFolder}`,
+      code: "INVALID_CWD",
+    });
   });
 
   it("recovers file command cwd from the command payload when the session is not cached", async () => {
@@ -373,6 +468,10 @@ async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
   return (await loadAgentRegistry("standard")).agents;
 }
 
+async function git(cwd: string, args: string[]): Promise<void> {
+  await execFileAsync("git", args, { cwd });
+}
+
 function artifactCodexAgent(): LoadedAgent {
   let emitted = false;
   const capability = {
@@ -512,9 +611,12 @@ function makeSession(workspace: string): Session {
   return {
     id: "s1",
     title: "Session",
+    projectId: "project-1",
     runnerId: "r1",
     agent: "codex",
     status: "pending",
+    executionMode: "direct",
+    executionFolder: workspace,
     cwd: workspace,
     createdAt: "2026-06-05T00:00:00.000Z",
     updatedAt: "2026-06-05T00:00:00.000Z",

@@ -4,6 +4,7 @@ import type {
   FileContentResult,
   FileNode,
   Message,
+  Project,
   RunnerRegistration,
   ServerEvent,
   Session,
@@ -34,6 +35,7 @@ export interface AppError {
 
 export interface AppState {
   activeTab: WorkspaceTab;
+  projects: Project[];
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];
@@ -49,6 +51,7 @@ export interface AppState {
   fileSaveState: AsyncState;
   terminalLines: Record<string, string[]>;
   patchApplyState: AsyncState;
+  selectedProjectId: string;
   selectedRunnerId: string;
   selectedSessionId: string;
   mobileNewSessionOpen: boolean;
@@ -59,6 +62,7 @@ export interface AppState {
 
 export const initialAppState: AppState = {
   activeTab: "chat",
+  projects: [],
   runners: [],
   sessions: [],
   messages: [],
@@ -74,6 +78,7 @@ export const initialAppState: AppState = {
   fileSaveState: "idle",
   terminalLines: {},
   patchApplyState: "idle",
+  selectedProjectId: "",
   selectedRunnerId: "",
   selectedSessionId: "",
   mobileNewSessionOpen: false,
@@ -89,6 +94,9 @@ export type AppAction =
   | { type: "bootstrapSucceeded"; remote: InitialRemoteState }
   | { type: "bootstrapFailed"; message: string }
   | { type: "connectionChanged"; status: ConnectionState }
+  | { type: "projectSelected"; projectId: string; nextSessionId: string }
+  | { type: "projectCreated"; project: Project }
+  | { type: "projectUpdated"; project: Project }
   | { type: "runnerSelected"; runnerId: string; nextSessionId: string }
   | { type: "sessionSelected"; sessionId: string }
   | { type: "sessionCreated"; session: Session }
@@ -129,9 +137,28 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, mobileNewSessionOpen: action.open };
     case "bootstrapStarted":
       return { ...state, loadState: "loading", error: undefined };
-    case "bootstrapSucceeded":
+    case "bootstrapSucceeded": {
+      const selectedProjectId =
+        action.remote.projects.some(
+          (project) => project.id === state.selectedProjectId,
+        )
+          ? state.selectedProjectId
+          : action.remote.projects[0]?.id || "";
+      const selectedSessionId =
+        action.remote.sessions.find(
+          (session) =>
+            session.id === state.selectedSessionId &&
+            session.projectId === selectedProjectId &&
+            !session.archivedAt,
+        )?.id ??
+        action.remote.sessions.find(
+          (session) =>
+            session.projectId === selectedProjectId && !session.archivedAt,
+        )?.id ??
+        "";
       return {
         ...state,
+        projects: action.remote.projects,
         runners: action.remote.runners,
         sessions: action.remote.sessions,
         messages: action.remote.messages,
@@ -140,10 +167,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         hunks: extractPatchHunks(action.remote.approvals),
         selectedRunnerId:
           state.selectedRunnerId || action.remote.runners[0]?.runnerId || "",
-        selectedSessionId:
-          state.selectedSessionId || action.remote.sessions[0]?.id || "",
+        selectedProjectId,
+        selectedSessionId,
         loadState: "ready",
       };
+    }
     case "bootstrapFailed":
       return {
         ...state,
@@ -152,6 +180,21 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case "connectionChanged":
       return { ...state, connectionState: action.status };
+    case "projectSelected":
+      return {
+        ...state,
+        selectedProjectId: action.projectId,
+        selectedSessionId: action.nextSessionId,
+      };
+    case "projectCreated":
+      return {
+        ...state,
+        projects: upsertBy(state.projects, action.project, (item) => item.id),
+        selectedProjectId: action.project.id,
+        selectedSessionId: "",
+      };
+    case "projectUpdated":
+      return updateProjectState(state, action.project);
     case "runnerSelected":
       return {
         ...state,
@@ -164,6 +207,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         sessions: upsertBy(state.sessions, action.session, (item) => item.id),
+        selectedProjectId: action.session.projectId,
         selectedSessionId: action.session.id,
         activeTab: "chat",
         mobileNewSessionOpen: false,
@@ -313,10 +357,21 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       ),
     };
   }
+  if (event.type === "project:created") {
+    return {
+      ...state,
+      projects: upsertBy(state.projects, event.project, (item) => item.id),
+      selectedProjectId: state.selectedProjectId || event.project.id,
+    };
+  }
+  if (event.type === "project:updated") {
+    return updateProjectState(state, event.project);
+  }
   if (event.type === "session:created" || event.type === "session:updated") {
     return {
       ...state,
       sessions: upsertBy(state.sessions, event.session, (item) => item.id),
+      selectedProjectId: state.selectedProjectId || event.session.projectId,
       selectedSessionId: state.selectedSessionId || event.session.id,
     };
   }
@@ -413,6 +468,29 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     };
   }
   return state;
+}
+
+function updateProjectState(state: AppState, project: Project): AppState {
+  const projects = project.archivedAt
+    ? state.projects.filter((item) => item.id !== project.id)
+    : upsertBy(state.projects, project, (item) => item.id);
+  const selectedProjectId =
+    state.selectedProjectId === project.id && project.archivedAt
+      ? projects[0]?.id ?? ""
+      : state.selectedProjectId || projects[0]?.id || "";
+  const projectSessions = state.sessions.filter(
+    (session) => session.projectId === selectedProjectId && !session.archivedAt,
+  );
+  const selectedSessionId =
+    state.selectedProjectId === project.id && project.archivedAt
+      ? projectSessions[0]?.id ?? ""
+      : state.selectedSessionId;
+  return {
+    ...state,
+    projects,
+    selectedProjectId,
+    selectedSessionId,
+  };
 }
 
 function makeError(
