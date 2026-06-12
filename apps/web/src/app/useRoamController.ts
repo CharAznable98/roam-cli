@@ -141,21 +141,22 @@ export function useRoamController() {
     });
   };
 
-  const createProject = (values: {
+  const createProject = async (values: {
     name: string;
     runnerId: string;
     directory: string;
   }) => {
-    if (!apiRef.current) return;
-    void apiRef.current
-      .createProject(values)
-      .then((project) => dispatch({ type: "projectCreated", project }))
-      .catch((createError: unknown) =>
-        dispatch({
-          type: "errorChanged",
-          message: errorMessage(createError),
-        }),
-      );
+    if (!apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const project = await apiRef.current.createProject(values);
+      dispatch({ type: "projectCreated", project });
+    } catch (createError: unknown) {
+      const message = errorMessage(createError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
   };
 
   const archiveProject = (projectId: string) => {
@@ -182,22 +183,23 @@ export function useRoamController() {
       );
   };
 
-  const createSession = (projectId: string, values: {
+  const createSession = async (projectId: string, values: {
     title: string;
     prompt: string;
     agent: AgentKind;
     executionMode: ExecutionMode;
   }) => {
-    if (!projectId || !apiRef.current) return;
-    void apiRef.current
-      .createSession({ projectId, ...values })
-      .then((session) => dispatch({ type: "sessionCreated", session }))
-      .catch((createError: unknown) =>
-        dispatch({
-          type: "errorChanged",
-          message: errorMessage(createError),
-        }),
-      );
+    if (!projectId || !apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const session = await apiRef.current.createSession({ projectId, ...values });
+      dispatch({ type: "sessionCreated", session });
+    } catch (createError: unknown) {
+      const message = errorMessage(createError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
   };
 
   const sendMessage = (content: string) => {

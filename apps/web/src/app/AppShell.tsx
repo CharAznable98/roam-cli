@@ -11,7 +11,7 @@ import {
   SidebarModal,
 } from "../features/sessions/RunnerSidebar";
 import { TerminalPanel } from "../features/terminal/TerminalPanel";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { useRoamController } from "./useRoamController";
@@ -62,6 +62,10 @@ export function AppShell({ controller }: AppShellProps) {
     () => state.projects.filter((project) => !project.archivedAt),
     [state.projects],
   );
+
+  useEffect(() => {
+    setMobileSessionModalOpen(false);
+  }, [selectedProject?.id]);
 
   return (
     <div className={`app-shell active-${state.activeTab}`}>

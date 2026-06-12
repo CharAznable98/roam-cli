@@ -22,9 +22,9 @@ type RunnerSidebarProps = {
   selectedSessionId: string;
   onSelectProject: (projectId: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onCreateProject: (values: { name: string; runnerId: string; directory: string }) => void;
+  onCreateProject: (values: { name: string; runnerId: string; directory: string }) => void | Promise<void>;
   onArchiveProject: (projectId: string) => void;
-  onCreateSession: (projectId: string, values: NewSessionValues) => void;
+  onCreateSession: (projectId: string, values: NewSessionValues) => void | Promise<void>;
 };
 
 export function RunnerSidebar({
@@ -180,8 +180,8 @@ export function RunnerSidebar({
             <NewSessionForm
               project={sessionProject}
               runner={sessionRunner}
-              onCreate={(values) => {
-                onCreateSession(sessionProject.id, values);
+              onCreate={async (values) => {
+                await onCreateSession(sessionProject.id, values);
                 setExpandedProjectIds((current) => {
                   const next = new Set(current);
                   next.add(sessionProject.id);
@@ -229,15 +229,16 @@ export function ProjectForm({
   onCreated,
 }: {
   runners: RunnerRegistration[];
-  onCreate: (values: { name: string; runnerId: string; directory: string }) => void;
+  onCreate: (values: { name: string; runnerId: string; directory: string }) => void | Promise<void>;
   onCreated?: () => void;
 }) {
   const [name, setName] = useState("");
   const [runnerId, setRunnerId] = useState(runners[0]?.runnerId ?? "");
   const [directory, setDirectory] = useState(runners[0]?.workspaceRoot ?? "");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const cleanDirectory = directory.trim();
     const cleanRunnerId = runnerId || runners[0]?.runnerId || "";
@@ -249,14 +250,21 @@ export function ProjectForm({
       setError("Directory is required.");
       return;
     }
-    onCreate({
-      name: name.trim() || cleanDirectory.split("/").filter(Boolean).at(-1) || cleanDirectory,
-      runnerId: cleanRunnerId,
-      directory: cleanDirectory,
-    });
-    setName("");
-    setError("");
-    onCreated?.();
+    setSubmitting(true);
+    try {
+      await onCreate({
+        name: name.trim() || cleanDirectory.split("/").filter(Boolean).at(-1) || cleanDirectory,
+        runnerId: cleanRunnerId,
+        directory: cleanDirectory,
+      });
+      setName("");
+      setError("");
+      onCreated?.();
+    } catch (createError: unknown) {
+      setError(errorMessage(createError, "Project was not created."));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -296,11 +304,15 @@ export function ProjectForm({
       </label>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="form-actions">
-        <button className="primary-action-button" type="submit" title="Create project">
+        <button className="primary-action-button" type="submit" title="Create project" disabled={submitting}>
           <FolderPlus size={16} />
-          <span>Create project</span>
+          <span>{submitting ? "Creating project..." : "Create project"}</span>
         </button>
       </div>
     </form>
   );
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }

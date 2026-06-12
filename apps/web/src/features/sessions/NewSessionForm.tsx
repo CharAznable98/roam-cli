@@ -12,7 +12,7 @@ export type NewSessionValues = {
 type NewSessionFormProps = {
   project: Project;
   runner: RunnerRegistration;
-  onCreate: (values: NewSessionValues) => void;
+  onCreate: (values: NewSessionValues) => void | Promise<void>;
   onCreated?: () => void;
 };
 
@@ -20,11 +20,12 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
   const agentOptions = useMemo(() => runner.capabilities.map((capability: RunnerCapability) => capability.kind), [runner.capabilities]);
   const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const cleanPrompt = prompt.trim();
     if (!cleanPrompt) {
@@ -32,16 +33,23 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
       return;
     }
 
-    onCreate({
-      title: title.trim() || cleanPrompt.slice(0, 48),
-      prompt: cleanPrompt,
-      agent,
-      executionMode
-    });
-    setTitle("");
-    setPrompt("");
-    setError("");
-    onCreated?.();
+    setSubmitting(true);
+    try {
+      await onCreate({
+        title: title.trim() || cleanPrompt.slice(0, 48),
+        prompt: cleanPrompt,
+        agent,
+        executionMode
+      });
+      setTitle("");
+      setPrompt("");
+      setError("");
+      onCreated?.();
+    } catch (createError: unknown) {
+      setError(errorMessage(createError, "Session was not created."));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -86,11 +94,15 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
       </label>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="form-actions">
-        <button className="primary-action-button" type="submit" title="Create session">
+        <button className="primary-action-button" type="submit" title="Create session" disabled={submitting}>
           <Send size={16} />
-          <span>Create session</span>
+          <span>{submitting ? "Creating session..." : "Create session"}</span>
         </button>
       </div>
     </form>
   );
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }

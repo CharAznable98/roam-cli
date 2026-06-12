@@ -165,11 +165,15 @@ describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
   let deferredFileContent: Map<string, Deferred<Response>>;
+  let failNextProjectCreate: boolean;
+  let failNextSessionCreate: boolean;
 
   beforeEach(() => {
     fetchRequests = [];
     fetchCalls = [];
     deferredFileContent = new Map();
+    failNextProjectCreate = false;
+    failNextSessionCreate = false;
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -188,6 +192,10 @@ describe("App", () => {
           return jsonResponse({ runners: [runner] });
         }
         if (requestUrl.pathname === "/v1/projects" && init?.method === "POST") {
+          if (failNextProjectCreate) {
+            failNextProjectCreate = false;
+            return jsonResponse({ error: "project_already_exists" }, 409);
+          }
           return jsonResponse({
             project: {
               ...project,
@@ -210,6 +218,10 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
+          if (failNextSessionCreate) {
+            failNextSessionCreate = false;
+            return jsonResponse({ error: "session_create_failed" }, 500);
+          }
           return jsonResponse({
             session: {
               ...session,
@@ -560,6 +572,78 @@ describe("App", () => {
     ).toBe(false);
   });
 
+  it("keeps the new session modal open with form context when creation fails", async () => {
+    failNextSessionCreate = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    const sessionDialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.change(within(sessionDialog).getByLabelText("Title"), {
+      target: { value: "Keep this title" },
+    });
+    fireEvent.change(within(sessionDialog).getByLabelText("Prompt"), {
+      target: { value: "Keep this prompt after failure" },
+    });
+    fireEvent.click(
+      within(sessionDialog).getByRole("button", { name: "Create session" }),
+    );
+
+    expect(
+      await within(sessionDialog).findByText(/session_create_failed/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "New Session - Real Project" }),
+    ).toBeInTheDocument();
+    expect(within(sessionDialog).getByLabelText("Title")).toHaveValue(
+      "Keep this title",
+    );
+    expect(within(sessionDialog).getByLabelText("Prompt")).toHaveValue(
+      "Keep this prompt after failure",
+    );
+  });
+
+  it("keeps the new project modal open with form context when creation fails", async () => {
+    failNextProjectCreate = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(sidebar.getByRole("button", { name: "New project" }));
+    const projectDialog = screen.getByRole("dialog", { name: "New Project" });
+    fireEvent.change(within(projectDialog).getByLabelText("Name"), {
+      target: { value: "Duplicate Project" },
+    });
+    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
+      target: { value: "/workspace" },
+    });
+    fireEvent.click(
+      within(projectDialog).getByRole("button", { name: "Create project" }),
+    );
+
+    expect(
+      await within(projectDialog).findByText(/project_already_exists/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "New Project" }),
+    ).toBeInTheDocument();
+    expect(within(projectDialog).getByLabelText("Name")).toHaveValue(
+      "Duplicate Project",
+    );
+    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue(
+      "/workspace",
+    );
+  });
+
   it("archives the selected project and leaves the workspace in an empty state", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
@@ -721,6 +805,52 @@ describe("App", () => {
     expect(
       screen.getAllByText("Create a project to start a session.").length,
     ).toBeGreaterThan(0);
+  });
+
+  it("closes the mobile new session modal when project selection changes", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+    });
+
+    const mobileControls = within(
+      screen.getByRole("region", { name: "Mobile project controls" }),
+    );
+    fireEvent.click(
+      mobileControls.getByRole("button", {
+        name: "New session in selected project Real Project",
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "New Session - Real Project" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(mobileControls.getByLabelText("Project"), {
+      target: { value: "project-backup" },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /New Session/ })).not.toBeInTheDocument(),
+    );
+    expect(
+      mobileControls.getByRole("button", {
+        name: "New session in selected project Backup Project",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("loads the selected session file tree and displays real file content", async () => {
