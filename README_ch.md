@@ -1,89 +1,59 @@
 # RoamCli
 
-⚠️ **警告：本仓库目前处于开发初期，暂不可用。** ⚠️
-
-> **状态**：早期开发 / 半成品 / 概念验证阶段  
-> **预计可用时间**：2026 年 Q3  
-> **当前问题**：核心功能未实现 / 可能存在严重 bug / 接口随时可能破坏性变更 / 文档不完整
-
-本项目正在积极开发中，目前仅用于代码备份和协作。**请勿在任何生产或测试环境中使用**。
-
-如果您对本项目感兴趣，可以 Watch 仓库获取更新通知。
-
-RoamCli 是一个开源的远程 AI 编码 Agent 控制平台。它通过反向 WebSocket 连接，把响应式 Web 客户端、TypeScript 中心服务端和一个或多个开发机 Runner 连接起来。
-
 英文文档见 [README.md](README.md)。
 
-## 当前包含内容
+RoamCli 是一个自托管的 Web 控制面，用来在开发机上运行 AI 编码 Agent。它通过反向 WebSocket 连接浏览器界面、中心 TypeScript Server 和一个或多个 Runner，让你可以在 Web 里创建 Agent Session、查看项目文件、接收终端输出、处理审批，并应用 patch。
 
-本仓库正在开发一个远程 Agent 控制 MVP：
+## 工作方式
 
-- Fastify 服务端：支持 Bearer Token 认证、SQLite 持久化、本地 artifact 存储、静态 Web 托管、客户端流式 WebSocket、Runner 反向 WebSocket。
-- Runner CLI：支持进程管理、PTY 降级、重连缓存、解析器回放、审批转发、审计哈希链、文件树/文件内容 RPC、安全 UTF-8 文件写入、签名 patch apply，以及 strict/standard/trusted 三种权限 profile。
-- React Web 客户端：支持桌面/平板/移动端响应式布局、Runner/Session 控制、聊天流、文件浏览、文本文件编辑、终端输入/输出、审批中心、patch review、PWA manifest 和 service worker。
-- 共享的 protocol、security、parser SDK 包，并配套测试。
-- Smoke/E2E 验证：启动真实 Server + Runner，验证 session 创建、持久化、文件读写、终端输入、错误 patch 签名拒绝、签名 patch apply。
-- Browser blackbox 验证：用 Chromium 驱动真实 Web UI，覆盖桌面、平板和移动端视口。
+RoamCli 由三个彼此独立的部分组成：
+
+- **Server**：中心控制面，提供 Web UI、HTTP API、WebSocket hub、SQLite 数据和本地 artifact 存储。
+- **Runner**：运行在开发机或任何能访问代码的机器上。Runner 会主动连接 Server，负责启动 Agent、读写 workspace 文件、转发终端输出，并应用已批准的 patch。
+- **Web UI**：由 Server 提供的浏览器界面。浏览器只需要访问 Server，不需要直接访问 Runner。
+
+Runner 使用反向 WebSocket 连接，因此运行 Runner 的机器通常只需要能出站访问 Server，不需要暴露入站端口。
 
 ## 前置条件
 
-- Node.js 24 或更新版本。smoke 脚本需要运行时提供全局 `WebSocket`。
+- Node.js 24 或更新版本。
 - pnpm 10 或更新版本。本仓库声明 `packageManager: pnpm@10.33.0`。
 - Git。
-- 可选：如需浏览器验证，安装带 Chromium 的 Playwright。
-
-如果本机没有 pnpm：
-
-```bash
-corepack enable
-corepack prepare pnpm@10.33.0 --activate
-```
+- Runner 机器上已安装可用的编码 Agent。默认 Runner 插件使用 Codex。
 
 ## 安装
 
 ```bash
 pnpm install
-```
-
-## 构建与测试
-
-```bash
-pnpm typecheck
-pnpm test
 pnpm build
-pnpm smoke:e2e
-pnpm blackbox:browser
 ```
 
-`pnpm smoke:e2e` 默认会启动自己的本地 Server 和 Runner，使用 `codex` agent 创建真实 session，并验证 MVP 主路径，不依赖 mock HTTP 响应。
+`pnpm build` 会构建 Server 相关包和 Server 可托管的 Web UI 静态资源。
 
-`pnpm blackbox:browser` 会构建应用、启动本地 Server 和 Runner、在 Chromium 中打开真实 Web UI，并验证空 Runner 状态以及桌面/平板/移动端用户路径：聊天、文件浏览/编辑/保存、终端输入、exec 审批通过/拒绝、artifact 展示、patch review/apply。默认使用隔离的临时 Runner 工作区；可以设置 `ROAMCLI_BLACKBOX_WORKSPACE` 指向指定工作区。
+## 运行 RoamCli
 
-## 本地运行
-
-启动 Server。若 `apps/web/dist` 存在，Server 会托管构建后的 Web UI。
+先启动 Server。Server 是 Web UI 和 Runner 都会连接的中心服务。
 
 ```bash
 HOST=127.0.0.1 \
 PORT=8787 \
 ROAMCLI_AUTH_TOKEN=dev-token \
 ROAMCLI_DATA_DIR=.roamcli-server \
-ROAMCLI_RUNNER_RPC_TIMEOUT_MS=10000 \
 pnpm --filter @roamcli/server dev
 ```
 
-另开一个 shell，启动 Runner，并把当前仓库暴露为工作区：
+另开一个 shell，在你希望暴露为 Runner workspace 的目录下启动 Runner：
 
 ```bash
 pnpm --filter @roamcli/runner dev \
   --server ws://127.0.0.1:8787/v1/runner \
   --token dev-token \
-  --runner-id local-real \
+  --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted
 ```
 
-打开：
+打开 Web UI：
 
 ```text
 http://127.0.0.1:8787
@@ -91,136 +61,82 @@ http://127.0.0.1:8787
 
 如果 Web UI 的 token 输入框没有自动填充，请输入 `dev-token`。
 
-## 创建 Session
+## 使用 RoamCli
 
-1. 确认左侧边栏中能看到 Runner。
-2. 创建新 session 时选择 `codex` agent。其他 agent 后续可通过安装 Runner agent 插件接入。
-3. 将工作目录设置为 Runner workspace 内部的路径。
-4. 使用 Files 面板浏览和编辑 UTF-8 文本文件。
-5. 使用 Terminal 面板向当前 session 发送输入。
-6. 使用 Approvals 面板通过/拒绝 exec 请求，并应用已签名 patch。
+1. 确认 Runner 已在线。
+2. 创建 Project，选择 Runner，并填写该 Runner 视角下的项目目录。
+3. 在 Project 下创建 Session。
+4. 在 Chat 面板向 Agent 发送提示。
+5. 在 Files 面板浏览和编辑 Session 目录内的 UTF-8 文本文件。
+6. 在 Terminal 面板向当前 Session 发送输入。
+7. 在 Approvals 面板处理批准或拒绝请求，并应用已接受的 patch。
 
-## Runner CLI 参数
+## Server 配置
 
-```text
---server      Server websocket URL。http/https 会转换为 ws/wss。
---token       WebSocket 注册和 patch 签名校验使用的 Bearer token。
---profile     权限 profile：strict、standard、trusted。默认：standard。
---runner-id   稳定 Runner id。默认：hostname 加 UUID。
---workspace   暴露给 session 的工作区根目录。默认：cwd。
-```
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `HOST` | Server 绑定地址。 | `127.0.0.1` |
+| `PORT` | Server 绑定端口。 | `3000` |
+| `ROAMCLI_AUTH_TOKEN` | HTTP 和 WebSocket 访问使用的 Bearer token。 | 未设置 |
+| `ROAMCLI_DATA_DIR` | SQLite 数据和本地 artifacts 目录。 | `.roamcli-server` |
+| `ROAMCLI_WEB_DIST` | 构建后的 Web UI 资源路径。 | 自动查找 `apps/web/dist` 或 `../web/dist` |
 
-等价环境变量：
+## Runner 配置
 
-```text
-ROAM_RUNNER_SERVER
-ROAM_RUNNER_TOKEN
-ROAM_RUNNER_PROFILE
-ROAM_RUNNER_ID
-ROAM_RUNNER_WORKSPACE
-```
+| CLI 参数 | 环境变量 | 说明 |
+| --- | --- | --- |
+| `--server` | `ROAM_RUNNER_SERVER` | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。 |
+| `--token` | `ROAM_RUNNER_TOKEN` | 连接 Server 时使用的 Bearer token。 |
+| `--runner-id` | `ROAM_RUNNER_ID` | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。 |
+| `--workspace` | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。 |
+| `--profile` | `ROAM_RUNNER_PROFILE` | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。 |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 要加载的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。 |
 
-Runner 会在启动时加载 agent 插件。默认加载 `@roamcli/agent-codex`。
+## Agent 插件
 
-```text
-ROAMCLI_AGENT_PLUGINS
---agent-plugin <package>
-```
+Runner 默认加载 Codex agent 插件。你可以通过 `--agent-plugin` 或 `ROAMCLI_AGENT_PLUGINS` 加载其他 Agent 插件。
 
-每类 agent 的命令和参数可通过环境变量覆盖：
+Codex 命令和参数可以通过以下环境变量覆盖：
 
 ```text
 ROAMCLI_AGENT_CODEX_COMMAND
 ROAMCLI_AGENT_CODEX_ARGS
-ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_COMMAND
-ROAMCLI_AGENT_<SANITIZED_AGENT_ID>_ARGS
 ```
 
-`*_ARGS` 支持类 shell 字符串，也支持 JSON 字符串数组。
-
-## Server 环境变量
-
-```text
-HOST                         绑定 host。默认：127.0.0.1。
-PORT                         绑定端口。默认：3000。
-ROAMCLI_AUTH_TOKEN           HTTP 和 WebSocket 认证使用的 Bearer token。
-ROAMCLI_APPROVAL_SECRET      审批和 patch apply 的 HMAC secret。默认使用 auth token。
-ROAMCLI_DATA_DIR             SQLite/artifact 数据目录。默认：.roamcli-server。
-ROAMCLI_WEB_DIST             构建后 Web 资源路径。存在时默认 apps/web/dist 或 ../web/dist。
-ROAMCLI_RUNNER_RPC_TIMEOUT_MS Runner RPC 超时时间。默认：5000。
-```
-
-## Smoke/E2E 选项
-
-```text
-ROAMCLI_SMOKE_BASE_URL            连接已有 server，而不是启动新 server。
-ROAMCLI_SMOKE_TOKEN               Bearer token。默认：dev-token。
-ROAMCLI_SMOKE_RUNNER_ID           要使用或启动的 Runner id。默认：smoke-<pid>。
-ROAMCLI_SMOKE_WORKSPACE           暴露给 Runner 的工作区。默认：仓库根目录。
-ROAMCLI_SMOKE_SKIP_BUILD=1        跳过 protocol/security 预构建。
-ROAMCLI_SMOKE_TIMEOUT_MS          单步超时时间。默认：30000。
-ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0 跳过 patch apply 断言。
-```
-
-## 浏览器验证
-
-如果 Chromium 尚未安装，先安装 Playwright 浏览器：
-
-```bash
-pnpm exec playwright install chromium
-```
-
-先运行常规验证：
-
-```bash
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm smoke:e2e
-pnpm blackbox:browser
-```
-
-如果需要手动检查应用，再按上文启动 Server + Runner。
-
-`pnpm blackbox:browser` 支持：
-
-```text
-ROAMCLI_BLACKBOX_BASE_URL       连接已有 server，而不是启动新 server。
-ROAMCLI_BLACKBOX_TOKEN          Bearer token。默认：dev-token。
-ROAMCLI_BLACKBOX_RUNNER_ID      要使用或启动的 Runner id。默认：blackbox-<pid>。
-ROAMCLI_BLACKBOX_WORKSPACE      暴露给 Runner 的工作区。默认：临时隔离工作区。
-ROAMCLI_BLACKBOX_TIMEOUT_MS     单步超时时间。默认：45000。
-ROAMCLI_BLACKBOX_HEADFUL=1      测试时显示 Chromium。
-```
+`ROAMCLI_AGENT_CODEX_ARGS` 支持类 shell 字符串，也支持 JSON 字符串数组。
 
 ## Docker Compose
 
-启动 compose 前先构建 Web UI：
+Docker Compose 只会启动 Server。你仍然需要单独启动一个或多个 Runner，并让它们连接到 Server。
 
 ```bash
-pnpm install
-pnpm build
 docker compose up --build
 ```
 
-compose 配置面向本地部署基线。公开暴露前应补充 HTTPS、反向代理、持久化 volume、备份和认证加固。
+compose 配置会把 Server 暴露在 `8787` 端口，并把 Server 数据持久化到 `roamcli-data` volume。
+
+连接 compose Server 的 Runner 示例：
+
+```bash
+pnpm --filter @roamcli/runner dev \
+  --server ws://127.0.0.1:8787/v1/runner \
+  --token dev-token \
+  --runner-id local-dev \
+  --workspace "$PWD" \
+  --profile trusted
+```
 
 ## 仓库结构
 
 ```text
 apps/server       Fastify API、WebSocket hub、持久化、artifacts、静态 Web 托管。
-apps/runner       Runner CLI、进程适配器、文件 RPC、patch apply、审计/缓存。
-apps/web          React 客户端。
+apps/runner       Runner CLI、Agent 进程管理、workspace 文件操作。
+apps/web          React 浏览器客户端。
 packages/protocol 共享 Zod schema 和 TypeScript 类型。
-packages/security 加密、签名、哈希和审计工具。
-packages/parser-sdk Agent parser SDK 和 fixture replay 测试。
-scripts           Smoke/E2E 和 browser blackbox runner。
-docs              PRD 状态和任务跟踪。
+packages/security 签名、哈希、加密辅助函数和审计辅助函数。
+packages/agent-*  Agent 插件 SDK 和内置 Codex 插件。
 ```
 
-## 说明
+## 许可证
 
-- 运行时状态位于 `.roamcli-server/` 和 `.roam-runner/`，它们已被 Git 忽略。
-- 构建产物、Playwright 截图、测试报告、数据库和日志已被 Git 忽略。
-- 当前 MVP 使用 Bearer token/HMAC 签名。Runner 侧 patch apply 会重新校验签名；生产部署仍应补充 secret 隔离、重放窗口、HTTPS、OIDC 或更强认证，以及审计导出。
-- 本项目使用 EESPL 2.0 许可证。见 [LICENSE](LICENSE)。
+RoamCli 使用 EESPL 2.0 许可证。见 [LICENSE](LICENSE)。
