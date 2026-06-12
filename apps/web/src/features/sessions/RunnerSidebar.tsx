@@ -125,7 +125,7 @@ function ProjectForm({
   };
 
   return (
-    <form className="new-session-form" onSubmit={submit}>
+    <form className="sidebar-project-form" onSubmit={submit}>
       <div className="flex items-center justify-between">
         <h2 className="panel-title">New Project</h2>
         <button className="primary-icon-button" type="submit" aria-label="Create project" title="Create project">
