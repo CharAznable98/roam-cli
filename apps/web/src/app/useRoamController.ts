@@ -141,39 +141,65 @@ export function useRoamController() {
     });
   };
 
-  const createProject = (values: {
+  const createProject = async (values: {
     name: string;
     runnerId: string;
     directory: string;
   }) => {
+    if (!apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const project = await apiRef.current.createProject(values);
+      dispatch({ type: "projectCreated", project });
+    } catch (createError: unknown) {
+      const message = errorMessage(createError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
+  };
+
+  const archiveProject = (projectId: string) => {
     if (!apiRef.current) return;
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    if (
+      !window.confirm(
+        `Archive project "${project.name}"? Sessions stay recoverable and project files are not deleted.`,
+      )
+    ) {
+      return;
+    }
     void apiRef.current
-      .createProject(values)
-      .then((project) => dispatch({ type: "projectCreated", project }))
-      .catch((createError: unknown) =>
+      .archiveProject(projectId)
+      .then((archivedProject) =>
+        dispatch({ type: "projectUpdated", project: archivedProject }),
+      )
+      .catch((archiveError: unknown) =>
         dispatch({
           type: "errorChanged",
-          message: errorMessage(createError),
+          message: errorMessage(archiveError),
         }),
       );
   };
 
-  const createSession = (values: {
+  const createSession = async (projectId: string, values: {
     title: string;
     prompt: string;
     agent: AgentKind;
     executionMode: ExecutionMode;
   }) => {
-    if (!selectedProject || !apiRef.current) return;
-    void apiRef.current
-      .createSession({ projectId: selectedProject.id, ...values })
-      .then((session) => dispatch({ type: "sessionCreated", session }))
-      .catch((createError: unknown) =>
-        dispatch({
-          type: "errorChanged",
-          message: errorMessage(createError),
-        }),
-      );
+    if (!projectId || !apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const session = await apiRef.current.createSession({ projectId, ...values });
+      dispatch({ type: "sessionCreated", session });
+    } catch (createError: unknown) {
+      const message = errorMessage(createError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
   };
 
   const sendMessage = (content: string) => {
@@ -380,6 +406,7 @@ export function useRoamController() {
     selectRunner,
     selectProject,
     createProject,
+    archiveProject,
     createSession,
     sendMessage,
     resolveApproval,

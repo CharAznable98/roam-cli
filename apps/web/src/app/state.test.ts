@@ -95,6 +95,54 @@ describe("app reducer", () => {
     expect(next.terminalLines).toEqual({});
   });
 
+  it("clears the current selection when the selected project is archived", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        projects: [makeProject("project-1"), makeProject("project-2")],
+        sessions: [
+          makeSession("session-1", "project-1"),
+          makeSession("session-2", "project-2"),
+        ],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "projectUpdated",
+        project: {
+          ...makeProject("project-1"),
+          archivedAt: "2026-06-05T01:00:00.000Z",
+        },
+      },
+    );
+
+    expect(next.projects.map((project) => project.id)).toEqual(["project-2"]);
+    expect(next.selectedProjectId).toBe("");
+    expect(next.selectedSessionId).toBe("");
+  });
+
+  it("does not auto-select another project when an archive event is replayed", () => {
+    const state: AppState = {
+      ...initialAppState,
+      projects: [makeProject("project-2")],
+      sessions: [makeSession("session-2", "project-2")],
+      selectedProjectId: "",
+      selectedSessionId: "",
+    };
+
+    const next = appReducer(state, {
+      type: "projectUpdated",
+      project: {
+        ...makeProject("project-1"),
+        archivedAt: "2026-06-05T01:00:00.000Z",
+      },
+    });
+
+    expect(next.projects.map((project) => project.id)).toEqual(["project-2"]);
+    expect(next.selectedProjectId).toBe("");
+    expect(next.selectedSessionId).toBe("");
+  });
+
   it("updates selected file content only for the active session and path", () => {
     const event: ServerEvent = {
       type: "file:content",

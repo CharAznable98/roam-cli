@@ -475,15 +475,14 @@ function updateProjectState(state: AppState, project: Project): AppState {
     ? state.projects.filter((item) => item.id !== project.id)
     : upsertBy(state.projects, project, (item) => item.id);
   const selectedProjectId =
-    state.selectedProjectId === project.id && project.archivedAt
-      ? projects[0]?.id ?? ""
+    project.archivedAt
+      ? state.selectedProjectId === project.id
+        ? ""
+        : state.selectedProjectId
       : state.selectedProjectId || projects[0]?.id || "";
-  const projectSessions = state.sessions.filter(
-    (session) => session.projectId === selectedProjectId && !session.archivedAt,
-  );
   const selectedSessionId =
     state.selectedProjectId === project.id && project.archivedAt
-      ? projectSessions[0]?.id ?? ""
+      ? ""
       : state.selectedSessionId;
   return {
     ...state,

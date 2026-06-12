@@ -120,6 +120,14 @@ function registerProjectRoutes(app: FastifyInstance, context: AppContext): void 
     if (!runner) {
       return reply.code(404).send({ error: "runner_not_found" });
     }
+    const duplicateProject = context.store.listProjects().find(
+      (project) =>
+        project.runnerId === parsed.data.runnerId &&
+        project.directory === parsed.data.directory,
+    );
+    if (duplicateProject) {
+      return reply.code(409).send({ error: "project_already_exists" });
+    }
     try {
       await context.services.workspace.validateRunnerDirectory(
         parsed.data.runnerId,

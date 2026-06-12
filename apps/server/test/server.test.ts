@@ -118,6 +118,32 @@ describe("server", () => {
     runner.close();
   });
 
+  it("rejects duplicate active projects for the same runner directory", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+    createTestProject(app);
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: "Duplicate Project",
+        runnerId: "runner-1",
+        directory: "/workspace",
+      },
+    });
+
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toEqual({ error: "project_already_exists" });
+    expect(app.roam.store.listProjects()).toHaveLength(1);
+
+    runner.close();
+  });
+
   it("archives and restores a project together with its sessions", async () => {
     createTestProject(app);
     const now = new Date().toISOString();

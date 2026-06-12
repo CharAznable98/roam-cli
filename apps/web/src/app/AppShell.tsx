@@ -3,8 +3,15 @@ import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import { FilePanel } from "../features/files/FilePanel";
 import { PushSettings } from "../features/pwa/PushSettings";
-import { RunnerSidebar } from "../features/sessions/RunnerSidebar";
+import { FolderPlus, Plus, Trash2 } from "lucide-react";
+import { NewSessionForm } from "../features/sessions/NewSessionForm";
+import {
+  ProjectForm,
+  RunnerSidebar,
+  SidebarModal,
+} from "../features/sessions/RunnerSidebar";
 import { TerminalPanel } from "../features/terminal/TerminalPanel";
+import { useEffect, useMemo, useState } from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { useRoamController } from "./useRoamController";
@@ -14,6 +21,8 @@ type AppShellProps = {
 };
 
 export function AppShell({ controller }: AppShellProps) {
+  const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
+  const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
   const {
     state,
     token,
@@ -32,6 +41,7 @@ export function AppShell({ controller }: AppShellProps) {
     runnerCommand,
     selectProject,
     createProject,
+    archiveProject,
     createSession,
     sendMessage,
     resolveApproval,
@@ -48,6 +58,14 @@ export function AppShell({ controller }: AppShellProps) {
     dispatch({ type: "activeTabChanged", tab });
   const setSelectedSessionId = (sessionId: string) =>
     dispatch({ type: "sessionSelected", sessionId });
+  const activeProjects = useMemo(
+    () => state.projects.filter((project) => !project.archivedAt),
+    [state.projects],
+  );
+
+  useEffect(() => {
+    setMobileSessionModalOpen(false);
+  }, [selectedProject?.id]);
 
   return (
     <div className={`app-shell active-${state.activeTab}`}>
@@ -120,32 +138,82 @@ export function AppShell({ controller }: AppShellProps) {
             className="mobile-controls"
             aria-label="Mobile project controls"
           >
-            <label>
-              <span>Project</span>
-              <select
-                value={selectedProject?.id ?? ""}
-                onChange={(event) => selectProject(event.target.value)}
-              >
-                {state.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedProject ? <label>
-              <span>Session</span>
-              <select
-                value={selectedSession?.id ?? ""}
-                onChange={(event) => setSelectedSessionId(event.target.value)}
-              >
-                {runnerSessions.map((session) => (
-                  <option key={session.id} value={session.id}>
-                    {session.title}
-                  </option>
-                ))}
-              </select>
-            </label> : null}
+            <div className="mobile-control-row">
+              <label>
+                <span>Project</span>
+                <select
+                  value={selectedProject?.id ?? ""}
+                  onChange={(event) => selectProject(event.target.value)}
+                >
+                  {!selectedProject ? (
+                    <option value="">
+                      {activeProjects.length === 0
+                        ? "No projects"
+                        : "No project selected"}
+                    </option>
+                  ) : null}
+                  {activeProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="mobile-control-actions">
+                <button
+                  className="primary-icon-button"
+                  type="button"
+                  aria-label="New project"
+                  title="New project"
+                  onClick={() => setMobileProjectModalOpen(true)}
+                >
+                  <FolderPlus size={16} />
+                </button>
+                {selectedProject ? (
+                  <button
+                    className="mobile-icon-button danger"
+                    type="button"
+                    aria-label={`Archive selected project ${selectedProject.name}`}
+                    title="Archive project"
+                    onClick={() => archiveProject(selectedProject.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="mobile-control-row">
+              <label>
+                <span>Session</span>
+                <select
+                  value={selectedSession?.id ?? ""}
+                  disabled={!selectedProject || runnerSessions.length === 0}
+                  onChange={(event) => setSelectedSessionId(event.target.value)}
+                >
+                  {!selectedProject || runnerSessions.length === 0 ? (
+                    <option value="">No sessions</option>
+                  ) : null}
+                  {runnerSessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="mobile-control-actions">
+                {selectedProject ? (
+                  <button
+                    className="primary-icon-button"
+                    type="button"
+                    aria-label={`New session in selected project ${selectedProject.name}`}
+                    title="New session"
+                    onClick={() => setMobileSessionModalOpen(true)}
+                  >
+                    <Plus size={16} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </section>
 
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
@@ -169,6 +237,7 @@ export function AppShell({ controller }: AppShellProps) {
               onSelectProject={selectProject}
               onSelectSession={setSelectedSessionId}
               onCreateProject={createProject}
+              onArchiveProject={archiveProject}
               onCreateSession={createSession}
             />
             {selectedSession ? (
@@ -249,6 +318,39 @@ export function AppShell({ controller }: AppShellProps) {
           </main>
 
           <BottomTabs activeTab={state.activeTab} onChange={setActiveTab} />
+
+          {mobileProjectModalOpen ? (
+            <SidebarModal
+              title="New Project"
+              onClose={() => setMobileProjectModalOpen(false)}
+            >
+              <ProjectForm
+                runners={state.runners}
+                onCreate={createProject}
+                onCreated={() => setMobileProjectModalOpen(false)}
+              />
+            </SidebarModal>
+          ) : null}
+
+          {mobileSessionModalOpen && selectedProject ? (
+            <SidebarModal
+              title={`New Session - ${selectedProject.name}`}
+              onClose={() => setMobileSessionModalOpen(false)}
+            >
+              {selectedRunner ? (
+                <NewSessionForm
+                  project={selectedProject}
+                  runner={selectedRunner}
+                  onCreate={(values) => createSession(selectedProject.id, values)}
+                  onCreated={() => setMobileSessionModalOpen(false)}
+                />
+              ) : (
+                <div className="empty-state compact">
+                  The project runner is offline.
+                </div>
+              )}
+            </SidebarModal>
+          ) : null}
         </>
       ) : null}
     </div>

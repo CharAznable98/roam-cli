@@ -118,8 +118,11 @@ async function runSmoke() {
     const runner = await ensureRunnerOnline();
     pass(`runner online: ${runner.runnerId}`);
 
+    const project = await createProject(runner.runnerId);
+    pass(`project created: ${project.id}`);
+
     const prompt = `roamcli smoke prompt ${Date.now()}`;
-    const session = await createSession(runner.runnerId, prompt);
+    const session = await createSession(project.id, prompt);
     pass(`session created: ${session.id}`);
 
     await waitForPersistedAssistantMessage(session.id, prompt);
@@ -234,13 +237,28 @@ async function ensureRunnerOnline() {
   }, `runner ${runnerId} to come online`);
 }
 
-async function createSession(activeRunnerId, prompt) {
+async function createProject(activeRunnerId) {
+  const payload = await requestJson("/v1/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Smoke Project ${process.pid}`,
+      runnerId: activeRunnerId,
+      directory: workspace,
+    }),
+  });
+  assert(
+    payload.project?.id,
+    "create project response did not include project.id",
+  );
+  return payload.project;
+}
+
+async function createSession(projectId, prompt) {
   const payload = await requestJson("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
-      runnerId: activeRunnerId,
+      projectId,
       agent: "codex",
-      cwd: workspace,
       prompt,
       title: "Smoke E2E",
     }),
