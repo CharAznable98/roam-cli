@@ -4,10 +4,9 @@ export function getSelectedProject(
   projects: Project[],
   selectedProjectId: string,
 ): Project | undefined {
-  return (
-    projects.find((project) => project.id === selectedProjectId) ??
-    projects[0]
-  );
+  return selectedProjectId
+    ? projects.find((project) => project.id === selectedProjectId)
+    : undefined;
 }
 
 export function getSelectedRunner(

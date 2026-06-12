@@ -180,6 +180,7 @@ async function runUserJourney(browser, scenario) {
     });
     if (!scenario.mobile) {
       await expectText(page, projectName);
+      await assertProjectTreeStartsCollapsed(page, projectName);
     }
     pass(`${scenario.name}: project created`);
 
@@ -188,6 +189,7 @@ async function runUserJourney(browser, scenario) {
       prompt: `blackbox prompt ${scenario.name} ${Date.now()}`,
       executionMode,
       projectId: project.id,
+      projectName: project.name,
     });
     await expectText(page, `Blackbox ${scenario.name}`);
     await captureScreenshot(page, scenario, "session-created");
@@ -462,73 +464,133 @@ async function assertMarkdownRendering(page, scenario, sessionId) {
   );
 }
 
+async function assertProjectTreeStartsCollapsed(page, projectName) {
+  const group = page.getByRole("group", { name: `${projectName} sessions` });
+  const initialGroups = await group.count();
+  if (initialGroups !== 0) {
+    throw new Error(`project ${projectName} session branch was expanded by default`);
+  }
+
+  await page
+    .getByRole("button", { name: `Expand project ${projectName}` })
+    .click();
+  await group.waitFor();
+  await expectText(page, "No sessions");
+  await page
+    .getByRole("button", { name: `Collapse project ${projectName}` })
+    .click();
+  await waitFor(
+    async () => (await group.count()) === 0,
+    `project ${projectName} session branch to collapse`,
+  );
+}
+
 async function createProjectFromUi(page, scenario, values) {
   if (scenario.mobile) {
-    const created = await requestJson("/v1/projects", {
-      method: "POST",
-      body: JSON.stringify({
-        name: values.name,
-        runnerId,
-        directory: values.directory,
-      }),
+    const controls = page.getByRole("region", {
+      name: "Mobile project controls",
     });
-    const project = created.project;
-    await page
-      .getByRole("region", { name: "Mobile project controls" })
-      .getByLabel("Project")
-      .selectOption(project.id);
+    await controls.getByRole("button", { name: "New project" }).click();
+    const dialog = page.getByRole("dialog", { name: "New Project" });
+    await dialog.waitFor();
+    await dialog
+      .locator('input[placeholder="Optional project name"]')
+      .fill(values.name);
+    await dialog
+      .locator("label.field", { hasText: "Directory" })
+      .locator("input")
+      .fill(values.directory);
+    await dialog.getByRole("button", { name: "Create project" }).click();
+    const project = await waitFor(async () => {
+      const payload = await requestJson("/v1/projects");
+      return payload.projects?.find((project) => project.name === values.name);
+    }, `project ${values.name} to be persisted`);
+    await waitFor(
+      async () => (await controls.locator("select").first().inputValue()) === project.id,
+      `mobile project selector to select ${values.name}`,
+    );
     return project;
   }
 
-  const form = page.locator("form", { hasText: "New Project" }).filter({
-    has: page.getByRole("button", { name: "Create project" }),
-  });
-  await form.locator('input[placeholder="Optional project name"]').fill(values.name);
-  await form
+  await page.getByRole("button", { name: "New project" }).click();
+  const dialog = page.getByRole("dialog", { name: "New Project" });
+  await dialog.waitFor();
+  await dialog.locator('input[placeholder="Optional project name"]').fill(values.name);
+  await dialog
     .locator("label.field", { hasText: "Directory" })
     .locator("input")
     .fill(values.directory);
-  await form.getByRole("button", { name: "Create project" }).click();
-  return waitFor(async () => {
+  await dialog.getByRole("button", { name: "Create project" }).click();
+  const project = await waitFor(async () => {
     const payload = await requestJson("/v1/projects");
     return payload.projects?.find((project) => project.name === values.name);
   }, `project ${values.name} to be persisted`);
+  await waitFor(
+    () => hasVisibleText(page, values.name),
+    `project ${values.name} to render in tree`,
+  );
+  return project;
 }
 
 async function createSessionFromUi(page, scenario, values) {
   if (scenario.mobile) {
-    const created = await requestJson("/v1/sessions", {
-      method: "POST",
-      body: JSON.stringify({
-        projectId: values.projectId,
-        title: values.title,
-        prompt: values.prompt,
-        agent: "codex",
-        executionMode: values.executionMode,
-      }),
+    const controls = page.getByRole("region", {
+      name: "Mobile project controls",
     });
-    const session = created.session;
-    await page
-      .getByRole("region", { name: "Mobile project controls" })
-      .getByLabel("Session")
-      .selectOption(session.id);
+    await controls
+      .getByRole("button", {
+        name: `New session in selected project ${values.projectName}`,
+      })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: `New Session - ${values.projectName}`,
+    });
+    await dialog.waitFor();
+    await dialog
+      .locator('input[placeholder="Optional task name"]')
+      .fill(values.title);
+    await dialog
+      .locator("label.field:visible", { hasText: "Execution" })
+      .locator("select")
+      .selectOption(values.executionMode);
+    await dialog
+      .locator('textarea[placeholder="Describe the work"]')
+      .fill(values.prompt);
+    await dialog.getByRole("button", { name: "Create session" }).click();
     await expectText(page, values.prompt);
+    const session = await waitFor(async () => {
+      const payload = await requestJson("/v1/sessions");
+      return payload.sessions?.find(
+        (session) =>
+          session.runnerId === runnerId &&
+          session.projectId === values.projectId &&
+          session.title === values.title,
+      );
+    }, `session ${values.title} to be persisted`);
+    await waitFor(
+      async () => (await controls.locator("select").nth(1).inputValue()) === session.id,
+      `mobile session selector to select ${values.title}`,
+    );
     return session;
   }
-  const form = page.locator("form", { hasText: "New Session" }).filter({
-    has: page.getByRole("button", { name: "Create session" }),
+  await page
+    .getByRole("button", { name: `New session in ${values.projectName}` })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: `New Session - ${values.projectName}`,
   });
-  await form.locator('input[placeholder="Optional task name"]').fill(values.title);
-  await form
+  await dialog.waitFor();
+  await dialog.locator('input[placeholder="Optional task name"]').fill(values.title);
+  await dialog
     .locator("label.field:visible", { hasText: "Agent" })
     .locator("select")
     .selectOption("codex");
-  await form
+  await dialog
     .locator("label.field:visible", { hasText: "Execution" })
     .locator("select")
     .selectOption(values.executionMode);
-  await form.locator('textarea[placeholder="Describe the work"]').fill(values.prompt);
-  await form.getByRole("button", { name: "Create session" }).click();
+  await dialog.locator('textarea[placeholder="Describe the work"]').fill(values.prompt);
+  await dialog.getByRole("button", { name: "Create session" }).click();
   await expectText(page, values.prompt);
   return waitFor(async () => {
     const payload = await requestJson("/v1/sessions");

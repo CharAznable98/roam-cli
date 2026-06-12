@@ -2,15 +2,24 @@ import type { AgentKind, ExecutionMode, Project, RunnerCapability, RunnerRegistr
 import { Send } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
+export type NewSessionValues = {
+  title: string;
+  prompt: string;
+  agent: AgentKind;
+  executionMode: ExecutionMode;
+};
+
 type NewSessionFormProps = {
   project: Project;
   runner: RunnerRegistration;
-  onCreate: (values: { title: string; prompt: string; agent: AgentKind; executionMode: ExecutionMode }) => void;
+  onCreate: (values: NewSessionValues) => void;
+  onCreated?: () => void;
 };
 
-export function NewSessionForm({ project, runner, onCreate }: NewSessionFormProps) {
+export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [error, setError] = useState("");
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
   const agentOptions = useMemo(() => runner.capabilities.map((capability: RunnerCapability) => capability.kind), [runner.capabilities]);
   const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
@@ -19,6 +28,7 @@ export function NewSessionForm({ project, runner, onCreate }: NewSessionFormProp
     event.preventDefault();
     const cleanPrompt = prompt.trim();
     if (!cleanPrompt) {
+      setError("Prompt is required.");
       return;
     }
 
@@ -30,16 +40,12 @@ export function NewSessionForm({ project, runner, onCreate }: NewSessionFormProp
     });
     setTitle("");
     setPrompt("");
+    setError("");
+    onCreated?.();
   };
 
   return (
     <form className="new-session-form" onSubmit={submit}>
-      <div className="flex items-center justify-between">
-        <h2 className="panel-title">New Session</h2>
-        <button className="primary-icon-button" type="submit" aria-label="Create session" title="Create session">
-          <Send size={16} />
-        </button>
-      </div>
       <label className="field">
         <span>Title</span>
         <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Optional task name" />
@@ -67,8 +73,24 @@ export function NewSessionForm({ project, runner, onCreate }: NewSessionFormProp
       </label>
       <label className="field">
         <span>Prompt</span>
-        <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} placeholder="Describe the work" />
+        <textarea
+          value={prompt}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => {
+            setPrompt(event.target.value);
+            setError("");
+          }}
+          rows={4}
+          placeholder="Describe the work"
+        />
       </label>
+      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      <div className="form-actions">
+        <button className="primary-action-button" type="submit" title="Create session">
+          <Send size={16} />
+          <span>Create session</span>
+        </button>
+      </div>
     </form>
   );
 }

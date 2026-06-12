@@ -158,15 +158,39 @@ export function useRoamController() {
       );
   };
 
-  const createSession = (values: {
+  const archiveProject = (projectId: string) => {
+    if (!apiRef.current) return;
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    if (
+      !window.confirm(
+        `Archive project "${project.name}"? Sessions stay recoverable and project files are not deleted.`,
+      )
+    ) {
+      return;
+    }
+    void apiRef.current
+      .archiveProject(projectId)
+      .then((archivedProject) =>
+        dispatch({ type: "projectUpdated", project: archivedProject }),
+      )
+      .catch((archiveError: unknown) =>
+        dispatch({
+          type: "errorChanged",
+          message: errorMessage(archiveError),
+        }),
+      );
+  };
+
+  const createSession = (projectId: string, values: {
     title: string;
     prompt: string;
     agent: AgentKind;
     executionMode: ExecutionMode;
   }) => {
-    if (!selectedProject || !apiRef.current) return;
+    if (!projectId || !apiRef.current) return;
     void apiRef.current
-      .createSession({ projectId: selectedProject.id, ...values })
+      .createSession({ projectId, ...values })
       .then((session) => dispatch({ type: "sessionCreated", session }))
       .catch((createError: unknown) =>
         dispatch({
@@ -380,6 +404,7 @@ export function useRoamController() {
     selectRunner,
     selectProject,
     createProject,
+    archiveProject,
     createSession,
     sendMessage,
     resolveApproval,

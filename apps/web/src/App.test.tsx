@@ -187,8 +187,37 @@ describe("App", () => {
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [runner] });
         }
+        if (requestUrl.pathname === "/v1/projects" && init?.method === "POST") {
+          return jsonResponse({
+            project: {
+              ...project,
+              id: "project-created",
+              name: "Created Project",
+              directory: "/workspace/created",
+            },
+          });
+        }
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({ projects: [project] });
+        }
+        if (requestUrl.pathname === "/v1/projects/project-1/archive") {
+          return jsonResponse({
+            project: {
+              ...project,
+              archivedAt: "2026-06-05T01:00:00.000Z",
+              updatedAt: "2026-06-05T01:00:00.000Z",
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
+          return jsonResponse({
+            session: {
+              ...session,
+              id: "session-created",
+              title: "Created session",
+              status: "pending",
+            },
+          });
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({ sessions: [session] });
@@ -301,7 +330,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findAllByText("Real Project")).toHaveLength(2);
-    expect(screen.getByText("Real Runner")).toBeInTheDocument();
+    expect(screen.getByTitle("Real Runner runner")).toBeInTheDocument();
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getAllByText("执行中").length).toBeGreaterThan(0);
@@ -427,6 +456,271 @@ describe("App", () => {
     expect(
       mobileTabs.getByRole("button", { name: "审批" }),
     ).toBeInTheDocument();
+  });
+
+  it("uses a collapsed project tree with modal create actions", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    expect(
+      sidebar.queryByRole("group", { name: "Real Project sessions" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "Expand project Real Project" }),
+    );
+    expect(
+      sidebar.getByRole("group", { name: "Real Project sessions" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "Collapse project Real Project" }),
+    );
+    expect(
+      sidebar.queryByRole("group", { name: "Real Project sessions" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    expect(within(dialog).getByDisplayValue("/workspace")).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText("Prompt"), {
+      target: { value: "Run the focused task" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create session" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (
+            !call.url.endsWith("/v1/sessions") ||
+            call.init?.method !== "POST"
+          ) {
+            return false;
+          }
+          return JSON.parse(String(call.init.body)).projectId === "project-1";
+        }),
+      ).toBe(true),
+    );
+    expect(
+      sidebar.getByRole("group", { name: "Real Project sessions" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows inline validation for empty modal submissions", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    const sessionDialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.click(
+      within(sessionDialog).getByRole("button", { name: "Create session" }),
+    );
+    expect(
+      within(sessionDialog).getByRole("alert"),
+    ).toHaveTextContent("Prompt is required.");
+    expect(
+      fetchCalls.some(
+        (call) =>
+          call.url.endsWith("/v1/sessions") && call.init?.method === "POST",
+      ),
+    ).toBe(false);
+    fireEvent.click(
+      within(sessionDialog).getByRole("button", { name: "Close modal" }),
+    );
+
+    fireEvent.click(sidebar.getByRole("button", { name: "New project" }));
+    const projectDialog = screen.getByRole("dialog", { name: "New Project" });
+    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
+      target: { value: "" },
+    });
+    fireEvent.click(
+      within(projectDialog).getByRole("button", { name: "Create project" }),
+    );
+    expect(
+      within(projectDialog).getByRole("alert"),
+    ).toHaveTextContent("Directory is required.");
+    expect(
+      fetchCalls.some(
+        (call) =>
+          call.url.endsWith("/v1/projects") && call.init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("archives the selected project and leaves the workspace in an empty state", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "Archive project Real Project" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            call.url.endsWith("/v1/projects/project-1/archive") &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Archive project "Real Project"? Sessions stay recoverable and project files are not deleted.',
+    );
+    expect(
+      screen.getAllByText("Create a project to start a session.").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("supports mobile modal create actions and selected project archive", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const mobileControls = within(
+      screen.getByRole("region", { name: "Mobile project controls" }),
+    );
+
+    fireEvent.click(
+      mobileControls.getByRole("button", {
+        name: "New session in selected project Real Project",
+      }),
+    );
+    const sessionDialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.change(within(sessionDialog).getByLabelText("Prompt"), {
+      target: { value: "Run from the mobile controls" },
+    });
+    fireEvent.click(
+      within(sessionDialog).getByRole("button", { name: "Create session" }),
+    );
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (
+            !call.url.endsWith("/v1/sessions") ||
+            call.init?.method !== "POST"
+          ) {
+            return false;
+          }
+          return JSON.parse(String(call.init.body)).projectId === "project-1";
+        }),
+      ).toBe(true),
+    );
+
+    fireEvent.click(
+      mobileControls.getByRole("button", {
+        name: "Archive selected project Real Project",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            call.url.endsWith("/v1/projects/project-1/archive") &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByLabelText("Project")).toHaveValue("");
+
+    fireEvent.click(mobileControls.getByRole("button", { name: "New project" }));
+    const projectDialog = screen.getByRole("dialog", { name: "New Project" });
+    fireEvent.change(within(projectDialog).getByLabelText("Name"), {
+      target: { value: "Mobile Project" },
+    });
+    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
+      target: { value: "/workspace/mobile" },
+    });
+    fireEvent.click(
+      within(projectDialog).getByRole("button", { name: "Create project" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (
+            !call.url.endsWith("/v1/projects") ||
+            call.init?.method !== "POST"
+          ) {
+            return false;
+          }
+          const body = JSON.parse(String(call.init.body));
+          return body.name === "Mobile Project" && body.directory === "/workspace/mobile";
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("keeps the mobile project select visibly empty after archiving the selected project", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+    });
+
+    const mobileControls = within(
+      screen.getByRole("region", { name: "Mobile project controls" }),
+    );
+    expect(mobileControls.getByLabelText("Project")).toHaveValue("project-1");
+
+    fireEvent.click(
+      mobileControls.getByRole("button", {
+        name: "Archive selected project Real Project",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            call.url.endsWith("/v1/projects/project-1/archive") &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(mobileControls.getByLabelText("Project")).toHaveValue(""),
+    );
+    expect(mobileControls.getByLabelText("Project")).toHaveDisplayValue(
+      "No project selected",
+    );
+    expect(
+      mobileControls.queryByRole("button", {
+        name: /New session in selected project/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText("Create a project to start a session.").length,
+    ).toBeGreaterThan(0);
   });
 
   it("loads the selected session file tree and displays real file content", async () => {
