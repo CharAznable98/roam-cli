@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   test: {
@@ -8,8 +9,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@roamcli/shared/protocol": new URL("../../packages/shared/src/protocol/index.ts", import.meta.url).pathname,
-      "@roamcli/shared/security": new URL("../../packages/shared/src/security/index.ts", import.meta.url).pathname
+      "@roamcli/shared/protocol": fileURLToPath(new URL("../../packages/shared/src/protocol/index.ts", import.meta.url)),
+      "@roamcli/shared/security": fileURLToPath(new URL("../../packages/shared/src/security/index.ts", import.meta.url))
     }
   }
 });
