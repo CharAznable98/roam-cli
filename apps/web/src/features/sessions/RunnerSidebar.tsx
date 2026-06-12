@@ -22,9 +22,16 @@ type RunnerSidebarProps = {
   selectedSessionId: string;
   onSelectProject: (projectId: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onCreateProject: (values: { name: string; runnerId: string; directory: string }) => void | Promise<void>;
+  onCreateProject: (values: {
+    name: string;
+    runnerId: string;
+    directory: string;
+  }) => void | Promise<void>;
   onArchiveProject: (projectId: string) => void;
-  onCreateSession: (projectId: string, values: NewSessionValues) => void | Promise<void>;
+  onCreateSession: (
+    projectId: string,
+    values: NewSessionValues,
+  ) => void | Promise<void>;
 };
 
 export function RunnerSidebar({
@@ -37,13 +44,22 @@ export function RunnerSidebar({
   onSelectSession,
   onCreateProject,
   onArchiveProject,
-  onCreateSession
+  onCreateSession,
 }: RunnerSidebarProps) {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  const [sessionProjectId, setSessionProjectId] = useState<string | undefined>();
-  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
-  const activeProjects = useMemo(() => projects.filter((project) => !project.archivedAt), [projects]);
-  const sessionProject = activeProjects.find((project) => project.id === sessionProjectId);
+  const [sessionProjectId, setSessionProjectId] = useState<
+    string | undefined
+  >();
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const activeProjects = useMemo(
+    () => projects.filter((project) => !project.archivedAt),
+    [projects],
+  );
+  const sessionProject = activeProjects.find(
+    (project) => project.id === sessionProjectId,
+  );
   const sessionRunner = sessionProject
     ? runners.find((runner) => runner.runnerId === sessionProject.runnerId)
     : undefined;
@@ -77,12 +93,19 @@ export function RunnerSidebar({
         </div>
         <div className="project-tree">
           {activeProjects.map((project) => {
-            const runner = runners.find((item) => item.runnerId === project.runnerId);
-            const projectSessions = sessions.filter((session) => session.projectId === project.id && !session.archivedAt);
+            const runner = runners.find(
+              (item) => item.runnerId === project.runnerId,
+            );
+            const projectSessions = sessions.filter(
+              (session) =>
+                session.projectId === project.id && !session.archivedAt,
+            );
             const isExpanded = expandedProjectIds.has(project.id);
             return (
               <div className="project-tree-item" key={project.id}>
-                <div className={`project-tree-row ${project.id === selectedProjectId ? "is-selected" : ""}`}>
+                <div
+                  className={`project-tree-row ${project.id === selectedProjectId ? "is-selected" : ""}`}
+                >
                   <button
                     className="tree-toggle-button"
                     type="button"
@@ -90,7 +113,11 @@ export function RunnerSidebar({
                     title={isExpanded ? "Collapse project" : "Expand project"}
                     onClick={() => toggleProject(project.id)}
                   >
-                    {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    {isExpanded ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )}
                   </button>
                   <button
                     type="button"
@@ -101,11 +128,18 @@ export function RunnerSidebar({
                       <Folder size={18} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{project.name}</span>
-                      <span className="block truncate text-xs text-ink-500">{project.directory}</span>
+                      <span className="block truncate font-medium">
+                        {project.name}
+                      </span>
+                      <span className="block truncate text-xs text-ink-500">
+                        {project.directory}
+                      </span>
                     </span>
                     {runner ? (
-                      <span className="profile-badge" title={`${runner.displayName} runner`}>
+                      <span
+                        className="profile-badge"
+                        title={`${runner.displayName} runner`}
+                      >
                         <Laptop size={14} />
                       </span>
                     ) : null}
@@ -132,7 +166,11 @@ export function RunnerSidebar({
                   </div>
                 </div>
                 {isExpanded ? (
-                  <div className="tree-session-list" role="group" aria-label={`${project.name} sessions`}>
+                  <div
+                    className="tree-session-list"
+                    role="group"
+                    aria-label={`${project.name} sessions`}
+                  >
                     {projectSessions.length > 0 ? (
                       projectSessions.map((session) => (
                         <button
@@ -145,27 +183,41 @@ export function RunnerSidebar({
                             <Cpu size={15} />
                             <span className="truncate">{session.agent}</span>
                           </span>
-                          <span className="truncate text-left font-medium">{session.title}</span>
+                          <span className="truncate text-left font-medium">
+                            {session.title}
+                          </span>
                           <span className="session-meta-row">
-                            <span className="truncate text-xs text-ink-500">{session.executionMode} · {session.executionFolder}</span>
+                            <span className="truncate text-xs text-ink-500">
+                              {session.executionMode} ·{" "}
+                              {session.executionFolder}
+                            </span>
                             <StatusPill status={session.status} />
                           </span>
                         </button>
                       ))
                     ) : (
-                      <div className="empty-state compact tree-empty-state">No sessions</div>
+                      <div className="empty-state compact tree-empty-state">
+                        No sessions
+                      </div>
                     )}
                   </div>
                 ) : null}
               </div>
             );
           })}
-          {activeProjects.length === 0 ? <div className="empty-state compact">Create a project to start a session.</div> : null}
+          {activeProjects.length === 0 ? (
+            <div className="empty-state compact">
+              Create a project to start a session.
+            </div>
+          ) : null}
         </div>
       </section>
 
       {projectModalOpen ? (
-        <SidebarModal title="New Project" onClose={() => setProjectModalOpen(false)}>
+        <SidebarModal
+          title="New Project"
+          onClose={() => setProjectModalOpen(false)}
+        >
           <ProjectForm
             runners={runners}
             onCreate={onCreateProject}
@@ -175,7 +227,10 @@ export function RunnerSidebar({
       ) : null}
 
       {sessionProject ? (
-        <SidebarModal title={`New Session - ${sessionProject.name}`} onClose={() => setSessionProjectId(undefined)}>
+        <SidebarModal
+          title={`New Session - ${sessionProject.name}`}
+          onClose={() => setSessionProjectId(undefined)}
+        >
           {sessionRunner ? (
             <NewSessionForm
               project={sessionProject}
@@ -191,7 +246,9 @@ export function RunnerSidebar({
               onCreated={() => setSessionProjectId(undefined)}
             />
           ) : (
-            <div className="empty-state compact">The project runner is offline.</div>
+            <div className="empty-state compact">
+              The project runner is offline.
+            </div>
           )}
         </SidebarModal>
       ) : null}
@@ -203,17 +260,32 @@ export function SidebarModal({
   title,
   children,
   onClose,
+  variant = "panel",
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  variant?: "panel" | "sheet";
 }) {
   return (
-    <div className="modal-backdrop">
-      <section className="modal-panel" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className={`modal-backdrop ${variant === "sheet" ? "sheet-backdrop" : ""}`}
+    >
+      <section
+        className={`modal-panel ${variant === "sheet" ? "modal-sheet" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="modal-header">
           <h2 className="panel-title">{title}</h2>
-          <button className="icon-button" type="button" aria-label="Close modal" title="Close" onClick={onClose}>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close modal"
+            title="Close"
+            onClick={onClose}
+          >
             <X size={16} />
           </button>
         </div>
@@ -229,7 +301,11 @@ export function ProjectForm({
   onCreated,
 }: {
   runners: RunnerRegistration[];
-  onCreate: (values: { name: string; runnerId: string; directory: string }) => void | Promise<void>;
+  onCreate: (values: {
+    name: string;
+    runnerId: string;
+    directory: string;
+  }) => void | Promise<void>;
   onCreated?: () => void;
 }) {
   const [name, setName] = useState("");
@@ -253,7 +329,10 @@ export function ProjectForm({
     setSubmitting(true);
     try {
       await onCreate({
-        name: name.trim() || cleanDirectory.split("/").filter(Boolean).at(-1) || cleanDirectory,
+        name:
+          name.trim() ||
+          cleanDirectory.split("/").filter(Boolean).at(-1) ||
+          cleanDirectory,
         runnerId: cleanRunnerId,
         directory: cleanDirectory,
       });
@@ -271,7 +350,11 @@ export function ProjectForm({
     <form className="sidebar-project-form" onSubmit={submit}>
       <label className="field">
         <span>Name</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional project name" />
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Optional project name"
+        />
       </label>
       <label className="field">
         <span>Runner</span>
@@ -280,7 +363,10 @@ export function ProjectForm({
           onChange={(event) => {
             const next = event.target.value;
             setRunnerId(next);
-            setDirectory(runners.find((runner) => runner.runnerId === next)?.workspaceRoot ?? "");
+            setDirectory(
+              runners.find((runner) => runner.runnerId === next)
+                ?.workspaceRoot ?? "",
+            );
             setError("");
           }}
         >
@@ -302,9 +388,18 @@ export function ProjectForm({
           }}
         />
       </label>
-      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="form-actions">
-        <button className="primary-action-button" type="submit" title="Create project" disabled={submitting}>
+        <button
+          className="primary-action-button"
+          type="submit"
+          title="Create project"
+          disabled={submitting}
+        >
           <FolderPlus size={16} />
           <span>{submitting ? "Creating project..." : "Create project"}</span>
         </button>

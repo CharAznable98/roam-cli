@@ -3,7 +3,15 @@ import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import { FilePanel } from "../features/files/FilePanel";
 import { PushSettings } from "../features/pwa/PushSettings";
-import { FolderPlus, Plus, Trash2 } from "lucide-react";
+import type { Project, Session } from "@roamcli/protocol";
+import {
+  FolderPlus,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { NewSessionForm } from "../features/sessions/NewSessionForm";
 import {
   ProjectForm,
@@ -23,10 +31,15 @@ type AppShellProps = {
 export function AppShell({ controller }: AppShellProps) {
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
   const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
+  const [mobileSessionSwitcherOpen, setMobileSessionSwitcherOpen] =
+    useState(false);
+  const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
   const {
     state,
     token,
     setToken,
+    streamReconnect,
+    reconnectStream,
     dispatch,
     selectedRunner,
     selectedProject,
@@ -62,6 +75,16 @@ export function AppShell({ controller }: AppShellProps) {
     () => state.projects.filter((project) => !project.archivedAt),
     [state.projects],
   );
+  const canUseStream = state.connectionState === "open";
+  const compactStatus = getCompactStatusLabel(
+    state.connectionState,
+    state.loadState,
+    streamReconnect.mode,
+  );
+  const CompactStatusIcon =
+    state.connectionState === "open" && state.loadState !== "error"
+      ? Wifi
+      : WifiOff;
 
   useEffect(() => {
     setMobileSessionModalOpen(false);
@@ -70,13 +93,13 @@ export function AppShell({ controller }: AppShellProps) {
   return (
     <div className={`app-shell active-${state.activeTab}`}>
       <header className="topbar">
-        <div className="min-w-0">
+        <div className="topbar-title">
           <p className="text-xs font-medium uppercase text-ink-500">RoamCli</p>
           <h1 className="truncate text-lg font-semibold text-ink-900">
             Remote Agent Control
           </h1>
         </div>
-        <div className="topbar-actions">
+        <div className="topbar-actions topbar-actions-desktop">
           <span
             className={`rounded px-2 py-1 text-xs font-medium ${state.connectionState === "open" ? "bg-emerald-50 text-signal-green" : "bg-amber-50 text-signal-amber"}`}
           >
@@ -103,6 +126,18 @@ export function AppShell({ controller }: AppShellProps) {
               ? "API error"
               : `${state.runners.length} runners online`}
           </span>
+        </div>
+        <div className="mobile-topbar-actions">
+          <button
+            className={`compact-status-button ${compactStatus.tone}`}
+            type="button"
+            aria-label="Open connection settings"
+            title="Connection settings"
+            onClick={() => setMobileStatusModalOpen(true)}
+          >
+            <CompactStatusIcon size={16} />
+            <span>{compactStatus.label}</span>
+          </button>
         </div>
       </header>
 
@@ -134,88 +169,6 @@ export function AppShell({ controller }: AppShellProps) {
 
       {state.loadState === "ready" && state.runners.length > 0 ? (
         <>
-          <section
-            className="mobile-controls"
-            aria-label="Mobile project controls"
-          >
-            <div className="mobile-control-row">
-              <label>
-                <span>Project</span>
-                <select
-                  value={selectedProject?.id ?? ""}
-                  onChange={(event) => selectProject(event.target.value)}
-                >
-                  {!selectedProject ? (
-                    <option value="">
-                      {activeProjects.length === 0
-                        ? "No projects"
-                        : "No project selected"}
-                    </option>
-                  ) : null}
-                  {activeProjects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="mobile-control-actions">
-                <button
-                  className="primary-icon-button"
-                  type="button"
-                  aria-label="New project"
-                  title="New project"
-                  onClick={() => setMobileProjectModalOpen(true)}
-                >
-                  <FolderPlus size={16} />
-                </button>
-                {selectedProject ? (
-                  <button
-                    className="mobile-icon-button danger"
-                    type="button"
-                    aria-label={`Archive selected project ${selectedProject.name}`}
-                    title="Archive project"
-                    onClick={() => archiveProject(selectedProject.id)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            <div className="mobile-control-row">
-              <label>
-                <span>Session</span>
-                <select
-                  value={selectedSession?.id ?? ""}
-                  disabled={!selectedProject || runnerSessions.length === 0}
-                  onChange={(event) => setSelectedSessionId(event.target.value)}
-                >
-                  {!selectedProject || runnerSessions.length === 0 ? (
-                    <option value="">No sessions</option>
-                  ) : null}
-                  {runnerSessions.map((session) => (
-                    <option key={session.id} value={session.id}>
-                      {session.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="mobile-control-actions">
-                {selectedProject ? (
-                  <button
-                    className="primary-icon-button"
-                    type="button"
-                    aria-label={`New session in selected project ${selectedProject.name}`}
-                    title="New session"
-                    onClick={() => setMobileSessionModalOpen(true)}
-                  >
-                    <Plus size={16} />
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </section>
-
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
             {workspaceTabs.map((tab) => (
               <WorkspaceTabButton
@@ -247,11 +200,31 @@ export function AppShell({ controller }: AppShellProps) {
                 onSend={sendMessage}
                 onControl={sendControl}
                 onDelete={deleteSelectedSession}
+                canSend={canUseStream}
+                canControl={canUseStream}
+                onOpenSessionSwitcher={() => setMobileSessionSwitcherOpen(true)}
               />
             ) : (
               <section className="chat-column" aria-label="Conversation">
-                <div className="empty-state compact">
-                  {selectedProject ? "Create a session in the selected project." : "Create a project to start a session."}
+                <div className="empty-state compact session-empty-state">
+                  <span>
+                    {selectedProject
+                      ? "Create a session in the selected project."
+                      : "Create a project to start a session."}
+                  </span>
+                  <p className="session-empty-meta">
+                    {selectedProject
+                      ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
+                      : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
+                  </p>
+                  <button
+                    className="small-button"
+                    type="button"
+                    aria-label="Switch Session"
+                    onClick={() => setMobileSessionSwitcherOpen(true)}
+                  >
+                    Choose session
+                  </button>
                 </div>
               </section>
             )}
@@ -319,9 +292,57 @@ export function AppShell({ controller }: AppShellProps) {
 
           <BottomTabs activeTab={state.activeTab} onChange={setActiveTab} />
 
+          {mobileStatusModalOpen ? (
+            <SidebarModal
+              title="Connection"
+              variant="sheet"
+              onClose={() => setMobileStatusModalOpen(false)}
+            >
+              <MobileStatusSheet
+                token={token}
+                onTokenChange={setToken}
+                connectionState={state.connectionState}
+                loadState={state.loadState}
+                runnerCount={state.runners.length}
+                streamReconnect={streamReconnect}
+                onReconnect={reconnectStream}
+              />
+            </SidebarModal>
+          ) : null}
+
+          {mobileSessionSwitcherOpen ? (
+            <SidebarModal
+              title="Switch Session"
+              variant="sheet"
+              onClose={() => setMobileSessionSwitcherOpen(false)}
+            >
+              <MobileSessionSwitcher
+                activeProjects={activeProjects}
+                selectedProject={selectedProject}
+                selectedSession={selectedSession}
+                runnerSessions={runnerSessions}
+                onSelectProject={selectProject}
+                onSelectSession={(sessionId) => {
+                  setSelectedSessionId(sessionId);
+                  setMobileSessionSwitcherOpen(false);
+                }}
+                onNewProject={() => {
+                  setMobileSessionSwitcherOpen(false);
+                  setMobileProjectModalOpen(true);
+                }}
+                onArchiveProject={archiveProject}
+                onNewSession={() => {
+                  setMobileSessionSwitcherOpen(false);
+                  setMobileSessionModalOpen(true);
+                }}
+              />
+            </SidebarModal>
+          ) : null}
+
           {mobileProjectModalOpen ? (
             <SidebarModal
               title="New Project"
+              variant="sheet"
               onClose={() => setMobileProjectModalOpen(false)}
             >
               <ProjectForm
@@ -335,13 +356,16 @@ export function AppShell({ controller }: AppShellProps) {
           {mobileSessionModalOpen && selectedProject ? (
             <SidebarModal
               title={`New Session - ${selectedProject.name}`}
+              variant="sheet"
               onClose={() => setMobileSessionModalOpen(false)}
             >
               {selectedRunner ? (
                 <NewSessionForm
                   project={selectedProject}
                   runner={selectedRunner}
-                  onCreate={(values) => createSession(selectedProject.id, values)}
+                  onCreate={(values) =>
+                    createSession(selectedProject.id, values)
+                  }
                   onCreated={() => setMobileSessionModalOpen(false)}
                 />
               ) : (
@@ -355,6 +379,206 @@ export function AppShell({ controller }: AppShellProps) {
       ) : null}
     </div>
   );
+}
+
+function MobileStatusSheet({
+  token,
+  onTokenChange,
+  connectionState,
+  loadState,
+  runnerCount,
+  streamReconnect,
+  onReconnect,
+}: {
+  token: string;
+  onTokenChange: (token: string) => void;
+  connectionState: "open" | "closed" | "error";
+  loadState: "loading" | "ready" | "error";
+  runnerCount: number;
+  streamReconnect: ReturnType<typeof useRoamController>["streamReconnect"];
+  onReconnect: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!streamReconnect.nextAttemptAt) {
+      return;
+    }
+    const interval = globalThis.setInterval(() => setNow(Date.now()), 1_000);
+    return () => globalThis.clearInterval(interval);
+  }, [streamReconnect.nextAttemptAt]);
+
+  const retrySeconds = streamReconnect.nextAttemptAt
+    ? Math.max(0, Math.ceil((streamReconnect.nextAttemptAt - now) / 1_000))
+    : undefined;
+
+  return (
+    <div className="mobile-sheet-stack">
+      <label className="field">
+        <span>Token</span>
+        <input
+          value={token}
+          onChange={(event) => onTokenChange(event.target.value)}
+          aria-label="Mobile API token"
+        />
+      </label>
+      <dl className="status-details">
+        <div>
+          <dt>Stream</dt>
+          <dd>{connectionState}</dd>
+        </div>
+        <div>
+          <dt>API</dt>
+          <dd>{loadState}</dd>
+        </div>
+        <div>
+          <dt>Runners</dt>
+          <dd>{runnerCount}</dd>
+        </div>
+        <div>
+          <dt>Reconnect</dt>
+          <dd>
+            {connectionState === "open"
+              ? "ready"
+              : retrySeconds !== undefined
+                ? `in ${retrySeconds}s`
+                : streamReconnect.mode}
+          </dd>
+        </div>
+      </dl>
+      <button
+        className="primary-action-button"
+        type="button"
+        onClick={onReconnect}
+      >
+        <RefreshCw size={16} />
+        Reconnect now
+      </button>
+    </div>
+  );
+}
+
+function MobileSessionSwitcher({
+  activeProjects,
+  selectedProject,
+  selectedSession,
+  runnerSessions,
+  onSelectProject,
+  onSelectSession,
+  onNewProject,
+  onArchiveProject,
+  onNewSession,
+}: {
+  activeProjects: Project[];
+  selectedProject: Project | undefined;
+  selectedSession: Session | undefined;
+  runnerSessions: Session[];
+  onSelectProject: (projectId: string) => void;
+  onSelectSession: (sessionId: string) => void;
+  onNewProject: () => void;
+  onArchiveProject: (projectId: string) => void;
+  onNewSession: () => void;
+}) {
+  return (
+    <div className="mobile-sheet-stack">
+      <div className="mobile-sheet-row">
+        <label className="field">
+          <span>Project</span>
+          <select
+            value={selectedProject?.id ?? ""}
+            onChange={(event) => onSelectProject(event.target.value)}
+          >
+            {!selectedProject ? (
+              <option value="">
+                {activeProjects.length === 0
+                  ? "No projects"
+                  : "No project selected"}
+              </option>
+            ) : null}
+            {activeProjects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="mobile-sheet-actions">
+          <button
+            className="primary-icon-button"
+            type="button"
+            aria-label="New project"
+            title="New project"
+            onClick={onNewProject}
+          >
+            <FolderPlus size={16} />
+          </button>
+          {selectedProject ? (
+            <button
+              className="mobile-icon-button danger"
+              type="button"
+              aria-label={`Archive selected project ${selectedProject.name}`}
+              title="Archive project"
+              onClick={() => onArchiveProject(selectedProject.id)}
+            >
+              <Trash2 size={15} />
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="mobile-sheet-row">
+        <label className="field">
+          <span>Session</span>
+          <select
+            value={selectedSession?.id ?? ""}
+            disabled={!selectedProject || runnerSessions.length === 0}
+            onChange={(event) => onSelectSession(event.target.value)}
+          >
+            {!selectedProject || runnerSessions.length === 0 ? (
+              <option value="">No sessions</option>
+            ) : null}
+            {runnerSessions.map((session) => (
+              <option key={session.id} value={session.id}>
+                {session.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="mobile-sheet-actions">
+          <button
+            className="primary-icon-button"
+            type="button"
+            aria-label={
+              selectedProject
+                ? `New session in selected project ${selectedProject.name}`
+                : "New session"
+            }
+            title="New session"
+            disabled={!selectedProject}
+            onClick={onNewSession}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getCompactStatusLabel(
+  connectionState: "open" | "closed" | "error",
+  loadState: "loading" | "ready" | "error",
+  reconnectMode: "connecting" | "connected" | "waiting",
+) {
+  if (loadState === "error") {
+    return { label: "API error", tone: "error" };
+  }
+  if (connectionState === "open") {
+    return { label: "Online", tone: "open" };
+  }
+  if (reconnectMode === "waiting" || reconnectMode === "connecting") {
+    return { label: "Retrying", tone: "warning" };
+  }
+  return { label: "Offline", tone: "warning" };
 }
 
 function WorkspaceTabButton({

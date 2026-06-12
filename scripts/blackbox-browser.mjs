@@ -152,7 +152,8 @@ async function runUserJourney(browser, scenario) {
   const initialValue = `initial-${scenario.name}-${Date.now()}`;
   const editedValue = `edited-${scenario.name}-${Date.now()}`;
   const patchedValue = `patched-${scenario.name}-${Date.now()}`;
-  const executionMode = scenario.name === "desktop" ? "managed_worktree" : "direct";
+  const executionMode =
+    scenario.name === "desktop" ? "managed_worktree" : "direct";
   await prepareProjectDirectory(projectDir, fileName, initialValue);
   tempDirs.push(projectDir);
 
@@ -171,8 +172,13 @@ async function runUserJourney(browser, scenario) {
       window.localStorage.setItem("roamcli.token", authToken);
     }, token);
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await expectText(page, "stream connected");
-    await expectText(page, "1 runners online");
+    if (scenario.mobile) {
+      await expectText(page, "Online");
+      await assertMobileConnectionSheet(page);
+    } else {
+      await expectText(page, "stream connected");
+      await expectText(page, "1 runners online");
+    }
 
     const project = await createProjectFromUi(page, scenario, {
       name: projectName,
@@ -468,7 +474,9 @@ async function assertProjectTreeStartsCollapsed(page, projectName) {
   const group = page.getByRole("group", { name: `${projectName} sessions` });
   const initialGroups = await group.count();
   if (initialGroups !== 0) {
-    throw new Error(`project ${projectName} session branch was expanded by default`);
+    throw new Error(
+      `project ${projectName} session branch was expanded by default`,
+    );
   }
 
   await page
@@ -487,10 +495,8 @@ async function assertProjectTreeStartsCollapsed(page, projectName) {
 
 async function createProjectFromUi(page, scenario, values) {
   if (scenario.mobile) {
-    const controls = page.getByRole("region", {
-      name: "Mobile project controls",
-    });
-    await controls.getByRole("button", { name: "New project" }).click();
+    const switcher = await openMobileSessionSwitcher(page);
+    await switcher.getByRole("button", { name: "New project" }).click();
     const dialog = page.getByRole("dialog", { name: "New Project" });
     await dialog.waitFor();
     await dialog
@@ -505,17 +511,23 @@ async function createProjectFromUi(page, scenario, values) {
       const payload = await requestJson("/v1/projects");
       return payload.projects?.find((project) => project.name === values.name);
     }, `project ${values.name} to be persisted`);
+    const reopenedSwitcher = await openMobileSessionSwitcher(page);
     await waitFor(
-      async () => (await controls.locator("select").first().inputValue()) === project.id,
+      async () =>
+        (await reopenedSwitcher.locator("select").first().inputValue()) ===
+        project.id,
       `mobile project selector to select ${values.name}`,
     );
+    await closeDialog(reopenedSwitcher);
     return project;
   }
 
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New Project" });
   await dialog.waitFor();
-  await dialog.locator('input[placeholder="Optional project name"]').fill(values.name);
+  await dialog
+    .locator('input[placeholder="Optional project name"]')
+    .fill(values.name);
   await dialog
     .locator("label.field", { hasText: "Directory" })
     .locator("input")
@@ -534,10 +546,8 @@ async function createProjectFromUi(page, scenario, values) {
 
 async function createSessionFromUi(page, scenario, values) {
   if (scenario.mobile) {
-    const controls = page.getByRole("region", {
-      name: "Mobile project controls",
-    });
-    await controls
+    const switcher = await openMobileSessionSwitcher(page);
+    await switcher
       .getByRole("button", {
         name: `New session in selected project ${values.projectName}`,
       })
@@ -567,10 +577,15 @@ async function createSessionFromUi(page, scenario, values) {
           session.title === values.title,
       );
     }, `session ${values.title} to be persisted`);
+    await page.getByRole("button", { name: /Switch Session/ }).waitFor();
+    const reopenedSwitcher = await openMobileSessionSwitcher(page);
     await waitFor(
-      async () => (await controls.locator("select").nth(1).inputValue()) === session.id,
+      async () =>
+        (await reopenedSwitcher.locator("select").nth(1).inputValue()) ===
+        session.id,
       `mobile session selector to select ${values.title}`,
     );
+    await closeDialog(reopenedSwitcher);
     return session;
   }
   await page
@@ -580,7 +595,9 @@ async function createSessionFromUi(page, scenario, values) {
     name: `New Session - ${values.projectName}`,
   });
   await dialog.waitFor();
-  await dialog.locator('input[placeholder="Optional task name"]').fill(values.title);
+  await dialog
+    .locator('input[placeholder="Optional task name"]')
+    .fill(values.title);
   await dialog
     .locator("label.field:visible", { hasText: "Agent" })
     .locator("select")
@@ -589,7 +606,9 @@ async function createSessionFromUi(page, scenario, values) {
     .locator("label.field:visible", { hasText: "Execution" })
     .locator("select")
     .selectOption(values.executionMode);
-  await dialog.locator('textarea[placeholder="Describe the work"]').fill(values.prompt);
+  await dialog
+    .locator('textarea[placeholder="Describe the work"]')
+    .fill(values.prompt);
   await dialog.getByRole("button", { name: "Create session" }).click();
   await expectText(page, values.prompt);
   return waitFor(async () => {
@@ -601,6 +620,45 @@ async function createSessionFromUi(page, scenario, values) {
         session.title === values.title,
     );
   }, `session ${values.title} to be persisted`);
+}
+
+async function assertMobileConnectionSheet(page) {
+  await page.getByRole("button", { name: "Open connection settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connection" });
+  await dialog.waitFor();
+  await expectTextIn(dialog, "Stream");
+  await expectTextIn(dialog, "open");
+  await expectTextIn(dialog, "API");
+  await expectTextIn(dialog, "ready");
+  await expectTextIn(dialog, "Runners");
+  await expectTextIn(dialog, "1");
+  await dialog.getByRole("button", { name: "Reconnect now" }).waitFor();
+  await closeDialog(dialog);
+}
+
+async function openMobileSessionSwitcher(page) {
+  const dialog = page.getByRole("dialog", { name: "Switch Session" });
+  await waitFor(async () => {
+    if (await dialog.isVisible().catch(() => false)) {
+      return true;
+    }
+
+    const trigger = page
+      .getByRole("button", { name: /Switch Session|Choose session/ })
+      .first();
+    if (!(await trigger.isVisible().catch(() => false))) {
+      return false;
+    }
+
+    await trigger.click({ timeout: 1_000 }).catch(() => undefined);
+    return dialog.isVisible().catch(() => false);
+  }, "mobile session switcher to open");
+  return dialog;
+}
+
+async function closeDialog(dialog) {
+  await dialog.getByRole("button", { name: "Close modal" }).click();
+  await dialog.waitFor({ state: "hidden" });
 }
 
 async function sendChatMessage(page, scenario, content) {
@@ -823,6 +881,29 @@ async function expectText(page, text) {
       return matches;
     },
     `visible text ${JSON.stringify(text)}`,
+  );
+}
+
+async function expectTextIn(scope, text) {
+  await waitFor(
+    async () => {
+      const matches = await scope
+        .getByText(text, { exact: false })
+        .evaluateAll((elements) =>
+          elements.some((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.visibility !== "hidden" &&
+              style.display !== "none"
+            );
+          }),
+        );
+      return matches;
+    },
+    `visible scoped text ${JSON.stringify(text)}`,
   );
 }
 
