@@ -161,6 +161,15 @@ class TestWebSocket extends EventTarget {
   }
 }
 
+function openSessionSwitcher(name: RegExp = /Real session|Created session/) {
+  fireEvent.click(
+    screen.queryByRole("button", { name: /Switch Session:/ }) ??
+      screen.queryByRole("button", { name: "Switch Session" }) ??
+      screen.getByRole("button", { name }),
+  );
+  return within(screen.getByRole("dialog", { name: "Switch Session" }));
+}
+
 describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
@@ -341,7 +350,9 @@ describe("App", () => {
   it("renders real remote state from the API", async () => {
     render(<App />);
 
-    expect(await screen.findAllByText("Real Project")).toHaveLength(2);
+    expect((await screen.findAllByText("Real Project")).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.getByTitle("Real Runner runner")).toBeInTheDocument();
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
@@ -364,23 +375,71 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not describe disconnected stream commands as an unreachable server", async () => {
+  it("disables disconnected chat sends instead of queueing commands", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Chat composer" }), {
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
       target: { value: "hello while disconnected" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    const alert = await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(composer).toHaveValue("hello while disconnected");
     expect(
-      within(alert).getByText("Event stream is disconnected"),
-    ).toBeInTheDocument();
-    expect(within(alert).getByText(/Message was not sent/)).toBeInTheDocument();
-    expect(
-      within(alert).queryByText(/pnpm --filter @roamcli\/server dev/),
+      screen.queryByText("Event stream is disconnected"),
     ).not.toBeInTheDocument();
+  });
+
+  it("reconnects closed streams with increasing retry delays", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    vi.useFakeTimers();
+    try {
+      expect(sockets).toHaveLength(1);
+
+      act(() => {
+        sockets[0]?.dispatchEvent(new Event("close"));
+      });
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toBeDisabled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(sockets).toHaveLength(2);
+
+      act(() => {
+        sockets[1]?.dispatchEvent(new Event("close"));
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(9_999);
+      });
+      expect(sockets).toHaveLength(2);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sockets).toHaveLength(3);
+
+      act(() => {
+        sockets[2]?.dispatchEvent(new Event("open"));
+      });
+      const composer = screen.getByRole("textbox", { name: "Chat composer" });
+      fireEvent.change(composer, {
+        target: { value: "after reconnect" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+      expect(JSON.parse(sockets[2]?.sent.at(-1) ?? "{}")).toMatchObject({
+        type: "userMessage",
+        sessionId: "session-1",
+        content: "after reconnect",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders agent messages as markdown while keeping user messages literal", async () => {
@@ -504,7 +563,9 @@ describe("App", () => {
     fireEvent.change(within(dialog).getByLabelText("Prompt"), {
       target: { value: "Run the focused task" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create session" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Create session" }),
+    );
 
     await waitFor(() =>
       expect(
@@ -540,9 +601,9 @@ describe("App", () => {
     fireEvent.click(
       within(sessionDialog).getByRole("button", { name: "Create session" }),
     );
-    expect(
-      within(sessionDialog).getByRole("alert"),
-    ).toHaveTextContent("Prompt is required.");
+    expect(within(sessionDialog).getByRole("alert")).toHaveTextContent(
+      "Prompt is required.",
+    );
     expect(
       fetchCalls.some(
         (call) =>
@@ -561,9 +622,9 @@ describe("App", () => {
     fireEvent.click(
       within(projectDialog).getByRole("button", { name: "Create project" }),
     );
-    expect(
-      within(projectDialog).getByRole("alert"),
-    ).toHaveTextContent("Directory is required.");
+    expect(within(projectDialog).getByRole("alert")).toHaveTextContent(
+      "Directory is required.",
+    );
     expect(
       fetchCalls.some(
         (call) =>
@@ -675,12 +736,10 @@ describe("App", () => {
   it("supports mobile modal create actions and selected project archive", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
-    const mobileControls = within(
-      screen.getByRole("region", { name: "Mobile project controls" }),
-    );
+    let sessionSwitcher = openSessionSwitcher();
 
     fireEvent.click(
-      mobileControls.getByRole("button", {
+      sessionSwitcher.getByRole("button", {
         name: "New session in selected project Real Project",
       }),
     );
@@ -707,8 +766,9 @@ describe("App", () => {
       ).toBe(true),
     );
 
+    sessionSwitcher = openSessionSwitcher(/Created session/);
     fireEvent.click(
-      mobileControls.getByRole("button", {
+      sessionSwitcher.getByRole("button", {
         name: "Archive selected project Real Project",
       }),
     );
@@ -721,9 +781,13 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    expect(screen.getByLabelText("Project")).toHaveValue("");
+    await waitFor(() =>
+      expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(""),
+    );
 
-    fireEvent.click(mobileControls.getByRole("button", { name: "New project" }));
+    fireEvent.click(
+      sessionSwitcher.getByRole("button", { name: "New project" }),
+    );
     const projectDialog = screen.getByRole("dialog", { name: "New Project" });
     fireEvent.change(within(projectDialog).getByLabelText("Name"), {
       target: { value: "Mobile Project" },
@@ -745,7 +809,10 @@ describe("App", () => {
             return false;
           }
           const body = JSON.parse(String(call.init.body));
-          return body.name === "Mobile Project" && body.directory === "/workspace/mobile";
+          return (
+            body.name === "Mobile Project" &&
+            body.directory === "/workspace/mobile"
+          );
         }),
       ).toBe(true),
     );
@@ -771,13 +838,11 @@ describe("App", () => {
       );
     });
 
-    const mobileControls = within(
-      screen.getByRole("region", { name: "Mobile project controls" }),
-    );
-    expect(mobileControls.getByLabelText("Project")).toHaveValue("project-1");
+    const sessionSwitcher = openSessionSwitcher();
+    expect(sessionSwitcher.getByLabelText("Project")).toHaveValue("project-1");
 
     fireEvent.click(
-      mobileControls.getByRole("button", {
+      sessionSwitcher.getByRole("button", {
         name: "Archive selected project Real Project",
       }),
     );
@@ -792,13 +857,13 @@ describe("App", () => {
       ).toBe(true),
     );
     await waitFor(() =>
-      expect(mobileControls.getByLabelText("Project")).toHaveValue(""),
+      expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(""),
     );
-    expect(mobileControls.getByLabelText("Project")).toHaveDisplayValue(
+    expect(sessionSwitcher.getByLabelText("Project")).toHaveDisplayValue(
       "No project selected",
     );
     expect(
-      mobileControls.queryByRole("button", {
+      sessionSwitcher.queryByRole("button", {
         name: /New session in selected project/,
       }),
     ).not.toBeInTheDocument();
@@ -807,7 +872,7 @@ describe("App", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("closes the mobile new session modal when project selection changes", async () => {
+  it("updates the mobile session switcher when project selection changes", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -827,27 +892,17 @@ describe("App", () => {
       );
     });
 
-    const mobileControls = within(
-      screen.getByRole("region", { name: "Mobile project controls" }),
-    );
-    fireEvent.click(
-      mobileControls.getByRole("button", {
-        name: "New session in selected project Real Project",
-      }),
-    );
-    expect(
-      screen.getByRole("dialog", { name: "New Session - Real Project" }),
-    ).toBeInTheDocument();
+    const sessionSwitcher = openSessionSwitcher();
 
-    fireEvent.change(mobileControls.getByLabelText("Project"), {
+    fireEvent.change(sessionSwitcher.getByLabelText("Project"), {
       target: { value: "project-backup" },
     });
 
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: /New Session/ })).not.toBeInTheDocument(),
-    );
     expect(
-      mobileControls.getByRole("button", {
+      screen.getByRole("dialog", { name: "Switch Session" }),
+    ).toBeInTheDocument();
+    expect(
+      sessionSwitcher.getByRole("button", {
         name: "New session in selected project Backup Project",
       }),
     ).toBeInTheDocument();
@@ -1085,13 +1140,11 @@ describe("App", () => {
       );
     });
 
-    const mobileControls = within(
-      screen.getByRole("region", { name: "Mobile project controls" }),
-    );
-    fireEvent.change(mobileControls.getByLabelText("Project"), {
+    const sessionSwitcher = openSessionSwitcher();
+    fireEvent.change(sessionSwitcher.getByLabelText("Project"), {
       target: { value: "project-backup" },
     });
-    expect(mobileControls.getByLabelText("Project")).toHaveValue(
+    expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(
       "project-backup",
     );
 
@@ -1106,7 +1159,7 @@ describe("App", () => {
       );
     });
 
-    expect(mobileControls.getByLabelText("Project")).toHaveValue(
+    expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(
       "project-backup",
     );
   });

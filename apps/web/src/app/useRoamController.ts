@@ -15,13 +15,29 @@ import {
 } from "../features/sessions/model";
 import { appReducer, initialAppState } from "./state";
 
+const INITIAL_RECONNECT_DELAY_MS = 5_000;
+const MAX_RECONNECT_DELAY_MS = 60_000;
+
+export type StreamReconnectInfo = {
+  mode: "connecting" | "connected" | "waiting";
+  attempt: number;
+  delayMs: number;
+  nextAttemptAt?: number;
+};
+
 export function useRoamController() {
   const [state, dispatch] = useReducer(appReducer, initialAppState);
   const [token, setToken] = useState(
     () => localStorage.getItem("roamcli.token") ?? "dev-token",
   );
+  const [streamReconnect, setStreamReconnect] = useState<StreamReconnectInfo>({
+    mode: "connecting",
+    attempt: 0,
+    delayMs: INITIAL_RECONNECT_DELAY_MS,
+  });
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
+  const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     localStorage.setItem("roamcli.token", token);
@@ -29,6 +45,11 @@ export function useRoamController() {
     const api = createRoamApiClient({ token });
     apiRef.current = api;
     let cancelled = false;
+    let socketGeneration = 0;
+    let activeSocket: WebSocket | undefined;
+    let retryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
+    let retryAttempt = 0;
 
     api
       .loadInitialState()
@@ -46,17 +67,103 @@ export function useRoamController() {
         }
       });
 
-    const socket = api.connectStream(
-      (event) => dispatch({ type: "serverEventReceived", event }),
-      (status) => dispatch({ type: "connectionChanged", status }),
-    );
-    streamRef.current = socket;
+    function clearRetryTimer() {
+      if (retryTimer) {
+        globalThis.clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+    }
+
+    function scheduleReconnect() {
+      if (cancelled || retryTimer) {
+        return;
+      }
+      const delayMs = retryDelayMs;
+      retryAttempt += 1;
+      setStreamReconnect({
+        mode: "waiting",
+        attempt: retryAttempt,
+        delayMs,
+        nextAttemptAt: Date.now() + delayMs,
+      });
+      retryTimer = globalThis.setTimeout(() => {
+        retryTimer = undefined;
+        retryDelayMs = Math.min(delayMs * 2, MAX_RECONNECT_DELAY_MS);
+        connectStream();
+      }, delayMs);
+    }
+
+    function connectStream() {
+      if (cancelled) {
+        return;
+      }
+      clearRetryTimer();
+      const generation = socketGeneration + 1;
+      socketGeneration = generation;
+      const previousSocket = activeSocket;
+      setStreamReconnect({
+        mode: "connecting",
+        attempt: retryAttempt,
+        delayMs: retryDelayMs,
+      });
+      const socket = api.connectStream(
+        (event) => {
+          if (!cancelled && generation === socketGeneration) {
+            dispatch({ type: "serverEventReceived", event });
+          }
+        },
+        (status) => {
+          if (cancelled || generation !== socketGeneration) {
+            return;
+          }
+          dispatch({ type: "connectionChanged", status });
+          if (status === "open") {
+            retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
+            retryAttempt = 0;
+            clearRetryTimer();
+            setStreamReconnect({
+              mode: "connected",
+              attempt: 0,
+              delayMs: INITIAL_RECONNECT_DELAY_MS,
+            });
+            return;
+          }
+          scheduleReconnect();
+        },
+      );
+      activeSocket = socket;
+      streamRef.current = socket;
+      if (
+        previousSocket &&
+        previousSocket !== socket &&
+        previousSocket.readyState !== WebSocket.CLOSED
+      ) {
+        previousSocket.close();
+      }
+      if (!socket) {
+        scheduleReconnect();
+      }
+    }
+
+    reconnectStreamRef.current = () => {
+      retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
+      retryAttempt = 0;
+      connectStream();
+    };
+    connectStream();
 
     return () => {
       cancelled = true;
-      socket?.close();
+      reconnectStreamRef.current = undefined;
+      clearRetryTimer();
+      activeSocket?.close();
+      if (streamRef.current === activeSocket) {
+        streamRef.current = undefined;
+      }
     };
   }, [token]);
+
+  const reconnectStream = () => reconnectStreamRef.current?.();
 
   const selectedProject = useMemo(
     () => getSelectedProject(state.projects, state.selectedProjectId),
@@ -65,7 +172,9 @@ export function useRoamController() {
   const selectedRunner = useMemo(
     () =>
       selectedProject
-        ? state.runners.find((runner) => runner.runnerId === selectedProject.runnerId)
+        ? state.runners.find(
+            (runner) => runner.runnerId === selectedProject.runnerId,
+          )
         : getSelectedRunner(state.runners, state.selectedRunnerId),
     [selectedProject, state.runners, state.selectedRunnerId],
   );
@@ -90,7 +199,10 @@ export function useRoamController() {
     }
 
     const sessionId = selectedSession.id;
-    if (selectedSession.executionMode === "managed_worktree" && selectedSession.status === "pending") {
+    if (
+      selectedSession.executionMode === "managed_worktree" &&
+      selectedSession.status === "pending"
+    ) {
       dispatch({ type: "sessionWorkspaceCleared" });
       return;
     }
@@ -117,7 +229,11 @@ export function useRoamController() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSession?.executionMode, selectedSession?.id, selectedSession?.status]);
+  }, [
+    selectedSession?.executionMode,
+    selectedSession?.id,
+    selectedSession?.status,
+  ]);
 
   const selectRunner = (runnerId: string) => {
     const nextSession = state.sessions.find(
@@ -183,17 +299,23 @@ export function useRoamController() {
       );
   };
 
-  const createSession = async (projectId: string, values: {
-    title: string;
-    prompt: string;
-    agent: AgentKind;
-    executionMode: ExecutionMode;
-  }) => {
+  const createSession = async (
+    projectId: string,
+    values: {
+      title: string;
+      prompt: string;
+      agent: AgentKind;
+      executionMode: ExecutionMode;
+    },
+  ) => {
     if (!projectId || !apiRef.current) {
       throw new Error("API client is not ready.");
     }
     try {
-      const session = await apiRef.current.createSession({ projectId, ...values });
+      const session = await apiRef.current.createSession({
+        projectId,
+        ...values,
+      });
       dispatch({ type: "sessionCreated", session });
     } catch (createError: unknown) {
       const message = errorMessage(createError);
@@ -391,6 +513,8 @@ export function useRoamController() {
     state,
     token,
     setToken,
+    streamReconnect,
+    reconnectStream,
     dispatch,
     selectedRunner,
     selectedProject,
