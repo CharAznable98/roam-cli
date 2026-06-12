@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { ClientCommandSchema } from "@roamcli/protocol";
+import { ClientCommandSchema } from "@roamcli/shared/protocol";
 import { isAuthorized } from "../auth.js";
 import { parseSocketJson } from "../infra/socket-json.js";
 import type { AppContext } from "../server/context.js";

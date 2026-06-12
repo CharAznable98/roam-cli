@@ -1,28 +1,29 @@
 {
-  "name": "@roamcli/runner",
+  "name": "@roamcli/shared",
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "roam-runner": "./dist/index.js"
+  "exports": {
+    "./protocol": {
+      "types": "./src/protocol/index.ts",
+      "import": "./dist/protocol/index.js"
+    },
+    "./security": {
+      "types": "./src/security/index.ts",
+      "import": "./dist/security/index.js"
+    }
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@roamcli/agent-codex": "workspace:*",
-    "@roamcli/agent-plugin-sdk": "workspace:*",
-    "@roamcli/shared": "workspace:*",
-    "node-pty": "^1.1.0"
+    "zod": "^3.25.67"
   },
   "devDependencies": {
-    "tsx": "^4.22.4",
+    "@types/node": "^24.0.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

@@ -6,7 +6,7 @@ import {
   type Message,
   type RunnerRegistration,
   type Session,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import { newId } from "../../infra/ids.js";
 
 export type SessionCreateInput =

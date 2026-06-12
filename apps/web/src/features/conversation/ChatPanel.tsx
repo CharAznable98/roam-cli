@@ -1,4 +1,4 @@
-import type { Session } from "@roamcli/protocol";
+import type { Session } from "@roamcli/shared/protocol";
 import {
   Bot,
   ChevronDown,

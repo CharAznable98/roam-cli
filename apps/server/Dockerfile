@@ -8,9 +8,7 @@ COPY packages ./packages
 COPY apps ./apps
 
 RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @roamcli/protocol build \
-  && pnpm --filter @roamcli/security build \
-  && pnpm --filter @roamcli/parser-sdk build \
+RUN pnpm --filter @roamcli/shared build \
   && pnpm --filter @roamcli/web build \
   && pnpm --filter @roamcli/server build
 

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
-import type { AgentKind, RunnerCommand, RunnerProfile, Session } from "@roamcli/protocol";
+import type { AgentKind, RunnerCommand, RunnerProfile, Session } from "@roamcli/shared/protocol";
 import { spawnAgentProcess, type AgentProcess } from "../agents/process.js";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";

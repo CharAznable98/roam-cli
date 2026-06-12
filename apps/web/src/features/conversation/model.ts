@@ -1,4 +1,4 @@
-import type { Message } from "@roamcli/protocol";
+import type { Message } from "@roamcli/shared/protocol";
 
 export type UiMessage = Message & {
   variant?: "message" | "thought" | "tool";

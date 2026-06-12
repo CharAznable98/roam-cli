@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { RunnerCommand } from "@roamcli/protocol";
+import type { RunnerCommand } from "@roamcli/shared/protocol";
 import { loadAgentRegistry } from "../agents/registry.js";
 import { AuditLog } from "../persistence/audit.js";
 import { EventCache } from "../persistence/cache.js";

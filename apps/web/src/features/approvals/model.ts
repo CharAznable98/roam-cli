@@ -1,4 +1,4 @@
-import type { Approval, PatchHunk } from "@roamcli/protocol";
+import type { Approval, PatchHunk } from "@roamcli/shared/protocol";
 
 export type SessionPatchHunk = PatchHunk & {
   approvalId: string;

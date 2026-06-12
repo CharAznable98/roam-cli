@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { PatchApplyResult } from "@roamcli/protocol";
+import type { PatchApplyResult } from "@roamcli/shared/protocol";
 import { type FileRequestScope, resolvePatchTargetPath } from "./scope.js";
 
 export interface ApplyPatchOptions extends FileRequestScope {

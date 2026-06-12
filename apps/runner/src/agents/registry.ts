@@ -1,6 +1,6 @@
 import { agentPlugin as codexPlugin } from "@roamcli/agent-codex";
 import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/agent-plugin-sdk";
-import type { RunnerCapability, RunnerProfile } from "@roamcli/protocol";
+import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
 import { getPermissionTemplate } from "./permissions.js";
 
 export const DEFAULT_AGENT_PLUGINS = ["@roamcli/agent-codex"] as const;

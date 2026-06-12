@@ -2,7 +2,7 @@ import {
   nowIso,
   type Approval,
   type ApiApprovalResponse,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { fail, ok, type ServiceResult } from "../result.js";

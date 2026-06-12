@@ -14,9 +14,8 @@
 
 - [x] pnpm workspace 单仓结构：`apps/server`、`apps/runner`、`apps/web`、`packages/*`。
 - [x] TypeScript 严格配置与统一构建脚本。
-- [x] 共享协议包 `@roamcli/protocol`：Runner、Session、Message、Approval、Artifact、WebSocket 事件、HTTP payload 的 Zod schema 与 TS 类型。
-- [x] Parser SDK 包 `@roamcli/parser-sdk`：parser 接口、registry、基础 Codex 行解析器。
-- [x] Security 包 `@roamcli/security`：X25519 密钥协商、AES-256-GCM JSON 加密、审批签名、审计 hash chain。
+- [x] 共享包 `@roamcli/shared/protocol`：Runner、Session、Message、Approval、Artifact、WebSocket 事件、HTTP payload 的 Zod schema 与 TS 类型。
+- [x] 共享包 `@roamcli/shared/security`：X25519 密钥协商、AES-256-GCM JSON 加密、审批签名、审计 hash chain。
 - [~] 跨端协议版本治理：已有 schema，但还没有协议版本协商、兼容策略、迁移测试。
 - [ ] 独立 npm parser 包发布形态：目前是 monorepo 内部包，尚未拆成社区可贡献的 `@roamcli/parser-*` 模板和发布流程。
 

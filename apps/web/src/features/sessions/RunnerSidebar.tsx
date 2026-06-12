@@ -1,4 +1,4 @@
-import type { Project, RunnerRegistration, Session } from "@roamcli/protocol";
+import type { Project, RunnerRegistration, Session } from "@roamcli/shared/protocol";
 import {
   ChevronDown,
   ChevronRight,

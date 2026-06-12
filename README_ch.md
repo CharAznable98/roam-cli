@@ -132,8 +132,7 @@ pnpm --filter @roamcli/runner dev \
 apps/server       Fastify API、WebSocket hub、持久化、artifacts、静态 Web 托管。
 apps/runner       Runner CLI、Agent 进程管理、workspace 文件操作。
 apps/web          React 浏览器客户端。
-packages/protocol 共享 Zod schema 和 TypeScript 类型。
-packages/security 签名、哈希、加密辅助函数和审计辅助函数。
+packages/shared   共享协议 schema/类型，以及 Node 侧安全辅助函数。
 packages/agent-*  Agent 插件 SDK 和内置 Codex 插件。
 ```
 

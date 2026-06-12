@@ -1,6 +1,6 @@
 import { open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import type { FileContentResult, FileNode, FileTreeResult, FileWriteResult } from "@roamcli/protocol";
+import type { FileContentResult, FileNode, FileTreeResult, FileWriteResult } from "@roamcli/shared/protocol";
 import {
   type FileRequestScope,
   isInside,

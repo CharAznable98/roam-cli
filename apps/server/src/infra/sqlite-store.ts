@@ -15,7 +15,7 @@ import type {
   RunnerRegistration,
   Session,
   SessionStatus,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 
 interface ProjectRow {
   id: string;

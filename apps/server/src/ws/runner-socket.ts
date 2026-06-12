@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { RunnerEventSchema, type RunnerRegistration } from "@roamcli/protocol";
+import { RunnerEventSchema, type RunnerRegistration } from "@roamcli/shared/protocol";
 import { isAuthorized } from "../auth.js";
 import { parseSocketJson } from "../infra/socket-json.js";
 import { parseRunnerRegistration } from "../modules/runners/runner-registration.js";

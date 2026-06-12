@@ -1,5 +1,5 @@
 import type { AgentOutputParser } from "@roamcli/agent-plugin-sdk";
-import type { RunnerEvent, Session } from "@roamcli/protocol";
+import type { RunnerEvent, Session } from "@roamcli/shared/protocol";
 import type { AgentProcess } from "../agents/process.js";
 
 export type RunnerEventSink = (event: RunnerEvent) => Promise<void> | void;

@@ -3,7 +3,7 @@ import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import { FilePanel } from "../features/files/FilePanel";
 import { PushSettings } from "../features/pwa/PushSettings";
-import type { Project, Session } from "@roamcli/protocol";
+import type { Project, Session } from "@roamcli/shared/protocol";
 import {
   FolderPlus,
   Plus,

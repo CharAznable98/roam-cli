@@ -7,7 +7,7 @@ import {
   ApiUpdateProjectSchema,
   ApiWriteFileSchema,
   nowIso,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import { newId } from "../infra/ids.js";
 import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js";
 import type { AppContext } from "../server/context.js";

@@ -1,4 +1,4 @@
-import type { Approval, PatchHunk } from "@roamcli/protocol";
+import type { Approval, PatchHunk } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import {
   buildPatchFromHunks,

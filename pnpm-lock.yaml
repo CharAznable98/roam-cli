@@ -32,12 +32,9 @@ importers:
       '@roamcli/agent-plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/agent-plugin-sdk
-      '@roamcli/protocol':
+      '@roamcli/shared':
         specifier: workspace:*
-        version: link:../../packages/protocol
-      '@roamcli/security':
-        specifier: workspace:*
-        version: link:../../packages/security
+        version: link:../../packages/shared
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -60,12 +57,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
-      '@roamcli/protocol':
+      '@roamcli/shared':
         specifier: workspace:*
-        version: link:../../packages/protocol
-      '@roamcli/security':
-        specifier: workspace:*
-        version: link:../../packages/security
+        version: link:../../packages/shared
       fastify:
         specifier: ^5.8.5
         version: 5.8.5
@@ -91,9 +85,9 @@ importers:
 
   apps/web:
     dependencies:
-      '@roamcli/protocol':
+      '@roamcli/shared':
         specifier: workspace:*
-        version: link:../../packages/protocol
+        version: link:../../packages/shared
       '@vitejs/plugin-react':
         specifier: ^4.5.2
         version: 4.7.0(vite@6.4.3(@types/node@24.13.0)(jiti@1.21.7)(tsx@4.22.4))
@@ -167,9 +161,9 @@ importers:
       '@roamcli/agent-plugin-sdk':
         specifier: workspace:*
         version: link:../agent-plugin-sdk
-      '@roamcli/protocol':
+      '@roamcli/shared':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -183,9 +177,9 @@ importers:
 
   packages/agent-plugin-sdk:
     dependencies:
-      '@roamcli/protocol':
+      '@roamcli/shared':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -194,33 +188,11 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  packages/parser-sdk:
-    dependencies:
-      '@roamcli/protocol':
-        specifier: workspace:*
-        version: link:../protocol
-      strip-ansi:
-        specifier: ^7.1.0
-        version: 7.2.0
-    devDependencies:
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.0)(jiti@1.21.7)(jsdom@25.0.1)(tsx@4.22.4)
-
-  packages/protocol:
+  packages/shared:
     dependencies:
       zod:
         specifier: ^3.25.67
         version: 3.25.76
-    devDependencies:
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-
-  packages/security:
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -1172,10 +1144,6 @@ packages:
   ansi-regex@5.0.1:
     resolution: {integrity: sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==}
     engines: {node: '>=8'}
-
-  ansi-regex@6.2.2:
-    resolution: {integrity: sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg==}
-    engines: {node: '>=12'}
 
   ansi-styles@5.2.0:
     resolution: {integrity: sha512-Cxwpt2SfTzTtXcfOlzGEee8O+c+MmUgGrNiBcXnuWxuFJHe6a5Hz7qwhwe5OgaSYI0IJvkLqWX1ASG+cJOkEiA==}
@@ -2523,10 +2491,6 @@ packages:
   stringify-entities@4.0.4:
     resolution: {integrity: sha512-IwfBptatlO+QCJUo19AqvrPNqlVMpW9YEL2LIVY+Rpv2qsjCGxaDLNRgeGsQWJhfItebuJhsGSLjaBbNSQ+ieg==}
 
-  strip-ansi@7.2.0:
-    resolution: {integrity: sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w==}
-    engines: {node: '>=12'}
-
   strip-indent@3.0.0:
     resolution: {integrity: sha512-laJTa3Jb+VQpaC6DseHhF7dXVqHTfJPCRDaEbid/drOhgitgYku/letMUqOXFoWV0zIIUbjpdH2t+tYj4bQMRQ==}
     engines: {node: '>=8'}
@@ -3658,8 +3622,6 @@ snapshots:
       require-from-string: 2.0.2
 
   ansi-regex@5.0.1: {}
-
-  ansi-regex@6.2.2: {}
 
   ansi-styles@5.2.0: {}
 
@@ -5377,10 +5339,6 @@ snapshots:
     dependencies:
       character-entities-html4: 2.1.0
       character-entities-legacy: 3.0.0
-
-  strip-ansi@7.2.0:
-    dependencies:
-      ansi-regex: 6.2.2
 
   strip-indent@3.0.0:
     dependencies:

@@ -1,4 +1,4 @@
-import type { Artifact } from "@roamcli/protocol";
+import type { Artifact } from "@roamcli/shared/protocol";
 
 export function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
   return (

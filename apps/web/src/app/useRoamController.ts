@@ -1,4 +1,4 @@
-import type { AgentKind, ExecutionMode } from "@roamcli/protocol";
+import type { AgentKind, ExecutionMode } from "@roamcli/shared/protocol";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   createRoamApiClient,

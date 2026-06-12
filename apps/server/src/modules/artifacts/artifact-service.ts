@@ -1,4 +1,4 @@
-import type { Artifact } from "@roamcli/protocol";
+import type { Artifact } from "@roamcli/shared/protocol";
 import type {
   ArtifactStorage,
   CreateArtifactRequest,

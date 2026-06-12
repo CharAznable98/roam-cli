@@ -1,4 +1,4 @@
-import type { RunnerRegistration, Session } from "@roamcli/protocol";
+import type { RunnerRegistration, Session } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import {
   getProjectSessions,

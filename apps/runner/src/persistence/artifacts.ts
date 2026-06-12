@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
-import type { Artifact, ArtifactKind } from "@roamcli/protocol";
-import { nowIso } from "@roamcli/protocol";
+import type { Artifact, ArtifactKind } from "@roamcli/shared/protocol";
+import { nowIso } from "@roamcli/shared/protocol";
 
 export async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");

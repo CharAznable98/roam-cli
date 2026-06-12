@@ -1,4 +1,4 @@
-import type { Project, RunnerRegistration, Session } from "@roamcli/protocol";
+import type { Project, RunnerRegistration, Session } from "@roamcli/shared/protocol";
 
 export function getSelectedProject(
   projects: Project[],

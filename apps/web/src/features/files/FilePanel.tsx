@@ -1,4 +1,4 @@
-import type { FileNode } from "@roamcli/protocol";
+import type { FileNode } from "@roamcli/shared/protocol";
 import { ChevronRight, FileCode2, Folder, Pencil, Save } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 

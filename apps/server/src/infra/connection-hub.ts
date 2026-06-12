@@ -4,7 +4,7 @@ import {
   type RunnerCommand,
   type RunnerRegistration,
   type ServerEvent,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { ServerStore } from "./sqlite-store.js";
 
 interface RunnerConnection {

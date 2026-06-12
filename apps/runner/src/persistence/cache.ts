@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, appendFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { RunnerEvent } from "@roamcli/protocol";
+import type { RunnerEvent } from "@roamcli/shared/protocol";
 
 export interface CachedRunnerEvent {
   id: string;

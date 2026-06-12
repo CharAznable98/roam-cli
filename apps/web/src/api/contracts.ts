@@ -5,7 +5,7 @@ import type {
   Project,
   RunnerRegistration,
   Session,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { UiMessage } from "../features/conversation/model";
 
 export interface SessionDetailPayload {

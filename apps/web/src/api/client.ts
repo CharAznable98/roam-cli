@@ -14,7 +14,7 @@ import type {
   RunnerRegistration,
   ServerEvent,
   Session,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { InitialRemoteState, SessionDetailPayload } from "./contracts";
 import { toUiMessage } from "../features/conversation/model";
 

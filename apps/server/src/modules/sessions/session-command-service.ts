@@ -3,7 +3,7 @@ import {
   type ApiCreateSession,
   type ClientCommand,
   type Session,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import type { ApprovalService } from "../approvals/approval-service.js";

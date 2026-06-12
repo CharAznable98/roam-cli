@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ApprovalRequestDraft } from "@roamcli/agent-plugin-sdk";
-import type { Approval, RunnerCommand } from "@roamcli/protocol";
-import { nowIso } from "@roamcli/protocol";
-import { hashPayload, verifyApprovalSignature } from "@roamcli/security";
+import type { Approval, RunnerCommand } from "@roamcli/shared/protocol";
+import { nowIso } from "@roamcli/shared/protocol";
+import { hashPayload, verifyApprovalSignature } from "@roamcli/shared/security";
 import type { RunnerEventSink, RunningSession } from "../sessions/types.js";
 
 export interface ApprovalTrackerOptions {

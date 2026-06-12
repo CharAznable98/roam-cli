@@ -1,4 +1,4 @@
-import type { PatchHunk } from "@roamcli/protocol";
+import type { PatchHunk } from "@roamcli/shared/protocol";
 import { Check, CheckCheck, Loader2, X } from "lucide-react";
 
 type PatchReviewProps = {

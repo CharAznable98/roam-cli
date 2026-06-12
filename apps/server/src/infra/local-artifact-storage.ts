@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { ArtifactKindSchema, nowIso, type Artifact } from "@roamcli/protocol";
+import { ArtifactKindSchema, nowIso, type Artifact } from "@roamcli/shared/protocol";
 import { newId } from "./ids.js";
 
 export const CreateArtifactRequestSchema = z
