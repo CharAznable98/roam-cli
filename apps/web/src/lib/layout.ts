@@ -1,7 +1,7 @@
 export type LayoutMode = "mobile" | "tablet" | "desktop";
 
 export function getLayoutMode(width: number): LayoutMode {
-  if (width >= 1180) {
+  if (width >= 1440) {
     return "desktop";
   }
 
