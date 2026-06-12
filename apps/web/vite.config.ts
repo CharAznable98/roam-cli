@@ -15,7 +15,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@roamcli/protocol": fileURLToPath(new URL("../../packages/protocol/src/index.ts", import.meta.url)),
+      "@roamcli/shared/protocol": fileURLToPath(new URL("../../packages/shared/src/protocol/index.ts", import.meta.url)),
       "@": fileURLToPath(new URL("./src", import.meta.url))
     }
   },

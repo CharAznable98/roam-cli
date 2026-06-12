@@ -1,4 +1,4 @@
-import type { Project, RunnerRegistration, ServerEvent, Session } from "@roamcli/protocol";
+import type { Project, RunnerRegistration, ServerEvent, Session } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import { appReducer, initialAppState, type AppState } from "./state";
 

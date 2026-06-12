@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { resolve } from "node:path";
-import { RunnerProfileSchema, type RunnerProfile } from "@roamcli/protocol";
+import { RunnerProfileSchema, type RunnerProfile } from "@roamcli/shared/protocol";
 
 export interface RunnerCliOptions {
   server: string;

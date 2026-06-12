@@ -1,4 +1,4 @@
-declare module "@roamcli/protocol" {
+declare module "@roamcli/shared/protocol" {
   export type AgentKind = string;
   export type RunnerProfile = "strict" | "standard" | "trusted";
   export type ExecutionMode = "direct" | "managed_worktree" | "remote";

@@ -2,7 +2,7 @@ import {
   RunnerEventSchema,
   RunnerRegistrationSchema,
   type RunnerRegistration,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 
 export function parseRunnerRegistration(payload: unknown): RunnerRegistration {
   const direct = RunnerRegistrationSchema.safeParse(payload);

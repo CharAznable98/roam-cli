@@ -1,4 +1,4 @@
-import type { RunnerCommand } from "@roamcli/protocol";
+import type { RunnerCommand } from "@roamcli/shared/protocol";
 import { applyUnifiedDiff } from "../workspace/patch.js";
 import { readFileContent, readFileTree, writeFileContent } from "../workspace/files.js";
 import type { RunnerEventSink } from "./types.js";

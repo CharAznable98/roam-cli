@@ -1,4 +1,4 @@
-import type { RunnerProfile } from "@roamcli/protocol";
+import type { RunnerProfile } from "@roamcli/shared/protocol";
 
 export interface PermissionTemplate {
   profile: RunnerProfile;

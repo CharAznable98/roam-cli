@@ -1,4 +1,4 @@
-import type { RunnerCapability, RunnerProfile } from "@roamcli/protocol";
+import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
 
 export type PromptDelivery = "argument" | "stdin";
 

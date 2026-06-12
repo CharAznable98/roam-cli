@@ -28,7 +28,7 @@ Environment:
   ROAMCLI_SMOKE_TOKEN           Bearer token. Default: dev-token.
   ROAMCLI_SMOKE_RUNNER_ID       Runner id to use or start. Default: smoke-<pid>.
   ROAMCLI_SMOKE_WORKSPACE       Workspace exposed to the runner. Default: repo root.
-  ROAMCLI_SMOKE_SKIP_BUILD=1    Skip protocol/security prebuild.
+  ROAMCLI_SMOKE_SKIP_BUILD=1    Skip shared package prebuild.
   ROAMCLI_SMOKE_TIMEOUT_MS      Per-step timeout. Default: 30000.
   ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0
                                 Skip patch apply assertion.`);
@@ -67,14 +67,9 @@ try {
 
 async function runSmoke() {
   if (process.env.ROAMCLI_SMOKE_SKIP_BUILD !== "1") {
-    await runCommand("build:protocol", "pnpm", [
+    await runCommand("build:shared", "pnpm", [
       "--filter",
-      "@roamcli/protocol",
-      "build",
-    ]);
-    await runCommand("build:security", "pnpm", [
-      "--filter",
-      "@roamcli/security",
+      "@roamcli/shared",
       "build",
     ]);
     await runCommand("build:agent-plugin-sdk", "pnpm", [

@@ -12,7 +12,7 @@
     "types": ["vitest/globals"],
     "baseUrl": ".",
     "paths": {
-      "@roamcli/protocol": ["../../packages/protocol/src/index.ts"]
+      "@roamcli/shared/protocol": ["../../packages/shared/src/protocol/index.ts"]
     }
   },
   "include": ["src"]

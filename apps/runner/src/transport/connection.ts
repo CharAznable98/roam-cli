@@ -1,5 +1,5 @@
-import type { RunnerCommand, RunnerEvent, RunnerRegistration } from "@roamcli/protocol";
-import { RunnerCommandSchema } from "@roamcli/protocol";
+import type { RunnerCommand, RunnerEvent, RunnerRegistration } from "@roamcli/shared/protocol";
+import { RunnerCommandSchema } from "@roamcli/shared/protocol";
 import type { AuditLog } from "../persistence/audit.js";
 import type { EventCache } from "../persistence/cache.js";
 

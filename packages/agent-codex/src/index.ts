@@ -9,7 +9,7 @@ import type {
   ApprovalRequestDraft,
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
-import type { RunnerCapability } from "@roamcli/protocol";
+import type { RunnerCapability } from "@roamcli/shared/protocol";
 
 const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";

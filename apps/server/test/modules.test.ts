@@ -7,8 +7,8 @@ import type {
   RunnerRegistration,
   ServerEvent,
   Session,
-} from "@roamcli/protocol";
-import { hashPayload, signApproval } from "@roamcli/security";
+} from "@roamcli/shared/protocol";
+import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionHub } from "../src/infra/connection-hub.js";
 import {

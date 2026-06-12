@@ -1,4 +1,4 @@
-import type { SessionStatus } from "@roamcli/protocol";
+import type { SessionStatus } from "@roamcli/shared/protocol";
 
 const styles: Record<SessionStatus, string> = {
   pending: "bg-ink-100 text-ink-700",

@@ -5,7 +5,7 @@ import type {
   FileTreeResult,
   FileWriteResult,
   PatchApplyResult,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import { RunnerRpcClient } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";

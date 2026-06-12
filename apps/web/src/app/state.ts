@@ -8,7 +8,7 @@ import type {
   RunnerRegistration,
   ServerEvent,
   Session,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import {
   appendTokenMessage,
   type UiMessage,

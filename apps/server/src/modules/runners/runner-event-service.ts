@@ -1,4 +1,4 @@
-import { nowIso, type Message, type RunnerEvent } from "@roamcli/protocol";
+import { nowIso, type Message, type RunnerEvent } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import {
   RunnerRpcClient,

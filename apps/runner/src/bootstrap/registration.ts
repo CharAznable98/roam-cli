@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import type { RunnerCapability, RunnerProfile, RunnerRegistration } from "@roamcli/protocol";
+import type { RunnerCapability, RunnerProfile, RunnerRegistration } from "@roamcli/shared/protocol";
 
 export interface RunnerRegistrationOptions {
   runnerId: string;

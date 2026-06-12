@@ -1,4 +1,4 @@
-import { hashPayload, verifyApprovalSignature } from "@roamcli/security";
+import { hashPayload, verifyApprovalSignature } from "@roamcli/shared/security";
 
 export class ApprovalSignatureVerifier {
   constructor(private readonly secret: string | undefined) {}

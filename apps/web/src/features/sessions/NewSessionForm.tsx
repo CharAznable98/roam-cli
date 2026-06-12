@@ -1,4 +1,4 @@
-import type { AgentKind, ExecutionMode, Project, RunnerCapability, RunnerRegistration } from "@roamcli/protocol";
+import type { AgentKind, ExecutionMode, Project, RunnerCapability, RunnerRegistration } from "@roamcli/shared/protocol";
 import { Send } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 

@@ -4,7 +4,7 @@ import type {
   FileWriteResult,
   PatchApplyResult,
   RunnerCommand,
-} from "@roamcli/protocol";
+} from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "./connection-hub.js";
 
 type RunnerRpcResult =

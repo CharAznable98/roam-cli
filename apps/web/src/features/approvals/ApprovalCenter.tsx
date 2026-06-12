@@ -1,4 +1,4 @@
-import type { Approval, PatchHunk } from "@roamcli/protocol";
+import type { Approval, PatchHunk } from "@roamcli/shared/protocol";
 import { Check, Clock, KeyRound, X } from "lucide-react";
 import { PatchReview } from "./PatchReview";
 

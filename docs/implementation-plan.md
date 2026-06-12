@@ -4,9 +4,8 @@ This implementation follows the PRD as a monorepo with four independently testab
 
 ## Track A: Shared Contracts
 
-- `packages/protocol`: Zod schemas and TypeScript types for runners, sessions, messages, approvals, artifacts, WebSocket events, and HTTP payloads.
-- `packages/parser-sdk`: pluggable CLI output parser contract plus a baseline Codex line parser.
-- `packages/security`: X25519 session key derivation, AES-256-GCM payload encryption, approval signing, and append-only audit hash chain verification.
+- `packages/shared/src/protocol`: Zod schemas and TypeScript types for runners, sessions, messages, approvals, artifacts, WebSocket events, and HTTP payloads.
+- `packages/shared/src/security`: X25519 session key derivation, AES-256-GCM payload encryption, approval signing, and append-only audit hash chain verification.
 
 ## Track B: Server
 
@@ -28,5 +27,5 @@ This implementation follows the PRD as a monorepo with four independently testab
 
 ## Verification
 
-- Unit tests for shared contracts, parser behavior, encryption/signing/audit chain, server route behavior, runner process behavior, and web rendering.
+- Unit tests for shared contracts, encryption/signing/audit chain, server route behavior, runner process behavior, and web rendering.
 - `pnpm build`, `pnpm test`, and `pnpm typecheck` are the required gates.

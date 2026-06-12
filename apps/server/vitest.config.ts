@@ -8,8 +8,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@roamcli/protocol": new URL("../../packages/protocol/src/index.ts", import.meta.url).pathname,
-      "@roamcli/security": new URL("../../packages/security/src/index.ts", import.meta.url).pathname
+      "@roamcli/shared/protocol": new URL("../../packages/shared/src/protocol/index.ts", import.meta.url).pathname,
+      "@roamcli/shared/security": new URL("../../packages/shared/src/security/index.ts", import.meta.url).pathname
     }
   }
 });
