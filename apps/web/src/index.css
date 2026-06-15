@@ -220,6 +220,35 @@
     box-shadow: 0 0 0 3px rgba(19, 143, 189, 0.12);
   }
 
+  .directory-prefix-field {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto minmax(96px, 1fr);
+    align-items: center;
+    gap: 6px;
+  }
+
+  .directory-base-input {
+    overflow: hidden;
+    background: #eef2f6;
+    color: #586a80;
+    text-overflow: ellipsis;
+  }
+
+  .directory-base-input:focus {
+    border-color: #d9e1ea;
+    box-shadow: none;
+  }
+
+  .directory-separator {
+    color: #71869d;
+    font-weight: 700;
+  }
+
+  .directory-suffix-input {
+    min-width: 0;
+  }
+
   .tablet-tabs,
   .workspace-tabs {
     display: none;

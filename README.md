@@ -64,7 +64,7 @@ Use `dev-token` in the Web UI token field if it is not already filled.
 ## Use RoamCli
 
 1. Confirm that your Runner is online.
-2. Create a Project. Select the Runner and enter a project directory as seen from that Runner.
+2. Create a Project. Select the Runner; the UI fixes that Runner's workspace as the directory prefix, and you enter the relative project path under it.
 3. Create a Session inside the Project.
 4. Use the Chat panel to send prompts to the agent.
 5. Use the Files panel to browse and edit UTF-8 text files inside the session directory.

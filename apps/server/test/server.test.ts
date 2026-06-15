@@ -118,6 +118,47 @@ describe("server", () => {
     runner.close();
   });
 
+  it("returns invalid cwd errors from project directory validation", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const createdPromise = app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: "Outside Project",
+        runnerId: "runner-1",
+        directory: "/outside/project",
+      },
+    });
+    const validationCommand = await nextJson(runner);
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: validationCommand.requestId,
+        sessionId: validationCommand.sessionId,
+        message: "Path escapes workspace: /outside/project",
+        code: "INVALID_CWD",
+      }),
+    );
+
+    const created = await createdPromise;
+    expect(created.statusCode).toBe(400);
+    expect(created.json()).toEqual({
+      error: "runner_error",
+      code: "INVALID_CWD",
+      message: "Path escapes workspace: /outside/project",
+    });
+    expect(app.roam.store.listProjects()).toEqual([]);
+
+    runner.close();
+  });
+
   it("rejects duplicate active projects for the same runner directory", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);

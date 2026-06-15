@@ -64,7 +64,7 @@ http://127.0.0.1:8787
 ## 使用 RoamCli
 
 1. 确认 Runner 已在线。
-2. 创建 Project，选择 Runner，并填写该 Runner 视角下的项目目录。
+2. 创建 Project，选择 Runner；界面会把该 Runner 的 workspace 固定为目录前缀，你只需要填写其下的相对项目路径。
 3. 在 Project 下创建 Session。
 4. 在 Chat 面板向 Agent 发送提示。
 5. 在 Files 面板浏览和编辑 Session 目录内的 UTF-8 文本文件。

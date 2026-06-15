@@ -299,12 +299,8 @@ export class SessionManager {
     if (cwd === undefined) {
       return undefined;
     }
-    try {
-      const resolved = this.#resolveCwd(cwd);
-      this.#sessionCwds.set(sessionId, resolved);
-      return resolved;
-    } catch {
-      return undefined;
-    }
+    const resolved = this.#resolveCwd(cwd);
+    this.#sessionCwds.set(sessionId, resolved);
+    return resolved;
   }
 }

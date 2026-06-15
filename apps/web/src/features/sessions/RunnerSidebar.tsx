@@ -10,8 +10,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState, type ReactNode } from "react";
+import { FormEvent, useId, useMemo, useState, type ReactNode } from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
+import {
+  composeProjectDirectory,
+  projectDirectoryName,
+} from "./project-directory";
 import { StatusPill } from "../../shared/components/StatusPill";
 
 type RunnerSidebarProps = {
@@ -308,35 +312,47 @@ export function ProjectForm({
   }) => void | Promise<void>;
   onCreated?: () => void;
 }) {
+  const directoryLabelId = useId();
   const [name, setName] = useState("");
   const [runnerId, setRunnerId] = useState(runners[0]?.runnerId ?? "");
-  const [directory, setDirectory] = useState(runners[0]?.workspaceRoot ?? "");
+  const [directorySuffix, setDirectorySuffix] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const selectedRunner =
+    runners.find((runner) => runner.runnerId === runnerId) ?? runners[0];
+  const runnerBaseDirectory = selectedRunner?.workspaceRoot ?? "";
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const cleanDirectory = directory.trim();
     const cleanRunnerId = runnerId || runners[0]?.runnerId || "";
-    if (!cleanRunnerId) {
+    const runner = runners.find((item) => item.runnerId === cleanRunnerId);
+    if (!cleanRunnerId || !runner) {
       setError("Choose an online runner before creating a project.");
       return;
     }
-    if (!cleanDirectory) {
-      setError("Directory is required.");
+
+    let cleanDirectory: string;
+    try {
+      cleanDirectory = composeProjectDirectory(
+        runner.workspaceRoot,
+        directorySuffix,
+      );
+    } catch (directoryError: unknown) {
+      setError(errorMessage(directoryError, "Directory is invalid."));
       return;
     }
+
     setSubmitting(true);
     try {
       await onCreate({
         name:
           name.trim() ||
-          cleanDirectory.split("/").filter(Boolean).at(-1) ||
-          cleanDirectory,
+          projectDirectoryName(cleanDirectory),
         runnerId: cleanRunnerId,
         directory: cleanDirectory,
       });
       setName("");
+      setDirectorySuffix("");
       setError("");
       onCreated?.();
     } catch (createError: unknown) {
@@ -363,10 +379,7 @@ export function ProjectForm({
           onChange={(event) => {
             const next = event.target.value;
             setRunnerId(next);
-            setDirectory(
-              runners.find((runner) => runner.runnerId === next)
-                ?.workspaceRoot ?? "",
-            );
+            setDirectorySuffix("");
             setError("");
           }}
         >
@@ -377,17 +390,32 @@ export function ProjectForm({
           ))}
         </select>
       </label>
-      <label className="field">
-        <span>Directory</span>
-        <input
-          value={directory}
-          aria-invalid={error ? true : undefined}
-          onChange={(event) => {
-            setDirectory(event.target.value);
-            setError("");
-          }}
-        />
-      </label>
+      <div className="field">
+        <span id={directoryLabelId}>Directory</span>
+        <div className="directory-prefix-field">
+          <input
+            className="directory-base-input"
+            aria-label="Runner base"
+            value={runnerBaseDirectory}
+            readOnly
+            tabIndex={-1}
+          />
+          <span className="directory-separator" aria-hidden="true">
+            {runnerBaseDirectory === "/" ? "" : "/"}
+          </span>
+          <input
+            className="directory-suffix-input"
+            aria-labelledby={directoryLabelId}
+            value={directorySuffix}
+            aria-invalid={error ? true : undefined}
+            placeholder="project"
+            onChange={(event) => {
+              setDirectorySuffix(event.target.value);
+              setError("");
+            }}
+          />
+        </div>
+      </div>
       {error ? (
         <p className="form-error" role="alert">
           {error}

@@ -616,14 +616,20 @@ describe("App", () => {
 
     fireEvent.click(sidebar.getByRole("button", { name: "New project" }));
     const projectDialog = screen.getByRole("dialog", { name: "New Project" });
+    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
+      "/workspace",
+    );
+    expect(within(projectDialog).getByLabelText("Runner base")).toHaveAttribute(
+      "readonly",
+    );
     fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
-      target: { value: "" },
+      target: { value: "../outside" },
     });
     fireEvent.click(
       within(projectDialog).getByRole("button", { name: "Create project" }),
     );
     expect(within(projectDialog).getByRole("alert")).toHaveTextContent(
-      "Directory is required.",
+      "Directory must stay under the runner base.",
     );
     expect(
       fetchCalls.some(
@@ -684,9 +690,6 @@ describe("App", () => {
     fireEvent.change(within(projectDialog).getByLabelText("Name"), {
       target: { value: "Duplicate Project" },
     });
-    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
-      target: { value: "/workspace" },
-    });
     fireEvent.click(
       within(projectDialog).getByRole("button", { name: "Create project" }),
     );
@@ -694,14 +697,25 @@ describe("App", () => {
     expect(
       await within(projectDialog).findByText(/project_already_exists/),
     ).toBeInTheDocument();
+    const failedProjectCreate = fetchCalls.find(
+      (call) =>
+        call.url.endsWith("/v1/projects") && call.init?.method === "POST",
+    );
+    expect(JSON.parse(String(failedProjectCreate?.init?.body))).toMatchObject({
+      name: "Duplicate Project",
+      directory: "/workspace",
+    });
     expect(
       screen.getByRole("dialog", { name: "New Project" }),
     ).toBeInTheDocument();
     expect(within(projectDialog).getByLabelText("Name")).toHaveValue(
       "Duplicate Project",
     );
-    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue(
+    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
       "/workspace",
+    );
+    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue(
+      "",
     );
   });
 
@@ -792,8 +806,11 @@ describe("App", () => {
     fireEvent.change(within(projectDialog).getByLabelText("Name"), {
       target: { value: "Mobile Project" },
     });
+    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
+      "/workspace",
+    );
     fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
-      target: { value: "/workspace/mobile" },
+      target: { value: "mobile" },
     });
     fireEvent.click(
       within(projectDialog).getByRole("button", { name: "Create project" }),

@@ -27,9 +27,8 @@ export class WorkspaceCommandHandler {
   }
 
   public async readFileTree(command: Extract<RunnerCommand, { type: "readFileTree" }>): Promise<void> {
-    const sessionCwd = this.#getSessionCwd(command.sessionId, command.cwd);
+    const sessionCwd = await this.#resolveFileCommandCwd(command.requestId, command.sessionId, command.cwd);
     if (sessionCwd === undefined) {
-      await this.#emitSessionCwdUnavailable(command.requestId, command.sessionId);
       return;
     }
     try {
@@ -49,9 +48,8 @@ export class WorkspaceCommandHandler {
   }
 
   public async readFileContent(command: Extract<RunnerCommand, { type: "readFileContent" }>): Promise<void> {
-    const sessionCwd = this.#getSessionCwd(command.sessionId, command.cwd);
+    const sessionCwd = await this.#resolveFileCommandCwd(command.requestId, command.sessionId, command.cwd);
     if (sessionCwd === undefined) {
-      await this.#emitSessionCwdUnavailable(command.requestId, command.sessionId);
       return;
     }
     try {
@@ -71,9 +69,8 @@ export class WorkspaceCommandHandler {
   }
 
   public async writeFileContent(command: Extract<RunnerCommand, { type: "writeFileContent" }>): Promise<void> {
-    const sessionCwd = this.#getSessionCwd(command.sessionId, command.cwd);
+    const sessionCwd = await this.#resolveFileCommandCwd(command.requestId, command.sessionId, command.cwd);
     if (sessionCwd === undefined) {
-      await this.#emitSessionCwdUnavailable(command.requestId, command.sessionId);
       return;
     }
     try {
@@ -114,6 +111,20 @@ export class WorkspaceCommandHandler {
       ...(command.strip === undefined ? {} : { strip: command.strip })
     });
     await this.#emit({ type: "patchApplyResult", result });
+  }
+
+  async #resolveFileCommandCwd(requestId: string, sessionId: string, cwd: string | undefined): Promise<string | undefined> {
+    try {
+      const sessionCwd = this.#getSessionCwd(sessionId, cwd);
+      if (sessionCwd === undefined) {
+        await this.#emitSessionCwdUnavailable(requestId, sessionId);
+      }
+      return sessionCwd;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({ type: "error", requestId, sessionId, message, code: "INVALID_CWD" });
+      return undefined;
+    }
   }
 
   async #emitSessionCwdUnavailable(requestId: string, sessionId: string): Promise<void> {
