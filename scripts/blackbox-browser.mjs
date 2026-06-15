@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
@@ -148,6 +148,7 @@ async function runUserJourney(browser, scenario) {
     workspace,
     `.roamcli-blackbox-project-${scenario.name}-${process.pid}`,
   );
+  const projectDirectorySuffix = relative(workspace, projectDir);
   const fileName = `roamcli-blackbox-${scenario.name}-${process.pid}.txt`;
   const initialValue = `initial-${scenario.name}-${Date.now()}`;
   const editedValue = `edited-${scenario.name}-${Date.now()}`;
@@ -183,6 +184,7 @@ async function runUserJourney(browser, scenario) {
     const project = await createProjectFromUi(page, scenario, {
       name: projectName,
       directory: projectDir,
+      directorySuffix: projectDirectorySuffix,
     });
     if (!scenario.mobile) {
       await expectText(page, projectName);
@@ -372,6 +374,13 @@ async function runNoRunnerJourney(browser) {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await expectText(page, "No runners are online");
     await expectText(page, "pnpm --filter @roamcli/runner dev");
+    const runnerUrl = new URL("/v1/runner", baseUrl);
+    runnerUrl.protocol = runnerUrl.protocol === "https:" ? "wss:" : "ws:";
+    await expectText(page, runnerUrl.toString());
+    const bodyText = await page.locator("body").innerText();
+    if (!baseUrl.includes(":8787") && bodyText.includes("127.0.0.1:8787")) {
+      throw new Error("no-runner command still hardcodes 127.0.0.1:8787");
+    }
     await captureScreenshot(page, { name: "no-runner" }, "empty-runner-state");
   } finally {
     await context.close();
@@ -502,10 +511,7 @@ async function createProjectFromUi(page, scenario, values) {
     await dialog
       .locator('input[placeholder="Optional project name"]')
       .fill(values.name);
-    await dialog
-      .locator("label.field", { hasText: "Directory" })
-      .locator("input")
-      .fill(values.directory);
+    await fillProjectDirectoryFromUi(dialog, values);
     await dialog.getByRole("button", { name: "Create project" }).click();
     const project = await waitFor(async () => {
       const payload = await requestJson("/v1/projects");
@@ -528,10 +534,7 @@ async function createProjectFromUi(page, scenario, values) {
   await dialog
     .locator('input[placeholder="Optional project name"]')
     .fill(values.name);
-  await dialog
-    .locator("label.field", { hasText: "Directory" })
-    .locator("input")
-    .fill(values.directory);
+  await fillProjectDirectoryFromUi(dialog, values);
   await dialog.getByRole("button", { name: "Create project" }).click();
   const project = await waitFor(async () => {
     const payload = await requestJson("/v1/projects");
@@ -542,6 +545,25 @@ async function createProjectFromUi(page, scenario, values) {
     `project ${values.name} to render in tree`,
   );
   return project;
+}
+
+async function fillProjectDirectoryFromUi(dialog, values) {
+  const baseInput = dialog.getByLabel("Runner base", { exact: true });
+  const directoryInput = dialog.getByLabel("Directory", { exact: true });
+  const baseValue = await baseInput.inputValue();
+  if (baseValue !== workspace) {
+    throw new Error(
+      `project directory base mismatch: expected ${workspace}, received ${baseValue}`,
+    );
+  }
+  if ((await baseInput.getAttribute("readonly")) === null) {
+    throw new Error("project directory base is editable");
+  }
+
+  await directoryInput.fill(values.directory);
+  await dialog.getByRole("button", { name: "Create project" }).click();
+  await expectTextIn(dialog, "Directory must stay under the runner base.");
+  await directoryInput.fill(values.directorySuffix);
 }
 
 async function createSessionFromUi(page, scenario, values) {

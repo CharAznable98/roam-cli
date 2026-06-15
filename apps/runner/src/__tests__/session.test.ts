@@ -223,6 +223,37 @@ describe("SessionManager", () => {
     });
   });
 
+  it("reports command cwd resolution errors instead of hiding them as missing sessions", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-invalid-cwd-"));
+    const outsideWorkspace = join(tmpdir(), "roam-runner-outside-project");
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.handle({
+      type: "readFileTree",
+      requestId: "tree1",
+      sessionId: "project-directory-check",
+      cwd: outsideWorkspace,
+      path: ".",
+      depth: 0,
+    });
+
+    expect(events).toContainEqual({
+      type: "error",
+      requestId: "tree1",
+      sessionId: "project-directory-check",
+      message: `Path escapes workspace: ${outsideWorkspace}`,
+      code: "INVALID_CWD",
+    });
+  });
+
   it("returns request-scoped errors for file commands without cwd context", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-missing-cwd-"));
     const events: RunnerEvent[] = [];

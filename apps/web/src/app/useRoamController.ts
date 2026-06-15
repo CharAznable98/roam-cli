@@ -13,6 +13,7 @@ import {
   getSelectedRunner,
   getSelectedSession,
 } from "../features/sessions/model";
+import { buildRunnerCommand } from "./runner-command";
 import { appReducer, initialAppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
@@ -526,7 +527,7 @@ export function useRoamController() {
     sessionTerminalLines,
     sessionFiles,
     sessionFileTreeState,
-    runnerCommand: `pnpm --filter @roamcli/runner dev --server ws://127.0.0.1:8787/v1/runner --token ${token || "dev-token"}`,
+    runnerCommand: buildRunnerCommand(token),
     selectRunner,
     selectProject,
     createProject,
