@@ -1,14 +1,23 @@
-import { Bell, Files, MessageSquare, SquareTerminal } from "lucide-react";
+import { Bell, Files, MessageSquare } from "lucide-react";
 import type { WorkspaceTab } from "./navigation";
 
-const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof MessageSquare }> = [
+const tabs: Array<{
+  id: WorkspaceTab;
+  label: string;
+  icon: typeof MessageSquare;
+}> = [
   { id: "chat", label: "对话", icon: MessageSquare },
   { id: "files", label: "文件", icon: Files },
-  { id: "terminal", label: "终端", icon: SquareTerminal },
-  { id: "approvals", label: "审批", icon: Bell }
+  { id: "approvals", label: "审批", icon: Bell },
 ];
 
-export function BottomTabs({ activeTab, onChange }: { activeTab: WorkspaceTab; onChange: (tab: WorkspaceTab) => void }) {
+export function BottomTabs({
+  activeTab,
+  onChange,
+}: {
+  activeTab: WorkspaceTab;
+  onChange: (tab: WorkspaceTab) => void;
+}) {
   return (
     <nav className="bottom-tabs" aria-label="Mobile tabs">
       {tabs.map((tab) => {

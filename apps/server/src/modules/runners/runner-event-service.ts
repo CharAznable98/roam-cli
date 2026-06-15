@@ -1,4 +1,8 @@
-import { nowIso, type Message, type RunnerEvent } from "@roamcli/shared/protocol";
+import {
+  nowIso,
+  type Message,
+  type RunnerEvent,
+} from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import {
   RunnerRpcClient,
@@ -69,15 +73,6 @@ export class RunnerEventService {
         sessionId: event.sessionId,
         content: event.content,
         encrypted: event.encrypted,
-      });
-      return;
-    }
-
-    if (event.type === "terminalData") {
-      this.hub.broadcast({
-        type: "terminal:data",
-        sessionId: event.sessionId,
-        chunk: event.chunk,
       });
       return;
     }

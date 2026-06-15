@@ -11,6 +11,7 @@ import {
   Trash2,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react";
 import { NewSessionForm } from "../features/sessions/NewSessionForm";
 import {
@@ -18,10 +19,10 @@ import {
   RunnerSidebar,
   SidebarModal,
 } from "../features/sessions/RunnerSidebar";
-import { TerminalPanel } from "../features/terminal/TerminalPanel";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
+import type { AppNotification } from "./state";
 import type { useRoamController } from "./useRoamController";
 
 type AppShellProps = {
@@ -48,7 +49,6 @@ export function AppShell({ controller }: AppShellProps) {
     sessionMessages,
     sessionApprovals,
     sessionHunks,
-    sessionTerminalLines,
     sessionFiles,
     sessionFileTreeState,
     runnerCommand,
@@ -62,7 +62,6 @@ export function AppShell({ controller }: AppShellProps) {
     applyAcceptedPatch,
     sendControl,
     deleteSelectedSession,
-    sendTerminalCommand,
     selectFile,
     saveSelectedFile,
   } = controller;
@@ -71,6 +70,10 @@ export function AppShell({ controller }: AppShellProps) {
     dispatch({ type: "activeTabChanged", tab });
   const setSelectedSessionId = (sessionId: string) =>
     dispatch({ type: "sessionSelected", sessionId });
+  const dismissNotification = useCallback(
+    (id: string) => dispatch({ type: "notificationDismissed", id }),
+    [dispatch],
+  );
   const activeProjects = useMemo(
     () => state.projects.filter((project) => !project.archivedAt),
     [state.projects],
@@ -141,14 +144,10 @@ export function AppShell({ controller }: AppShellProps) {
         </div>
       </header>
 
-      {state.error ? (
-        <div className="error-banner" role="alert">
-          <div>
-            <strong>{state.error.title}</strong>
-            <p>{state.error.message}</p>
-          </div>
-        </div>
-      ) : null}
+      <NotificationStack
+        notifications={state.notifications}
+        onDismiss={dismissNotification}
+      />
 
       {state.loadState === "loading" ? (
         <div className="empty-state">Loading remote RoamCli state...</div>
@@ -258,14 +257,6 @@ export function AppShell({ controller }: AppShellProps) {
                       dispatch({ type: "editorContentChanged", content })
                     }
                     onSaveFile={saveSelectedFile}
-                  />
-                </div>
-                <div className="workspace-surface terminal-surface">
-                  <TerminalPanel
-                    lines={sessionTerminalLines}
-                    streamState={state.connectionState}
-                    onCommand={sendTerminalCommand}
-                    onControl={sendControl}
                   />
                 </div>
                 <div className="workspace-surface approvals-surface">
@@ -560,6 +551,55 @@ function MobileSessionSwitcher({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function NotificationStack({
+  notifications,
+  onDismiss,
+}: {
+  notifications: AppNotification[];
+  onDismiss: (id: string) => void;
+}) {
+  useEffect(() => {
+    if (notifications.length === 0) {
+      return;
+    }
+    const timers = notifications.map((notification) =>
+      globalThis.setTimeout(() => onDismiss(notification.id), 6_000),
+    );
+    return () => {
+      timers.forEach((timer) => globalThis.clearTimeout(timer));
+    };
+  }, [notifications, onDismiss]);
+
+  if (notifications.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="notification-stack" aria-live="polite">
+      {notifications.map((notification) => (
+        <article
+          key={notification.id}
+          className={`notification-card ${notification.tone}`}
+        >
+          <div>
+            <strong>{notification.title}</strong>
+            <p>{notification.message}</p>
+          </div>
+          <button
+            className="notification-close"
+            type="button"
+            aria-label={`Dismiss notification: ${notification.title}`}
+            title="Dismiss notification"
+            onClick={() => onDismiss(notification.id)}
+          >
+            <X size={15} />
+          </button>
+        </article>
+      ))}
     </div>
   );
 }

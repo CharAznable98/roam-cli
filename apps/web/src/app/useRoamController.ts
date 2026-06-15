@@ -39,6 +39,7 @@ export function useRoamController() {
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
+  const workspaceSessionIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     localStorage.setItem("roamcli.token", token);
@@ -52,21 +53,32 @@ export function useRoamController() {
     let retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let retryAttempt = 0;
 
-    api
-      .loadInitialState()
-      .then((remote) => {
-        if (!cancelled) {
-          dispatch({ type: "bootstrapSucceeded", remote });
-        }
-      })
-      .catch((loadError: unknown) => {
-        if (!cancelled) {
+    function loadRemoteState(failureMode: "bootstrap" | "notification") {
+      void api
+        .loadInitialState()
+        .then((remote) => {
+          if (!cancelled) {
+            dispatch({ type: "bootstrapSucceeded", remote });
+          }
+        })
+        .catch((loadError: unknown) => {
+          if (cancelled) {
+            return;
+          }
+          const message = errorMessage(loadError);
+          if (failureMode === "bootstrap") {
+            dispatch({ type: "bootstrapFailed", message });
+            return;
+          }
           dispatch({
-            type: "bootstrapFailed",
-            message: errorMessage(loadError),
+            type: "errorChanged",
+            title: "RoamCli API request failed",
+            message,
           });
-        }
-      });
+        });
+    }
+
+    loadRemoteState("bootstrap");
 
     function clearRetryTimer() {
       if (retryTimer) {
@@ -119,6 +131,7 @@ export function useRoamController() {
           }
           dispatch({ type: "connectionChanged", status });
           if (status === "open") {
+            const shouldSyncMissedEvents = retryAttempt > 0;
             retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
             retryAttempt = 0;
             clearRetryTimer();
@@ -127,6 +140,9 @@ export function useRoamController() {
               attempt: 0,
               delayMs: INITIAL_RECONNECT_DELAY_MS,
             });
+            if (shouldSyncMissedEvents) {
+              loadRemoteState("notification");
+            }
             return;
           }
           scheduleReconnect();
@@ -195,6 +211,7 @@ export function useRoamController() {
 
   useEffect(() => {
     if (!selectedSession || !apiRef.current) {
+      workspaceSessionIdRef.current = undefined;
       dispatch({ type: "sessionWorkspaceCleared" });
       return;
     }
@@ -204,11 +221,22 @@ export function useRoamController() {
       selectedSession.executionMode === "managed_worktree" &&
       selectedSession.status === "pending"
     ) {
+      workspaceSessionIdRef.current = undefined;
       dispatch({ type: "sessionWorkspaceCleared" });
       return;
     }
     let cancelled = false;
-    dispatch({ type: "sessionWorkspaceLoading", sessionId });
+    const resetSelection = workspaceSessionIdRef.current !== sessionId;
+    workspaceSessionIdRef.current = sessionId;
+    if (!selectedRunner) {
+      dispatch({
+        type: "sessionWorkspaceUnavailable",
+        sessionId,
+        resetSelection,
+      });
+      return;
+    }
+    dispatch({ type: "sessionWorkspaceLoading", sessionId, resetSelection });
 
     void apiRef.current
       .fetchFileTree(sessionId)
@@ -234,6 +262,7 @@ export function useRoamController() {
     selectedSession?.executionMode,
     selectedSession?.id,
     selectedSession?.status,
+    selectedRunner?.runnerId,
   ]);
 
   const selectRunner = (runnerId: string) => {
@@ -431,24 +460,6 @@ export function useRoamController() {
       );
   };
 
-  const sendTerminalCommand = (command: string) => {
-    if (!selectedSession) return;
-    const sent = sendStreamCommand(streamRef.current, {
-      type: "userMessage",
-      requestId: `req-${Date.now()}`,
-      sessionId: selectedSession.id,
-      content: command,
-    });
-    if (!sent) {
-      dispatch({
-        type: "errorChanged",
-        title: "Event stream is disconnected",
-        message:
-          "Terminal input was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
-      });
-    }
-  };
-
   const selectFile = (path: string) => {
     if (!selectedSession || !apiRef.current) return;
     loadFileContent(selectedSession.id, path);
@@ -500,9 +511,6 @@ export function useRoamController() {
   const sessionHunks = selectedSession
     ? state.hunks.filter((hunk) => hunk.sessionId === selectedSession.id)
     : [];
-  const sessionTerminalLines = selectedSession
-    ? (state.terminalLines[selectedSession.id] ?? [])
-    : [];
   const sessionFiles = selectedSession
     ? (state.filesBySession[selectedSession.id] ?? [])
     : [];
@@ -524,7 +532,6 @@ export function useRoamController() {
     sessionMessages,
     sessionApprovals,
     sessionHunks,
-    sessionTerminalLines,
     sessionFiles,
     sessionFileTreeState,
     runnerCommand: buildRunnerCommand(token),
@@ -539,7 +546,6 @@ export function useRoamController() {
     applyAcceptedPatch,
     sendControl,
     deleteSelectedSession,
-    sendTerminalCommand,
     selectFile,
     saveSelectedFile,
   };

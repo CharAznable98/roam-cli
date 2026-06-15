@@ -127,6 +127,62 @@
     color: #d04444;
   }
 
+  .notification-stack {
+    position: fixed;
+    right: 14px;
+    bottom: calc(var(--bottom-tabs-space) + 12px + env(safe-area-inset-bottom));
+    z-index: 40;
+    display: grid;
+    width: min(360px, calc(100vw - 28px));
+    gap: 8px;
+  }
+
+  .notification-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 32px;
+    gap: 10px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 18px 36px rgba(23, 32, 46, 0.14);
+    color: #465568;
+    padding: 12px;
+  }
+
+  .notification-card.error {
+    border-color: rgba(208, 68, 68, 0.25);
+  }
+
+  .notification-card strong {
+    display: block;
+    color: #17202e;
+    font-size: 13px;
+  }
+
+  .notification-card p {
+    margin: 3px 0 0;
+    overflow-wrap: anywhere;
+    color: #586a80;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .notification-close {
+    display: inline-flex;
+    height: 30px;
+    width: 30px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: #71869d;
+  }
+
+  .notification-close:hover {
+    border-color: #d9e1ea;
+    color: #17202e;
+  }
+
   .topbar-actions > span,
   .stream-status {
     min-width: 0;
@@ -193,8 +249,7 @@
 
   .field input,
   .field select,
-  .field textarea,
-  .terminal-input input {
+  .field textarea {
     min-height: 40px;
     min-width: 0;
     width: 100%;
@@ -214,7 +269,6 @@
   .field input:focus,
   .field select:focus,
   .field textarea:focus,
-  .terminal-input input:focus,
   .composer textarea:focus {
     border-color: #138fbd;
     box-shadow: 0 0 0 3px rgba(19, 143, 189, 0.12);
@@ -924,8 +978,7 @@
   .collapsible-message pre,
   .approval-card pre,
   .hunk pre,
-  .editor-placeholder pre,
-  .terminal-output {
+  .editor-placeholder pre {
     overflow: auto;
     border-radius: 6px;
     background: #1f2937;
@@ -1029,7 +1082,6 @@
   }
 
   .active-files .workspace-column,
-  .active-terminal .workspace-column,
   .active-approvals .workspace-column {
     display: flex;
   }
@@ -1051,7 +1103,6 @@
 
   .active-files .files-surface,
   .active-chat .files-surface,
-  .active-terminal .terminal-surface,
   .active-approvals .approvals-surface {
     display: block;
   }
@@ -1232,55 +1283,10 @@
     opacity: 0.72;
   }
 
-  .terminal-panel {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex-direction: column;
-  }
-
-  .terminal-output {
-    min-width: 0;
-    margin: 12px;
-    min-height: 0;
-    flex: 1;
-    padding: 12px;
-  }
-
-  .terminal-output code,
   .hunk code {
     display: block;
     white-space: pre-wrap;
     word-break: break-word;
-  }
-
-  .terminal-header-actions {
-    display: flex;
-    min-width: 0;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 6px;
-  }
-
-  .terminal-control {
-    height: 32px;
-    width: 32px;
-  }
-
-  .terminal-input {
-    display: grid;
-    min-width: 0;
-    grid-template-columns: minmax(0, 1fr) 38px;
-    gap: 8px;
-    border-top: 1px solid #d9e1ea;
-    padding: 10px;
-  }
-
-  .terminal-input input:disabled {
-    cursor: not-allowed;
-    background: #eef2f6;
-    color: #71869d;
   }
 
   .approval-card,
@@ -1363,7 +1369,7 @@
     left: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     border-top: 1px solid #d9e1ea;
     background: rgba(248, 250, 252, 0.98);
     box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.08);
@@ -1399,43 +1405,6 @@
     background: white;
     color: #138fbd;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-  }
-
-  .error-banner {
-    display: grid;
-    flex-shrink: 0;
-    gap: 10px;
-    border-bottom: 1px solid rgba(208, 68, 68, 0.18);
-    background: #fff5f5;
-    color: #7f1d1d;
-    padding: 12px;
-  }
-
-  .error-banner strong {
-    display: block;
-    color: #991b1b;
-    font-size: 13px;
-  }
-
-  .error-banner p {
-    margin: 4px 0 0;
-    max-width: 980px;
-    overflow-wrap: anywhere;
-    color: #9f3434;
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .error-banner pre {
-    margin: 0;
-    max-width: 100%;
-    overflow: auto;
-    border: 1px solid rgba(208, 68, 68, 0.18);
-    border-radius: 7px;
-    background: white;
-    color: #7f1d1d;
-    padding: 9px 10px;
-    white-space: pre-wrap;
   }
 
   .empty-state {
@@ -1571,41 +1540,13 @@
     width: 36px;
   }
 
-  .mobile-icon-button,
-  .terminal-control {
+  .mobile-icon-button {
     height: 40px;
     width: 40px;
   }
 
   .small-button {
     min-height: 40px;
-  }
-
-  .active-terminal .workspace-scroll {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .active-terminal .terminal-surface {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-  }
-
-  .active-terminal .terminal-panel {
-    flex: 1;
-  }
-
-  .active-terminal .terminal-output {
-    min-height: 0;
-    flex: 1;
-    overflow: auto;
-  }
-
-  .active-terminal .terminal-input {
-    flex-shrink: 0;
-    background: white;
   }
 }
 
@@ -1616,6 +1557,11 @@
 }
 
 @media (min-width: 768px) {
+  .notification-stack {
+    top: 72px;
+    bottom: auto;
+  }
+
   .app-shell {
     --bottom-tabs-space: 0px;
   }
@@ -1686,8 +1632,7 @@
     display: block;
   }
 
-  .file-grid,
-  .terminal-panel {
+  .file-grid {
     min-height: 420px;
   }
 
@@ -1698,10 +1643,6 @@
   .editor-placeholder,
   .code-editor {
     min-height: 260px;
-  }
-
-  .terminal-output {
-    min-height: 300px;
   }
 
   .app-grid {
@@ -1737,7 +1678,7 @@
 
   .workspace-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     border-bottom: 1px solid #d9e1ea;
     background: #f8fafc;
@@ -1746,12 +1687,10 @@
 
   .active-chat .files-surface,
   .active-files .files-surface,
-  .active-terminal .terminal-surface,
   .active-approvals .approvals-surface {
     display: block;
   }
 
-  .active-chat .terminal-surface,
   .active-chat .approvals-surface {
     display: none;
   }

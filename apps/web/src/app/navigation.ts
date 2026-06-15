@@ -1,6 +1,6 @@
-import { Bell, Files, MessageSquare, SquareTerminal } from "lucide-react";
+import { Bell, Files, MessageSquare } from "lucide-react";
 
-export type WorkspaceTab = "chat" | "files" | "terminal" | "approvals";
+export type WorkspaceTab = "chat" | "files" | "approvals";
 
 export const workspaceTabs: Array<{
   id: WorkspaceTab;
@@ -9,6 +9,5 @@ export const workspaceTabs: Array<{
 }> = [
   { id: "chat", label: "Conversation", icon: MessageSquare },
   { id: "files", label: "Files", icon: Files },
-  { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "approvals", label: "Approvals", icon: Bell },
 ];

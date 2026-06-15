@@ -9,8 +9,8 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
-import type { UiMessage } from "./model";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { hasLaterFinalAssistantMessage, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -36,6 +36,15 @@ export function ChatPanel({
   onOpenSessionSwitcher,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const messageListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const list = messageListRef.current;
+    if (!list) {
+      return;
+    }
+    list.scrollTop = list.scrollHeight;
+  }, [session.id]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -108,14 +117,21 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="message-list">
+      <div className="message-list" ref={messageListRef}>
         {messages.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.
           </div>
         ) : (
           messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+              key={message.id}
+              message={message}
+              collapsedIntermediate={hasLaterFinalAssistantMessage(
+                messages,
+                message,
+              )}
+            />
           ))
         )}
       </div>
@@ -144,7 +160,25 @@ export function ChatPanel({
   );
 }
 
-function MessageBubble({ message }: { message: UiMessage }) {
+function MessageBubble({
+  message,
+  collapsedIntermediate,
+}: {
+  message: UiMessage;
+  collapsedIntermediate?: boolean;
+}) {
+  if (collapsedIntermediate) {
+    return (
+      <details className="collapsible-message intermediate">
+        <summary>
+          <ChevronDown size={16} />
+          Intermediate output
+        </summary>
+        <MarkdownMessage content={message.content} />
+      </details>
+    );
+  }
+
   if (message.variant === "thought") {
     return (
       <details className="collapsible-message">

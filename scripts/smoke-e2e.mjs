@@ -152,26 +152,6 @@ async function runSmoke() {
 
     await fileSaveAssertionEntry(session.id);
 
-    const terminalInput = `terminal-smoke-${Date.now()}`;
-    const terminalSeen = waitForStreamEvent(stream, (event) => {
-      return (
-        event.type === "terminal:data" &&
-        event.sessionId === session.id &&
-        event.chunk.includes(terminalInput)
-      );
-    });
-    stream.send(
-      JSON.stringify({
-        type: "userMessage",
-        requestId: `smoke-input-${Date.now()}`,
-        sessionId: session.id,
-        content: terminalInput,
-      }),
-    );
-    await terminalSeen;
-    await waitForPersistedAssistantMessage(session.id, terminalInput);
-    pass("terminal input delivered and persisted");
-
     await patchApplyAssertionEntry(session.id);
   } finally {
     stream.close();

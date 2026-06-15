@@ -1,4 +1,9 @@
-import type { Project, RunnerRegistration, ServerEvent, Session } from "@roamcli/shared/protocol";
+import type {
+  Project,
+  RunnerRegistration,
+  ServerEvent,
+  Session,
+} from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import { appReducer, initialAppState, type AppState } from "./state";
 
@@ -36,7 +41,34 @@ describe("app reducer", () => {
     expect(next.selectedSessionId).toBe("session-1");
   });
 
-  it("applies message and terminal server events", () => {
+  it("prefers an online runner project when no previous project is selected", () => {
+    const projects: Project[] = [
+      makeProject("offline-project", "offline-runner"),
+      makeProject("online-project", "runner-1"),
+    ];
+    const sessions: Session[] = [
+      makeSession("offline-session", "offline-project", "offline-runner"),
+      makeSession("online-session", "online-project", "runner-1"),
+    ];
+
+    const next = appReducer(initialAppState, {
+      type: "bootstrapSucceeded",
+      remote: {
+        projects,
+        runners: [runner],
+        sessions,
+        messages: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(next.selectedProjectId).toBe("online-project");
+    expect(next.selectedSessionId).toBe("online-session");
+    expect(next.selectedRunnerId).toBe("runner-1");
+  });
+
+  it("applies message server events", () => {
     const withMessage = appReducer(initialAppState, {
       type: "serverEventReceived",
       event: {
@@ -51,17 +83,8 @@ describe("app reducer", () => {
         },
       },
     });
-    const withTerminal = appReducer(withMessage, {
-      type: "serverEventReceived",
-      event: {
-        type: "terminal:data",
-        sessionId: "session-1",
-        chunk: "\u001b[32mok\u001b[0m",
-      },
-    });
 
-    expect(withTerminal.messages).toHaveLength(1);
-    expect(withTerminal.terminalLines["session-1"]).toEqual(["ok"]);
+    expect(withMessage.messages).toHaveLength(1);
   });
 
   it("cleans session-owned state when a session is deleted", () => {
@@ -80,7 +103,6 @@ describe("app reducer", () => {
       ],
       filesBySession: { "session-1": [] },
       fileTreeState: { "session-1": "ready" as const },
-      terminalLines: { "session-1": ["ok"] },
     };
 
     const next = appReducer(state, {
@@ -92,7 +114,25 @@ describe("app reducer", () => {
     expect(next.messages).toEqual([]);
     expect(next.filesBySession).toEqual({});
     expect(next.fileTreeState).toEqual({});
-    expect(next.terminalLines).toEqual({});
+  });
+
+  it("stores dismissible notifications for errors", () => {
+    const withNotification = appReducer(initialAppState, {
+      type: "errorChanged",
+      title: "Request failed",
+      message: "not found",
+    });
+
+    expect(withNotification.notifications).toMatchObject([
+      { title: "Request failed", message: "not found", tone: "error" },
+    ]);
+
+    const dismissed = appReducer(withNotification, {
+      type: "notificationDismissed",
+      id: withNotification.notifications[0]?.id ?? "",
+    });
+
+    expect(dismissed.notifications).toEqual([]);
   });
 
   it("clears the current selection when the selected project is archived", () => {
@@ -194,6 +234,123 @@ describe("app reducer", () => {
     expect(next.editorContent).toBe("");
     expect(next.fileContentState).toBe("loading");
   });
+
+  it("keeps open file edits when refreshing the current session workspace", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/App.tsx",
+        fileContent: {
+          requestId: "file-content-1",
+          sessionId: "session-1",
+          path: "src/App.tsx",
+          content: "export const saved = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+        editorContent: "export const unsaved = true;",
+        fileContentState: "ready",
+        fileSaveState: "error",
+      },
+      {
+        type: "sessionWorkspaceLoading",
+        sessionId: "session-1",
+        resetSelection: false,
+      },
+    );
+
+    expect(next.selectedFilePath).toBe("src/App.tsx");
+    expect(next.fileContent?.content).toBe("export const saved = true;");
+    expect(next.editorContent).toBe("export const unsaved = true;");
+    expect(next.fileContentState).toBe("ready");
+    expect(next.fileSaveState).toBe("error");
+    expect(next.fileTreeState["session-1"]).toBe("loading");
+  });
+
+  it("keeps open file edits when the current session workspace is unavailable", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/App.tsx",
+        fileContent: {
+          requestId: "file-content-1",
+          sessionId: "session-1",
+          path: "src/App.tsx",
+          content: "export const saved = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+        editorContent: "export const unsaved = true;",
+        fileContentState: "ready",
+        fileSaveState: "error",
+        fileTreeState: { "session-1": "loading" },
+      },
+      {
+        type: "sessionWorkspaceUnavailable",
+        sessionId: "session-1",
+        resetSelection: false,
+      },
+    );
+
+    expect(next.selectedFilePath).toBe("src/App.tsx");
+    expect(next.fileContent?.content).toBe("export const saved = true;");
+    expect(next.editorContent).toBe("export const unsaved = true;");
+    expect(next.fileContentState).toBe("ready");
+    expect(next.fileSaveState).toBe("error");
+    expect(next.fileTreeState["session-1"]).toBe("idle");
+  });
+
+  it("clears open file edits when switching session workspaces", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-2",
+        selectedFilePath: "src/App.tsx",
+        editorContent: "export const unsaved = true;",
+        fileContentState: "ready",
+        fileSaveState: "error",
+      },
+      {
+        type: "sessionWorkspaceLoading",
+        sessionId: "session-2",
+        resetSelection: true,
+      },
+    );
+
+    expect(next.selectedFilePath).toBe("");
+    expect(next.fileContent).toBeUndefined();
+    expect(next.editorContent).toBe("");
+    expect(next.fileContentState).toBe("idle");
+    expect(next.fileSaveState).toBe("idle");
+    expect(next.fileTreeState["session-2"]).toBe("loading");
+  });
+
+  it("clears open file edits when switching to an unavailable session workspace", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-2",
+        selectedFilePath: "src/App.tsx",
+        editorContent: "export const unsaved = true;",
+        fileContentState: "ready",
+        fileSaveState: "error",
+      },
+      {
+        type: "sessionWorkspaceUnavailable",
+        sessionId: "session-2",
+        resetSelection: true,
+      },
+    );
+
+    expect(next.selectedFilePath).toBe("");
+    expect(next.fileContent).toBeUndefined();
+    expect(next.editorContent).toBe("");
+    expect(next.fileContentState).toBe("idle");
+    expect(next.fileSaveState).toBe("idle");
+    expect(next.fileTreeState["session-2"]).toBe("idle");
+  });
 });
 
 const runner: RunnerRegistration = {
@@ -207,11 +364,11 @@ const runner: RunnerRegistration = {
   version: "1.1.0",
 };
 
-function makeProject(id: string): Project {
+function makeProject(id: string, runnerId = "runner-1"): Project {
   return {
     id,
     name: id,
-    runnerId: "runner-1",
+    runnerId,
     directory: `/workspace/${id}`,
     createdAt: "2026-06-05T00:00:00.000Z",
     updatedAt: "2026-06-05T00:00:00.000Z",
@@ -219,12 +376,16 @@ function makeProject(id: string): Project {
   };
 }
 
-function makeSession(id: string, projectId: string): Session {
+function makeSession(
+  id: string,
+  projectId: string,
+  runnerId = "runner-1",
+): Session {
   return {
     id,
     title: id,
     projectId,
-    runnerId: "runner-1",
+    runnerId,
     agent: "codex",
     status: "completed",
     executionMode: "direct",

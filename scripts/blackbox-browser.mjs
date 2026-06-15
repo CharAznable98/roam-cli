@@ -11,8 +11,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const token = process.env.ROAMCLI_BLACKBOX_TOKEN ?? "dev-token";
 const suppliedBaseUrl = process.env.ROAMCLI_BLACKBOX_BASE_URL;
 const timeoutMs = Number(process.env.ROAMCLI_BLACKBOX_TIMEOUT_MS ?? 45_000);
+const runNonce = `${process.pid}-${Date.now().toString(36)}`;
 const runnerId =
-  process.env.ROAMCLI_BLACKBOX_RUNNER_ID ?? `blackbox-${process.pid}`;
+  process.env.ROAMCLI_BLACKBOX_RUNNER_ID ?? `blackbox-${runNonce}`;
 const children = [];
 const tempDirs = [];
 const tempPaths = [];
@@ -142,14 +143,29 @@ async function launchBrowser() {
   }
 }
 
+function formatBrowserErrors(scenario, consoleErrors, browserHttpErrors) {
+  const sections = [];
+  if (consoleErrors.length > 0) {
+    sections.push(
+      `${scenario.name} browser console errors:\n${consoleErrors.join("\n")}`,
+    );
+  }
+  if (browserHttpErrors.length > 0) {
+    sections.push(
+      `${scenario.name} browser HTTP errors:\n${browserHttpErrors.join("\n")}`,
+    );
+  }
+  return sections.join("\n\n");
+}
+
 async function runUserJourney(browser, scenario) {
-  const projectName = `Blackbox Project ${scenario.name} ${process.pid}`;
+  const projectName = `Blackbox Project ${scenario.name} ${runNonce}`;
   const projectDir = resolve(
     workspace,
-    `.roamcli-blackbox-project-${scenario.name}-${process.pid}`,
+    `.roamcli-blackbox-project-${scenario.name}-${runNonce}`,
   );
   const projectDirectorySuffix = relative(workspace, projectDir);
-  const fileName = `roamcli-blackbox-${scenario.name}-${process.pid}.txt`;
+  const fileName = `roamcli-blackbox-${scenario.name}-${runNonce}.txt`;
   const initialValue = `initial-${scenario.name}-${Date.now()}`;
   const editedValue = `edited-${scenario.name}-${Date.now()}`;
   const patchedValue = `patched-${scenario.name}-${Date.now()}`;
@@ -161,12 +177,33 @@ async function runUserJourney(browser, scenario) {
   const context = await browser.newContext({ viewport: scenario.viewport });
   const page = await context.newPage();
   const consoleErrors = [];
+  const browserHttpErrors = [];
+  const browserHttpErrorReads = new Set();
   page.on("console", (message) => {
     if (message.type() === "error") {
       consoleErrors.push(message.text());
     }
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.status() < 400) {
+      return;
+    }
+    const read = response
+      .text()
+      .then((body) => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}: ${body.slice(0, 500)}`,
+        );
+      })
+      .catch(() => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}`,
+        );
+      })
+      .finally(() => browserHttpErrorReads.delete(read));
+    browserHttpErrorReads.add(read);
+  });
 
   try {
     await page.addInitScript((authToken) => {
@@ -178,7 +215,7 @@ async function runUserJourney(browser, scenario) {
       await assertMobileConnectionSheet(page);
     } else {
       await expectText(page, "stream connected");
-      await expectText(page, "1 runners online");
+      await expectText(page, "runners online");
     }
 
     const project = await createProjectFromUi(page, scenario, {
@@ -230,9 +267,10 @@ async function runUserJourney(browser, scenario) {
     pass(`${scenario.name}: chat round-trip`);
     await waitForSessionStatus(session.id, "completed");
     if (executionMode === "managed_worktree") {
-      if (consoleErrors.length > 0) {
+      await Promise.allSettled(browserHttpErrorReads);
+      if (consoleErrors.length > 0 || browserHttpErrors.length > 0) {
         throw new Error(
-          `${scenario.name} browser console errors:\n${consoleErrors.join("\n")}`,
+          formatBrowserErrors(scenario, consoleErrors, browserHttpErrors),
         );
       }
       pass(`${scenario.name}: managed worktree browser journey`);
@@ -254,22 +292,12 @@ async function runUserJourney(browser, scenario) {
     await captureScreenshot(page, scenario, "file-edit-save");
     pass(`${scenario.name}: file browse/edit/save`);
 
-    await openTab(page, scenario, "terminal");
-    const terminalEcho = `terminal echo ${scenario.name} ${Date.now()}`;
-    await page
-      .locator('input[placeholder="Send input to active session"]:visible')
-      .fill(terminalEcho);
-    await page.getByRole("button", { name: "Send terminal input" }).click();
-    await expectText(page, terminalEcho);
-    await captureScreenshot(page, scenario, "terminal-input");
-    pass(`${scenario.name}: terminal input`);
-
     await waitForSessionStatus(session.id, "completed");
     await assertExecApprovals(page, scenario, session.id);
     await captureScreenshot(page, scenario, "exec-approval");
     pass(`${scenario.name}: exec approval approve/reject`);
 
-    const artifactFileName = `roamcli-artifact-${scenario.name}-${process.pid}.log`;
+    const artifactFileName = `roamcli-artifact-${scenario.name}-${runNonce}.log`;
     const artifactPath = resolve(session.executionFolder, artifactFileName);
     const artifactContent = `artifact ${scenario.name} ${Date.now()}\n`;
     await writeFile(artifactPath, artifactContent, "utf8");
@@ -332,9 +360,10 @@ async function runUserJourney(browser, scenario) {
     await captureScreenshot(page, scenario, "resume-completed-session");
     pass(`${scenario.name}: resume completed session`);
 
-    if (consoleErrors.length > 0) {
+    await Promise.allSettled(browserHttpErrorReads);
+    if (consoleErrors.length > 0 || browserHttpErrors.length > 0) {
       throw new Error(
-        `${scenario.name} browser console errors:\n${consoleErrors.join("\n")}`,
+        formatBrowserErrors(scenario, consoleErrors, browserHttpErrors),
       );
     }
   } catch (error) {
@@ -511,6 +540,7 @@ async function createProjectFromUi(page, scenario, values) {
     await dialog
       .locator('input[placeholder="Optional project name"]')
       .fill(values.name);
+    await selectProjectRunnerFromUi(dialog);
     await fillProjectDirectoryFromUi(dialog, values);
     await dialog.getByRole("button", { name: "Create project" }).click();
     const project = await waitFor(async () => {
@@ -534,6 +564,7 @@ async function createProjectFromUi(page, scenario, values) {
   await dialog
     .locator('input[placeholder="Optional project name"]')
     .fill(values.name);
+  await selectProjectRunnerFromUi(dialog);
   await fillProjectDirectoryFromUi(dialog, values);
   await dialog.getByRole("button", { name: "Create project" }).click();
   const project = await waitFor(async () => {
@@ -545,6 +576,13 @@ async function createProjectFromUi(page, scenario, values) {
     `project ${values.name} to render in tree`,
   );
   return project;
+}
+
+async function selectProjectRunnerFromUi(dialog) {
+  await dialog
+    .locator("label.field:visible", { hasText: "Runner" })
+    .locator("select")
+    .selectOption(runnerId);
 }
 
 async function fillProjectDirectoryFromUi(dialog, values) {
@@ -653,7 +691,6 @@ async function assertMobileConnectionSheet(page) {
   await expectTextIn(dialog, "API");
   await expectTextIn(dialog, "ready");
   await expectTextIn(dialog, "Runners");
-  await expectTextIn(dialog, "1");
   await dialog.getByRole("button", { name: "Reconnect now" }).waitFor();
   await closeDialog(dialog);
 }
@@ -731,14 +768,7 @@ async function sendChatMessageUntil(
 
 async function openTab(page, scenario, tab) {
   if (scenario.mobile) {
-    const label =
-      tab === "chat"
-        ? "对话"
-        : tab === "files"
-          ? "文件"
-          : tab === "terminal"
-            ? "终端"
-            : "审批";
+    const label = tab === "chat" ? "对话" : tab === "files" ? "文件" : "审批";
     await page
       .getByRole("navigation", { name: "Mobile tabs" })
       .getByRole("button", { name: label })
@@ -779,13 +809,6 @@ async function ensureRunnerOnline() {
   );
   if (requested !== undefined) {
     return requested;
-  }
-  if (
-    suppliedBaseUrl !== undefined &&
-    process.env.ROAMCLI_BLACKBOX_RUNNER_ID === undefined &&
-    existing.runners?.[0] !== undefined
-  ) {
-    return existing.runners[0];
   }
 
   const wsUrl = new URL("/v1/runner", baseUrl);

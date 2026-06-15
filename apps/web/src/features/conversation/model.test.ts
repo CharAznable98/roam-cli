@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   appendTokenMessage,
+  hasLaterFinalAssistantMessage,
   sortMessages,
   toUiMessage,
   upsertMessage,
@@ -62,10 +63,11 @@ describe("conversation model", () => {
       createdAt: "2026-06-05T00:00:01.000Z",
     };
 
-    expect(upsertMessage([first, second], { ...first, content: "updated" }).map((message) => message.id)).toEqual([
-      "first",
-      "second",
-    ]);
+    expect(
+      upsertMessage([first, second], { ...first, content: "updated" }).map(
+        (message) => message.id,
+      ),
+    ).toEqual(["first", "second"]);
   });
 
   it("appends streamed tokens to the latest stream assistant message", () => {
@@ -97,9 +99,70 @@ describe("conversation model", () => {
       createdAt: "2026-06-05T00:00:02.000Z",
     };
 
-    expect(appendTokenMessage([newerUser, stream], "session-1", " world").map((message) => message.id)).toEqual([
-      "newer-user",
-      "stream-session-1-existing",
-    ]);
+    expect(
+      appendTokenMessage([newerUser, stream], "session-1", " world").map(
+        (message) => message.id,
+      ),
+    ).toEqual(["newer-user", "stream-session-1-existing"]);
+  });
+
+  it("marks stream messages as intermediate only when a final assistant follows in the same turn", () => {
+    const stream: UiMessage = {
+      id: "stream-session-1-existing",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "draft",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:01.000Z",
+    };
+    const final: UiMessage = {
+      ...stream,
+      id: "final",
+      content: "final",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const nextUser: UiMessage = {
+      ...stream,
+      id: "user",
+      role: "user",
+      content: "next question",
+      createdAt: "2026-06-05T00:00:03.000Z",
+    };
+
+    expect(hasLaterFinalAssistantMessage([stream, final], stream)).toBe(true);
+    expect(
+      hasLaterFinalAssistantMessage([stream, nextUser, final], stream),
+    ).toBe(false);
+  });
+
+  it("marks stream messages as intermediate when the final assistant sorts before the stream in the same turn", () => {
+    const user: UiMessage = {
+      id: "user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:01.000Z",
+    };
+    const final: UiMessage = {
+      id: "final",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "final",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const stream: UiMessage = {
+      id: "stream-session-1-existing",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "draft",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:03.000Z",
+    };
+
+    expect(hasLaterFinalAssistantMessage([user, final, stream], stream)).toBe(
+      true,
+    );
   });
 });

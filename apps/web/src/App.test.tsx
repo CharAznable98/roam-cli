@@ -176,6 +176,15 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
+  let remoteSessionStatus: string;
+  let sessionDetailMessages: Array<{
+    id: string;
+    sessionId: string;
+    role: string;
+    content: string;
+    encrypted: boolean;
+    createdAt: string;
+  }>;
 
   beforeEach(() => {
     fetchRequests = [];
@@ -183,6 +192,17 @@ describe("App", () => {
     deferredFileContent = new Map();
     failNextProjectCreate = false;
     failNextSessionCreate = false;
+    remoteSessionStatus = session.status;
+    sessionDetailMessages = [
+      {
+        id: "message-1",
+        sessionId: "session-1",
+        role: "assistant",
+        content: "Loaded from API",
+        encrypted: false,
+        createdAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -241,24 +261,17 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/sessions") {
-          return jsonResponse({ sessions: [session] });
+          return jsonResponse({
+            sessions: [{ ...session, status: remoteSessionStatus }],
+          });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
           if (init?.method === "DELETE") {
             return new Response(null, { status: 204 });
           }
           return jsonResponse({
-            session,
-            messages: [
-              {
-                id: "message-1",
-                sessionId: "session-1",
-                role: "assistant",
-                content: "Loaded from API",
-                encrypted: false,
-                createdAt: "2026-06-05T00:00:00.000Z",
-              },
-            ],
+            session: { ...session, status: remoteSessionStatus },
+            messages: sessionDetailMessages,
             approvals: [patchApproval],
             artifacts: [patchArtifact],
           });
@@ -342,6 +355,17 @@ describe("App", () => {
             },
           });
         }
+        if (requestUrl.pathname === "/v1/approvals/approval-1") {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            approved?: boolean;
+          };
+          return jsonResponse({
+            approval: {
+              ...patchApproval,
+              status: body.approved ? "approved" : "rejected",
+            },
+          });
+        }
         return jsonResponse({ error: "not found" }, 404);
       }),
     );
@@ -375,6 +399,110 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not auto-load files for a selected session whose runner is offline", async () => {
+    const offlineProject = {
+      ...project,
+      id: "offline-project",
+      name: "Offline Project",
+      runnerId: "offline-runner",
+      directory: "/offline-workspace",
+    };
+    const offlineSession = {
+      ...session,
+      id: "offline-session",
+      title: "Offline session",
+      projectId: "offline-project",
+      runnerId: "offline-runner",
+      status: "completed",
+      executionFolder: "/offline-workspace",
+      cwd: "/offline-workspace",
+    };
+    vi.mocked(fetch).mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        fetchRequests.push(url);
+        fetchCalls.push({ url, init });
+        const requestUrl = new URL(url);
+        if (requestUrl.pathname === "/v1/runners") {
+          return jsonResponse({ runners: [runner] });
+        }
+        if (requestUrl.pathname === "/v1/projects") {
+          return jsonResponse({ projects: [offlineProject] });
+        }
+        if (requestUrl.pathname === "/v1/sessions") {
+          return jsonResponse({ sessions: [offlineSession] });
+        }
+        if (requestUrl.pathname === "/v1/sessions/offline-session") {
+          return jsonResponse({
+            session: offlineSession,
+            messages: [
+              {
+                id: "offline-message",
+                sessionId: "offline-session",
+                role: "assistant",
+                content: "Loaded from offline session",
+                encrypted: false,
+                createdAt: "2026-06-05T00:00:00.000Z",
+              },
+            ],
+            approvals: [],
+            artifacts: [],
+          });
+        }
+        return jsonResponse({ error: "not found" }, 404);
+      },
+    );
+
+    render(<App />);
+
+    await screen.findByText("Loaded from offline session");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      fetchRequests.some((url) =>
+        url.includes("/v1/sessions/offline-session/files"),
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByText("File tree request failed"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("scrolls the message list to the bottom when opening a session", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollHeight",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return 1200;
+      },
+    });
+    try {
+      const { container } = render(<App />);
+      await screen.findByText("Loaded from API");
+      await waitFor(() =>
+        expect(
+          (container.querySelector(".message-list") as HTMLElement | null)
+            ?.scrollTop,
+        ).toBe(1200),
+      );
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollHeight",
+          descriptor,
+        );
+      } else {
+        delete (HTMLElement.prototype as { scrollHeight?: number })
+          .scrollHeight;
+      }
+    }
+  });
+
   it("disables disconnected chat sends instead of queueing commands", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
@@ -391,9 +519,80 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows global errors as dismissible auto-closing notifications", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        sockets[0]?.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "error",
+              message: "runner failed",
+            }),
+          }),
+        );
+      });
+
+      expect(screen.getByText("Runner request failed")).toBeInTheDocument();
+      expect(screen.getByText("runner failed")).toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Dismiss notification: Runner request failed",
+        }),
+      );
+      expect(
+        screen.queryByText("Runner request failed"),
+      ).not.toBeInTheDocument();
+
+      act(() => {
+        sockets[0]?.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "error",
+              message: "runner failed again",
+            }),
+          }),
+        );
+      });
+      expect(screen.getByText("runner failed again")).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(screen.queryByText("runner failed again")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reconnects closed streams with increasing retry delays", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
+    fireEvent.click(await screen.findByRole("treeitem", { name: /App\.tsx/ }));
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/App.tsx",
+    });
+    fireEvent.change(editor, {
+      target: { value: "export const unsaved = true;\n" },
+    });
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
+      target: { value: "draft before reconnect" },
+    });
+    sessionDetailMessages = [
+      ...sessionDetailMessages,
+      {
+        id: "message-missed",
+        sessionId: "session-1",
+        role: "assistant",
+        content: "Missed while offline",
+        encrypted: false,
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+    ];
+    remoteSessionStatus = "completed";
     vi.useFakeTimers();
     try {
       expect(sockets).toHaveLength(1);
@@ -426,16 +625,22 @@ describe("App", () => {
       act(() => {
         sockets[2]?.dispatchEvent(new Event("open"));
       });
-      const composer = screen.getByRole("textbox", { name: "Chat composer" });
-      fireEvent.change(composer, {
-        target: { value: "after reconnect" },
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
       });
+      expect(screen.getByText("Missed while offline")).toBeInTheDocument();
+      expect(composer).toHaveValue("draft before reconnect");
+      expect(
+        screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+      ).toHaveValue("export const unsaved = true;\n");
       fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
       expect(JSON.parse(sockets[2]?.sent.at(-1) ?? "{}")).toMatchObject({
         type: "userMessage",
         sessionId: "session-1",
-        content: "after reconnect",
+        content: "draft before reconnect",
       });
     } finally {
       vi.useRealTimers();
@@ -520,9 +725,6 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(
       mobileTabs.getByRole("button", { name: "文件" }),
-    ).toBeInTheDocument();
-    expect(
-      mobileTabs.getByRole("button", { name: "终端" }),
     ).toBeInTheDocument();
     expect(
       mobileTabs.getByRole("button", { name: "审批" }),
@@ -714,9 +916,7 @@ describe("App", () => {
     expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
       "/workspace",
     );
-    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue(
-      "",
-    );
+    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue("");
   });
 
   it("archives the selected project and leaves the workspace in an empty state", async () => {
@@ -1035,6 +1235,9 @@ describe("App", () => {
   it("calls patch hunk and apply APIs from PatchReview actions", async () => {
     render(<App />);
     await screen.findByText("Apply generated patch");
+    expect(
+      screen.queryByRole("button", { name: "Apply" }),
+    ).not.toBeInTheDocument();
 
     const patchCard = screen.getByText("src/App.tsx").closest("article");
     expect(patchCard).not.toBeNull();
@@ -1047,9 +1250,22 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByText("accepted")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(
+      within(patchCard as HTMLElement).queryByRole("button", {
+        name: "Accept patch hunk hunk-1",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(patchCard as HTMLElement).queryByRole("button", {
+        name: "Reject patch hunk hunk-1",
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
 
     await waitFor(() => expect(screen.getByText("edited")).toBeInTheDocument());
+    expect(
+      screen.queryByRole("button", { name: "Apply" }),
+    ).not.toBeInTheDocument();
     const applyCall = fetchCalls.find((call) =>
       call.url.includes("/v1/sessions/session-1/patches/apply"),
     );
@@ -1063,6 +1279,41 @@ describe("App", () => {
     expect(body.patch).toContain("@@ -1 +1 @@");
     expect(body.signedAt).toMatch(/2026|20/);
     expect(body.signature.length).toBeGreaterThan(16);
+  });
+
+  it("hides resolved approval actions after approve or reject", async () => {
+    render(<App />);
+    await screen.findByText("Apply generated patch");
+
+    const approvalCard = screen
+      .getByText("Apply generated patch")
+      .closest("article");
+    expect(approvalCard).not.toBeNull();
+    fireEvent.click(
+      within(approvalCard as HTMLElement).getByRole("button", {
+        name: "Approve",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        within(approvalCard as HTMLElement).getByText("approved"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(approvalCard as HTMLElement).queryByRole("button", {
+        name: "Approve",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(approvalCard as HTMLElement).queryByRole("button", {
+        name: "Reject",
+      }),
+    ).not.toBeInTheDocument();
+    const approvalCall = fetchCalls.find((call) =>
+      call.url.includes("/v1/approvals/approval-1"),
+    );
+    expect(approvalCall?.init?.method).toBe("POST");
   });
 
   it("keeps streamed approval hunks in payload order", async () => {
@@ -1098,43 +1349,6 @@ describe("App", () => {
       "Accept patch hunk hunk-a",
       "Accept patch hunk hunk-b",
     ]);
-  });
-
-  it("renders terminal:data stream output and sends terminal input to the selected session", async () => {
-    render(<App />);
-    await screen.findByText("Loaded from API");
-
-    act(() => {
-      sockets[0]?.dispatchEvent(new Event("open"));
-    });
-    expect(await screen.findByText("stream connected")).toBeInTheDocument();
-
-    act(() => {
-      sockets[0]?.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({
-            type: "terminal:data",
-            sessionId: "session-1",
-            chunk: "runner$ pnpm test",
-          }),
-        }),
-      );
-    });
-    expect(await screen.findByText("runner$ pnpm test")).toBeInTheDocument();
-
-    fireEvent.change(
-      screen.getByPlaceholderText("Send input to active session"),
-      { target: { value: "ls -la" } },
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Send terminal input" }),
-    );
-
-    expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
-      type: "userMessage",
-      sessionId: "session-1",
-      content: "ls -la",
-    });
   });
 
   it("keeps the selected project stable when its runner goes offline", async () => {
@@ -1280,30 +1494,44 @@ describe("App", () => {
     expect(preview.tagName.toLowerCase()).toBe("strong");
   });
 
-  it("sends terminal control signals for interrupt and stop", async () => {
+  it("collapses streamed intermediate output after the final assistant message", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
     act(() => {
-      sockets[0]?.dispatchEvent(new Event("open"));
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "token",
+            sessionId: "session-1",
+            content: "draft answer",
+            encrypted: false,
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-final",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "final answer",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
     });
 
-    const terminal = within(screen.getByRole("region", { name: "Terminal" }));
-    fireEvent.click(
-      terminal.getByRole("button", { name: "Interrupt session" }),
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    const intermediate = await within(conversation).findByText(
+      "Intermediate output",
     );
-    expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
-      type: "controlSignal",
-      sessionId: "session-1",
-      signal: "interrupt",
-    });
-
-    fireEvent.click(terminal.getByRole("button", { name: "Stop session" }));
-    expect(JSON.parse(sockets[0]?.sent.at(-1) ?? "{}")).toMatchObject({
-      type: "controlSignal",
-      sessionId: "session-1",
-      signal: "stop",
-    });
+    expect(intermediate.closest("details")).not.toHaveAttribute("open");
+    expect(within(conversation).getByText("final answer")).toBeInTheDocument();
   });
 
   it("deletes the selected session through the API and removes local session state", async () => {

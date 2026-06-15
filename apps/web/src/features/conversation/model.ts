@@ -69,3 +69,42 @@ export function isStreamAssistantMessage(message: Message): boolean {
     message.id.startsWith(`stream_${message.sessionId}_`)
   );
 }
+
+export function hasLaterFinalAssistantMessage(
+  messages: Message[],
+  message: Message,
+): boolean {
+  if (!isStreamAssistantMessage(message)) {
+    return false;
+  }
+  const index = messages.findIndex((item) => item.id === message.id);
+  if (index === -1) {
+    return false;
+  }
+  const sameSession = (item: Message) => item.sessionId === message.sessionId;
+  let turnStart = -1;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const item = messages[cursor];
+    if (item && sameSession(item) && item.role === "user") {
+      turnStart = cursor;
+      break;
+    }
+  }
+  const nextUserOffset = messages
+    .slice(index + 1)
+    .findIndex((item) => sameSession(item) && item.role === "user");
+  const turnEnd =
+    nextUserOffset === -1 ? messages.length : index + 1 + nextUserOffset;
+
+  for (const item of messages.slice(turnStart + 1, turnEnd)) {
+    if (
+      sameSession(item) &&
+      item.id !== message.id &&
+      item.role === "assistant" &&
+      !isStreamAssistantMessage(item)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
