@@ -69,3 +69,105 @@ export function isStreamAssistantMessage(message: Message): boolean {
     message.id.startsWith(`stream_${message.sessionId}_`)
   );
 }
+
+export function hasLaterFinalAssistantMessage(
+  messages: Message[],
+  message: Message,
+): boolean {
+  if (!isStreamAssistantMessage(message)) {
+    return false;
+  }
+  const index = messages.findIndex((item) => item.id === message.id);
+  if (index === -1) {
+    return false;
+  }
+  const sameSession = (item: Message) => item.sessionId === message.sessionId;
+  let turnStart = -1;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const item = messages[cursor];
+    if (item && sameSession(item) && item.role === "user") {
+      turnStart = cursor;
+      break;
+    }
+  }
+  const nextUserOffset = messages
+    .slice(index + 1)
+    .findIndex((item) => sameSession(item) && item.role === "user");
+  const turnEnd =
+    nextUserOffset === -1 ? messages.length : index + 1 + nextUserOffset;
+
+  for (const item of messages.slice(turnStart + 1, turnEnd)) {
+    if (
+      sameSession(item) &&
+      item.id !== message.id &&
+      item.role === "assistant" &&
+      !isStreamAssistantMessage(item)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type IntermediateTurn = {
+  streamMessageIds: string[];
+  hasFinalAssistant: boolean;
+};
+
+export function getCollapsedIntermediateMessageIds(
+  messages: Message[],
+): Set<string> {
+  const collapsedIds = new Set<string>();
+  const turns = new Map<string, IntermediateTurn>();
+
+  const getTurn = (sessionId: string) => {
+    const existing = turns.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const next: IntermediateTurn = {
+      streamMessageIds: [],
+      hasFinalAssistant: false,
+    };
+    turns.set(sessionId, next);
+    return next;
+  };
+  const flushTurn = (sessionId: string) => {
+    const turn = turns.get(sessionId);
+    if (!turn) {
+      return;
+    }
+    if (turn.hasFinalAssistant) {
+      for (const id of turn.streamMessageIds) {
+        collapsedIds.add(id);
+      }
+    }
+    turns.set(sessionId, {
+      streamMessageIds: [],
+      hasFinalAssistant: false,
+    });
+  };
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      flushTurn(message.sessionId);
+      continue;
+    }
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const turn = getTurn(message.sessionId);
+    if (isStreamAssistantMessage(message)) {
+      turn.streamMessageIds.push(message.id);
+    } else {
+      turn.hasFinalAssistant = true;
+    }
+  }
+
+  for (const sessionId of turns.keys()) {
+    flushTurn(sessionId);
+  }
+
+  return collapsedIds;
+}

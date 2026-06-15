@@ -9,10 +9,12 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
-import type { UiMessage } from "./model";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { getCollapsedIntermediateMessageIds, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
+
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
 type ChatPanelProps = {
   session: Session;
@@ -36,6 +38,43 @@ export function ChatPanel({
   onOpenSessionSwitcher,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const messageScrollKey = messages
+    .map((message) => `${message.id}:${message.content.length}`)
+    .join("|");
+  const collapsedIntermediateMessageIds = useMemo(
+    () => getCollapsedIntermediateMessageIds(messages),
+    [messages],
+  );
+
+  const scrollToBottom = () => {
+    const list = messageListRef.current;
+    if (!list) {
+      return;
+    }
+    list.scrollTop = list.scrollHeight;
+    shouldAutoScrollRef.current = true;
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [session.id]);
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) {
+      return;
+    }
+    scrollToBottom();
+  }, [messageScrollKey]);
+
+  const handleMessageListScroll = () => {
+    const list = messageListRef.current;
+    if (!list) {
+      return;
+    }
+    shouldAutoScrollRef.current = isNearMessageListBottom(list);
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -108,14 +147,24 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="message-list">
+      <div
+        className="message-list"
+        ref={messageListRef}
+        onScroll={handleMessageListScroll}
+      >
         {messages.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.
           </div>
         ) : (
           messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+              key={message.id}
+              message={message}
+              collapsedIntermediate={collapsedIntermediateMessageIds.has(
+                message.id,
+              )}
+            />
           ))
         )}
       </div>
@@ -144,7 +193,31 @@ export function ChatPanel({
   );
 }
 
-function MessageBubble({ message }: { message: UiMessage }) {
+function isNearMessageListBottom(list: HTMLElement): boolean {
+  const distanceFromBottom =
+    list.scrollHeight - list.scrollTop - list.clientHeight;
+  return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function MessageBubble({
+  message,
+  collapsedIntermediate,
+}: {
+  message: UiMessage;
+  collapsedIntermediate?: boolean;
+}) {
+  if (collapsedIntermediate) {
+    return (
+      <details className="collapsible-message intermediate">
+        <summary>
+          <ChevronDown size={16} />
+          Intermediate output
+        </summary>
+        <MarkdownMessage content={message.content} />
+      </details>
+    );
+  }
+
   if (message.variant === "thought") {
     return (
       <details className="collapsible-message">

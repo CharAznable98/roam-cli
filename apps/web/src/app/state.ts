@@ -3,7 +3,6 @@ import type {
   Artifact,
   FileContentResult,
   FileNode,
-  Message,
   Project,
   RunnerRegistration,
   ServerEvent,
@@ -19,7 +18,6 @@ import {
   mergePatchHunks,
   type SessionPatchHunk,
 } from "../features/approvals/model";
-import { appendTerminalChunk } from "../features/terminal/model";
 import { omitKey, upsertBy } from "../shared/lib/collections";
 import type { AsyncState } from "../shared/types/async";
 import type { InitialRemoteState } from "../api/contracts";
@@ -28,7 +26,9 @@ import type { WorkspaceTab } from "./navigation";
 export type LoadState = "loading" | "ready" | "error";
 export type ConnectionState = "open" | "closed" | "error";
 
-export interface AppError {
+export interface AppNotification {
+  id: string;
+  tone: "error";
   title: string;
   message: string;
 }
@@ -49,7 +49,6 @@ export interface AppState {
   editorContent: string;
   fileContentState: AsyncState;
   fileSaveState: AsyncState;
-  terminalLines: Record<string, string[]>;
   patchApplyState: AsyncState;
   selectedProjectId: string;
   selectedRunnerId: string;
@@ -57,7 +56,7 @@ export interface AppState {
   mobileNewSessionOpen: boolean;
   loadState: LoadState;
   connectionState: ConnectionState;
-  error: AppError | undefined;
+  notifications: AppNotification[];
 }
 
 export const initialAppState: AppState = {
@@ -76,7 +75,6 @@ export const initialAppState: AppState = {
   editorContent: "",
   fileContentState: "idle",
   fileSaveState: "idle",
-  terminalLines: {},
   patchApplyState: "idle",
   selectedProjectId: "",
   selectedRunnerId: "",
@@ -84,7 +82,7 @@ export const initialAppState: AppState = {
   mobileNewSessionOpen: false,
   loadState: "loading",
   connectionState: "closed",
-  error: undefined,
+  notifications: [],
 };
 
 export type AppAction =
@@ -102,6 +100,11 @@ export type AppAction =
   | { type: "sessionCreated"; session: Session }
   | { type: "sessionDeleted"; sessionId: string }
   | { type: "sessionWorkspaceCleared" }
+  | {
+      type: "sessionWorkspaceUnavailable";
+      sessionId: string;
+      resetSelection: boolean;
+    }
   | { type: "approvalUpserted"; approval: Approval }
   | {
       type: "hunkResolved";
@@ -116,7 +119,11 @@ export type AppAction =
       message: string;
     }
   | { type: "patchApplyFailed"; message: string }
-  | { type: "sessionWorkspaceLoading"; sessionId: string }
+  | {
+      type: "sessionWorkspaceLoading";
+      sessionId: string;
+      resetSelection: boolean;
+    }
   | { type: "fileTreeLoaded"; sessionId: string; files: FileNode[] }
   | { type: "fileTreeFailed"; sessionId: string; message: string }
   | { type: "fileContentLoading"; path: string }
@@ -127,7 +134,8 @@ export type AppAction =
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
-  | { type: "errorChanged"; title?: string; message: string | undefined };
+  | { type: "errorChanged"; title?: string; message: string | undefined }
+  | { type: "notificationDismissed"; id: string };
 
 export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -136,14 +144,22 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "mobileNewSessionOpenChanged":
       return { ...state, mobileNewSessionOpen: action.open };
     case "bootstrapStarted":
-      return { ...state, loadState: "loading", error: undefined };
+      return { ...state, loadState: "loading" };
     case "bootstrapSucceeded": {
+      const onlineRunnerIds = new Set(
+        action.remote.runners.map((runner) => runner.runnerId),
+      );
       const selectedProjectId =
-        action.remote.projects.some(
-          (project) => project.id === state.selectedProjectId,
-        )
-          ? state.selectedProjectId
-          : action.remote.projects[0]?.id || "";
+        action.remote.projects.find(
+          (project) =>
+            project.id === state.selectedProjectId && !project.archivedAt,
+        )?.id ??
+        action.remote.projects.find(
+          (project) =>
+            !project.archivedAt && onlineRunnerIds.has(project.runnerId),
+        )?.id ??
+        action.remote.projects.find((project) => !project.archivedAt)?.id ??
+        "";
       const selectedSessionId =
         action.remote.sessions.find(
           (session) =>
@@ -156,6 +172,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             session.projectId === selectedProjectId && !session.archivedAt,
         )?.id ??
         "";
+      const selectedProject = action.remote.projects.find(
+        (project) => project.id === selectedProjectId,
+      );
+      const selectedRunnerId = action.remote.runners.some(
+        (runner) => runner.runnerId === state.selectedRunnerId,
+      )
+        ? state.selectedRunnerId
+        : selectedProject && onlineRunnerIds.has(selectedProject.runnerId)
+          ? selectedProject.runnerId
+          : action.remote.runners[0]?.runnerId || "";
       return {
         ...state,
         projects: action.remote.projects,
@@ -165,19 +191,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         approvals: action.remote.approvals,
         artifacts: action.remote.artifacts,
         hunks: extractPatchHunks(action.remote.approvals),
-        selectedRunnerId:
-          state.selectedRunnerId || action.remote.runners[0]?.runnerId || "",
+        selectedRunnerId,
         selectedProjectId,
         selectedSessionId,
         loadState: "ready",
       };
     }
     case "bootstrapFailed":
-      return {
-        ...state,
-        loadState: "error",
-        error: makeError("RoamCli API request failed", action.message),
-      };
+      return pushNotification(
+        { ...state, loadState: "error" },
+        "RoamCli API request failed",
+        action.message,
+      );
     case "connectionChanged":
       return { ...state, connectionState: action.status };
     case "projectSelected":
@@ -223,6 +248,21 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileContentState: "idle",
         fileSaveState: "idle",
       };
+    case "sessionWorkspaceUnavailable":
+      return {
+        ...state,
+        selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
+        fileContent: action.resetSelection ? undefined : state.fileContent,
+        editorContent: action.resetSelection ? "" : state.editorContent,
+        fileContentState: action.resetSelection
+          ? "idle"
+          : state.fileContentState,
+        fileSaveState: action.resetSelection ? "idle" : state.fileSaveState,
+        fileTreeState: {
+          ...state.fileTreeState,
+          [action.sessionId]: "idle",
+        },
+      };
     case "approvalUpserted":
       return upsertApprovalState(state, action.approval);
     case "hunkResolved":
@@ -238,9 +278,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         patchApplyState: action.applied ? "ready" : "error",
-        error: action.applied
-          ? state.error
-          : makeError("Patch was not applied", action.message),
+        notifications: action.applied
+          ? state.notifications
+          : nextNotifications(
+              state.notifications,
+              "Patch was not applied",
+              action.message,
+            ),
         hunks: state.hunks.map((hunk) =>
           hunk.sessionId === action.sessionId && hunk.status === "accepted"
             ? { ...hunk, status: action.applied ? "edited" : "pending" }
@@ -248,19 +292,21 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
     case "patchApplyFailed":
-      return {
-        ...state,
-        patchApplyState: "error",
-        error: makeError("Patch request failed", action.message),
-      };
+      return pushNotification(
+        { ...state, patchApplyState: "error" },
+        "Patch request failed",
+        action.message,
+      );
     case "sessionWorkspaceLoading":
       return {
         ...state,
-        selectedFilePath: "",
-        fileContent: undefined,
-        editorContent: "",
-        fileContentState: "idle",
-        fileSaveState: "idle",
+        selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
+        fileContent: action.resetSelection ? undefined : state.fileContent,
+        editorContent: action.resetSelection ? "" : state.editorContent,
+        fileContentState: action.resetSelection
+          ? "idle"
+          : state.fileContentState,
+        fileSaveState: action.resetSelection ? "idle" : state.fileSaveState,
         fileTreeState: {
           ...state.fileTreeState,
           [action.sessionId]: "loading",
@@ -279,14 +325,17 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
       };
     case "fileTreeFailed":
-      return {
-        ...state,
-        error: makeError("File tree request failed", action.message),
-        fileTreeState: {
-          ...state.fileTreeState,
-          [action.sessionId]: "error",
+      return pushNotification(
+        {
+          ...state,
+          fileTreeState: {
+            ...state.fileTreeState,
+            [action.sessionId]: "error",
+          },
         },
-      };
+        "File tree request failed",
+        action.message,
+      );
     case "fileContentLoading":
       return {
         ...state,
@@ -307,11 +356,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           }
         : state;
     case "fileContentFailed":
-      return {
-        ...state,
-        fileContentState: "error",
-        error: makeError("File content request failed", action.message),
-      };
+      return pushNotification(
+        { ...state, fileContentState: "error" },
+        "File content request failed",
+        action.message,
+      );
     case "editorContentChanged":
       return { ...state, editorContent: action.content };
     case "fileSaveStarted":
@@ -319,19 +368,27 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "fileSaveSucceeded":
       return { ...state, fileSaveState: "ready" };
     case "fileSaveFailed":
-      return {
-        ...state,
-        fileSaveState: "error",
-        error: makeError("File save failed", action.message),
-      };
+      return pushNotification(
+        { ...state, fileSaveState: "error" },
+        "File save failed",
+        action.message,
+      );
     case "serverEventReceived":
       return applyServerEvent(state, action.event);
     case "errorChanged":
+      if (action.message === undefined) {
+        return state;
+      }
+      return pushNotification(
+        state,
+        action.title ?? "RoamCli request failed",
+        action.message,
+      );
+    case "notificationDismissed":
       return {
         ...state,
-        error: makeError(
-          action.title ?? "RoamCli request failed",
-          action.message,
+        notifications: state.notifications.filter(
+          (notification) => notification.id !== action.id,
         ),
       };
   }
@@ -394,18 +451,6 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       ),
     };
   }
-  if (event.type === "terminal:data") {
-    return {
-      ...state,
-      terminalLines: {
-        ...state.terminalLines,
-        [event.sessionId]: appendTerminalChunk(
-          state.terminalLines[event.sessionId] ?? [],
-          event.chunk,
-        ),
-      },
-    };
-  }
   if (
     event.type === "approval:requested" ||
     event.type === "approval:updated"
@@ -453,19 +498,16 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return { ...state, fileSaveState: "ready" };
   }
   if (event.type === "patch:applied") {
-    return {
-      ...state,
-      patchApplyState: event.result.applied ? "ready" : "error",
-      error: event.result.applied
-        ? state.error
-        : makeError("Patch was not applied", event.result.message),
-    };
+    return event.result.applied
+      ? { ...state, patchApplyState: "ready" }
+      : pushNotification(
+          { ...state, patchApplyState: "error" },
+          "Patch was not applied",
+          event.result.message,
+        );
   }
   if (event.type === "error") {
-    return {
-      ...state,
-      error: makeError("Runner request failed", event.message),
-    };
+    return pushNotification(state, "Runner request failed", event.message);
   }
   return state;
 }
@@ -474,12 +516,11 @@ function updateProjectState(state: AppState, project: Project): AppState {
   const projects = project.archivedAt
     ? state.projects.filter((item) => item.id !== project.id)
     : upsertBy(state.projects, project, (item) => item.id);
-  const selectedProjectId =
-    project.archivedAt
-      ? state.selectedProjectId === project.id
-        ? ""
-        : state.selectedProjectId
-      : state.selectedProjectId || projects[0]?.id || "";
+  const selectedProjectId = project.archivedAt
+    ? state.selectedProjectId === project.id
+      ? ""
+      : state.selectedProjectId
+    : state.selectedProjectId || projects[0]?.id || "";
   const selectedSessionId =
     state.selectedProjectId === project.id && project.archivedAt
       ? ""
@@ -490,13 +531,6 @@ function updateProjectState(state: AppState, project: Project): AppState {
     selectedProjectId,
     selectedSessionId,
   };
-}
-
-function makeError(
-  title: string,
-  message: string | undefined,
-): AppError | undefined {
-  return message === undefined ? undefined : { title, message };
 }
 
 function removeSessionState(state: AppState, sessionId: string): AppState {
@@ -517,7 +551,6 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     hunks: state.hunks.filter((hunk) => hunk.sessionId !== sessionId),
     filesBySession: omitKey(state.filesBySession, sessionId),
     fileTreeState: omitKey(state.fileTreeState, sessionId),
-    terminalLines: omitKey(state.terminalLines, sessionId),
   };
 }
 
@@ -527,4 +560,43 @@ function upsertApprovalState(state: AppState, approval: Approval): AppState {
     approvals: upsertBy(state.approvals, approval, (item) => item.id),
     hunks: mergePatchHunks(state.hunks, extractPatchHunks([approval])),
   };
+}
+
+let notificationSequence = 0;
+
+function pushNotification(
+  state: AppState,
+  title: string,
+  message: string,
+): AppState {
+  return {
+    ...state,
+    notifications: nextNotifications(state.notifications, title, message),
+  };
+}
+
+function nextNotifications(
+  notifications: AppNotification[],
+  title: string,
+  message: string,
+): AppNotification[] {
+  const key = notificationKey(title, message);
+  const deduped = notifications.filter(
+    (notification) =>
+      notificationKey(notification.title, notification.message) !== key,
+  );
+  notificationSequence += 1;
+  return [
+    ...deduped,
+    {
+      id: `notification-${Date.now()}-${notificationSequence}`,
+      tone: "error" as const,
+      title,
+      message,
+    },
+  ].slice(-3);
+}
+
+function notificationKey(title: string, message: string): string {
+  return `${title}\n${message}`;
 }
