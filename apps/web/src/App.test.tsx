@@ -484,11 +484,12 @@ describe("App", () => {
     try {
       const { container } = render(<App />);
       await screen.findByText("Loaded from API");
+      const messageList = container.querySelector(
+        ".message-list",
+      ) as HTMLElement | null;
+      expect(messageList).not.toBeNull();
       await waitFor(() =>
-        expect(
-          (container.querySelector(".message-list") as HTMLElement | null)
-            ?.scrollTop,
-        ).toBe(1200),
+        expect(messageList!.scrollTop).toBe(1200),
       );
 
       scrollHeight = 1800;
@@ -507,11 +508,31 @@ describe("App", () => {
 
       await screen.findByText("streamed answer");
       await waitFor(() =>
-        expect(
-          (container.querySelector(".message-list") as HTMLElement | null)
-            ?.scrollTop,
-        ).toBe(1800),
+        expect(messageList!.scrollTop).toBe(1800),
       );
+
+      messageList!.scrollTop = 1000;
+      fireEvent.scroll(messageList!);
+
+      scrollHeight = 2400;
+      act(() => {
+        sockets[0]?.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "token",
+              sessionId: "session-1",
+              content: " while reading",
+              encrypted: false,
+            }),
+          }),
+        );
+      });
+
+      await screen.findByText("streamed answer while reading");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(messageList!.scrollTop).toBe(1000);
     } finally {
       if (descriptor) {
         Object.defineProperty(

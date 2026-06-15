@@ -14,6 +14,8 @@ import { hasLaterFinalAssistantMessage, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
 
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
+
 type ChatPanelProps = {
   session: Session;
   messages: UiMessage[];
@@ -37,17 +39,38 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const messageListRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
 
-  useEffect(() => {
+  const scrollToBottom = () => {
     const list = messageListRef.current;
     if (!list) {
       return;
     }
     list.scrollTop = list.scrollHeight;
-  }, [session.id, messageScrollKey]);
+    shouldAutoScrollRef.current = true;
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [session.id]);
+
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) {
+      return;
+    }
+    scrollToBottom();
+  }, [messageScrollKey]);
+
+  const handleMessageListScroll = () => {
+    const list = messageListRef.current;
+    if (!list) {
+      return;
+    }
+    shouldAutoScrollRef.current = isNearMessageListBottom(list);
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -120,7 +143,11 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="message-list" ref={messageListRef}>
+      <div
+        className="message-list"
+        ref={messageListRef}
+        onScroll={handleMessageListScroll}
+      >
         {messages.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.
@@ -161,6 +188,12 @@ export function ChatPanel({
       </form>
     </section>
   );
+}
+
+function isNearMessageListBottom(list: HTMLElement): boolean {
+  const distanceFromBottom =
+    list.scrollHeight - list.scrollTop - list.clientHeight;
+  return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
 function MessageBubble({
