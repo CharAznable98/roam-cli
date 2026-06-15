@@ -135,6 +135,23 @@ describe("app reducer", () => {
     expect(dismissed.notifications).toEqual([]);
   });
 
+  it("does not clear existing notifications when a legacy error field is cleared", () => {
+    const withNotification = appReducer(initialAppState, {
+      type: "fileTreeFailed",
+      sessionId: "session-1",
+      message: "runner offline",
+    });
+
+    const clearedErrorField = appReducer(withNotification, {
+      type: "errorChanged",
+      message: undefined,
+    });
+
+    expect(clearedErrorField.notifications).toEqual(
+      withNotification.notifications,
+    );
+  });
+
   it("clears the current selection when the selected project is archived", () => {
     const next = appReducer(
       {

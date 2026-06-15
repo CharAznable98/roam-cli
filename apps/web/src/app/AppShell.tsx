@@ -19,7 +19,7 @@ import {
   RunnerSidebar,
   SidebarModal,
 } from "../features/sessions/RunnerSidebar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { AppNotification } from "./state";
@@ -562,17 +562,41 @@ function NotificationStack({
   notifications: AppNotification[];
   onDismiss: (id: string) => void;
 }) {
+  const timersRef = useRef(
+    new Map<string, ReturnType<typeof globalThis.setTimeout>>(),
+  );
+
   useEffect(() => {
-    if (notifications.length === 0) {
-      return;
-    }
-    const timers = notifications.map((notification) =>
-      globalThis.setTimeout(() => onDismiss(notification.id), 6_000),
+    const visibleIds = new Set(
+      notifications.map((notification) => notification.id),
     );
-    return () => {
-      timers.forEach((timer) => globalThis.clearTimeout(timer));
-    };
+    for (const [id, timer] of timersRef.current) {
+      if (!visibleIds.has(id)) {
+        globalThis.clearTimeout(timer);
+        timersRef.current.delete(id);
+      }
+    }
+
+    for (const notification of notifications) {
+      if (timersRef.current.has(notification.id)) {
+        continue;
+      }
+      const timer = globalThis.setTimeout(() => {
+        timersRef.current.delete(notification.id);
+        onDismiss(notification.id);
+      }, 6_000);
+      timersRef.current.set(notification.id, timer);
+    }
   }, [notifications, onDismiss]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of timersRef.current.values()) {
+        globalThis.clearTimeout(timer);
+      }
+      timersRef.current.clear();
+    };
+  }, []);
 
   if (notifications.length === 0) {
     return null;

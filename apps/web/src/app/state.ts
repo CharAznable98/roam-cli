@@ -377,7 +377,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return applyServerEvent(state, action.event);
     case "errorChanged":
       if (action.message === undefined) {
-        return { ...state, notifications: [] };
+        return state;
       }
       return pushNotification(
         state,

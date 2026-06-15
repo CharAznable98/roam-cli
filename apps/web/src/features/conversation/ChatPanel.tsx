@@ -37,6 +37,9 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const messageListRef = useRef<HTMLDivElement>(null);
+  const messageScrollKey = messages
+    .map((message) => `${message.id}:${message.content.length}`)
+    .join("|");
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -44,7 +47,7 @@ export function ChatPanel({
       return;
     }
     list.scrollTop = list.scrollHeight;
-  }, [session.id]);
+  }, [session.id, messageScrollKey]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

@@ -469,15 +469,16 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("scrolls the message list to the bottom when opening a session", async () => {
+  it("scrolls the message list to the bottom when opening a session and streaming messages", async () => {
     const descriptor = Object.getOwnPropertyDescriptor(
       HTMLElement.prototype,
       "scrollHeight",
     );
+    let scrollHeight = 1200;
     Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
       configurable: true,
       get() {
-        return 1200;
+        return scrollHeight;
       },
     });
     try {
@@ -488,6 +489,28 @@ describe("App", () => {
           (container.querySelector(".message-list") as HTMLElement | null)
             ?.scrollTop,
         ).toBe(1200),
+      );
+
+      scrollHeight = 1800;
+      act(() => {
+        sockets[0]?.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "token",
+              sessionId: "session-1",
+              content: " streamed answer",
+              encrypted: false,
+            }),
+          }),
+        );
+      });
+
+      await screen.findByText("streamed answer");
+      await waitFor(() =>
+        expect(
+          (container.querySelector(".message-list") as HTMLElement | null)
+            ?.scrollTop,
+        ).toBe(1800),
       );
     } finally {
       if (descriptor) {
@@ -535,17 +558,6 @@ describe("App", () => {
         );
       });
 
-      expect(screen.getByText("Runner request failed")).toBeInTheDocument();
-      expect(screen.getByText("runner failed")).toBeInTheDocument();
-      fireEvent.click(
-        screen.getByRole("button", {
-          name: "Dismiss notification: Runner request failed",
-        }),
-      );
-      expect(
-        screen.queryByText("Runner request failed"),
-      ).not.toBeInTheDocument();
-
       act(() => {
         sockets[0]?.dispatchEvent(
           new MessageEvent("message", {
@@ -556,10 +568,22 @@ describe("App", () => {
           }),
         );
       });
+      expect(screen.getByText("runner failed")).toBeInTheDocument();
       expect(screen.getByText("runner failed again")).toBeInTheDocument();
 
       await act(async () => {
-        vi.advanceTimersByTime(6_000);
+        vi.advanceTimersByTime(5_000);
+      });
+      const dismissButton = screen.getAllByRole("button", {
+        name: "Dismiss notification: Runner request failed",
+      })[0];
+      expect(dismissButton).toBeDefined();
+      fireEvent.click(dismissButton!);
+      expect(screen.queryByText("runner failed")).not.toBeInTheDocument();
+      expect(screen.getByText("runner failed again")).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
       });
       expect(screen.queryByText("runner failed again")).not.toBeInTheDocument();
     } finally {
