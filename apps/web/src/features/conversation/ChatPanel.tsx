@@ -9,8 +9,8 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { hasLaterFinalAssistantMessage, type UiMessage } from "./model";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { getCollapsedIntermediateMessageIds, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -43,6 +43,10 @@ export function ChatPanel({
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
+  const collapsedIntermediateMessageIds = useMemo(
+    () => getCollapsedIntermediateMessageIds(messages),
+    [messages],
+  );
 
   const scrollToBottom = () => {
     const list = messageListRef.current;
@@ -157,9 +161,8 @@ export function ChatPanel({
             <MessageBubble
               key={message.id}
               message={message}
-              collapsedIntermediate={hasLaterFinalAssistantMessage(
-                messages,
-                message,
+              collapsedIntermediate={collapsedIntermediateMessageIds.has(
+                message.id,
               )}
             />
           ))

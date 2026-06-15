@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   appendTokenMessage,
+  getCollapsedIntermediateMessageIds,
   hasLaterFinalAssistantMessage,
   sortMessages,
   toUiMessage,
@@ -164,5 +165,64 @@ describe("conversation model", () => {
     expect(hasLaterFinalAssistantMessage([user, final, stream], stream)).toBe(
       true,
     );
+  });
+
+  it("precomputes collapsed intermediate message ids by turn", () => {
+    const user: UiMessage = {
+      id: "user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:01.000Z",
+    };
+    const stream: UiMessage = {
+      id: "stream-session-1-existing",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "draft",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:03.000Z",
+    };
+    const final: UiMessage = {
+      id: "final",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "final",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const nextUser: UiMessage = {
+      ...user,
+      id: "next-user",
+      content: "next question",
+      createdAt: "2026-06-05T00:00:04.000Z",
+    };
+    const nextStream: UiMessage = {
+      ...stream,
+      id: "stream-session-1-next",
+      content: "next draft",
+      createdAt: "2026-06-05T00:00:05.000Z",
+    };
+    const lateFinal: UiMessage = {
+      ...final,
+      id: "late-final",
+      content: "late final",
+      createdAt: "2026-06-05T00:00:06.000Z",
+    };
+
+    expect(
+      [...getCollapsedIntermediateMessageIds([user, final, stream, nextUser])],
+    ).toEqual(["stream-session-1-existing"]);
+    expect(
+      [
+        ...getCollapsedIntermediateMessageIds([
+          stream,
+          nextUser,
+          lateFinal,
+          nextStream,
+        ]),
+      ],
+    ).toEqual(["stream-session-1-next"]);
   });
 });
