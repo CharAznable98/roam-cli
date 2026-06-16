@@ -354,6 +354,25 @@ export function useRoamController() {
     }
   };
 
+  const renameSelectedSession = async (title: string) => {
+    if (!selectedSession || !apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const session = await apiRef.current.updateSession(selectedSession.id, {
+        title,
+      });
+      dispatch({
+        type: "serverEventReceived",
+        event: { type: "session:updated", session },
+      });
+    } catch (renameError: unknown) {
+      const message = errorMessage(renameError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
+  };
+
   const sendMessage = (content: string) => {
     if (!selectedSession) return;
     const sent = sendStreamCommand(streamRef.current, {
@@ -540,6 +559,7 @@ export function useRoamController() {
     createProject,
     archiveProject,
     createSession,
+    renameSelectedSession,
     sendMessage,
     resolveApproval,
     resolveHunk,

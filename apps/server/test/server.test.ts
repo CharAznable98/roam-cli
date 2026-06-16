@@ -1015,7 +1015,9 @@ describe("server", () => {
       }),
     });
 
-    expect(app.roam.store.getSession("session-delete")?.archivedAt).toEqual(expect.any(String));
+    expect(app.roam.store.getSession("session-delete")?.archivedAt).toEqual(
+      expect.any(String),
+    );
     expect(app.roam.store.getApproval("approval-delete")).toBeDefined();
     expect(fs.existsSync(artifactPath)).toBe(true);
 
@@ -1026,6 +1028,69 @@ describe("server", () => {
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().session.archivedAt).toEqual(expect.any(String));
+  });
+
+  it("renames a session and broadcasts an update", async () => {
+    const now = "2026-06-05T00:00:00.000Z";
+    createTestProject(app);
+    app.roam.store.createSession({
+      id: "session-rename",
+      title: "Original title",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "completed",
+      executionMode: "direct",
+      executionFolder: "/workspace",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const broadcast = vi.spyOn(app.roam.hub, "broadcast");
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/v1/sessions/session-rename",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { title: "  Renamed title  " },
+    });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().session).toMatchObject({
+      id: "session-rename",
+      title: "Renamed title",
+    });
+    expect(renamed.json().session.updatedAt).not.toBe(now);
+    expect(app.roam.store.getSession("session-rename")?.title).toBe(
+      "Renamed title",
+    );
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "session:updated",
+      session: expect.objectContaining({
+        id: "session-rename",
+        title: "Renamed title",
+      }),
+    });
+
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: "/v1/sessions/session-rename",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { title: "   " },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(app.roam.store.getSession("session-rename")?.title).toBe(
+      "Renamed title",
+    );
+
+    const missing = await app.inject({
+      method: "PATCH",
+      url: "/v1/sessions/missing-session",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { title: "Missing" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: "session_not_found" });
   });
 
   it("rejects invalid approval signatures and applies signed patches through runner RPC", async () => {

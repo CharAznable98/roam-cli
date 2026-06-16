@@ -56,6 +56,7 @@ export function AppShell({ controller }: AppShellProps) {
     createProject,
     archiveProject,
     createSession,
+    renameSelectedSession,
     sendMessage,
     resolveApproval,
     resolveHunk,
@@ -198,6 +199,7 @@ export function AppShell({ controller }: AppShellProps) {
                 messages={sessionMessages}
                 onSend={sendMessage}
                 onControl={sendControl}
+                onRename={renameSelectedSession}
                 onDelete={deleteSelectedSession}
                 canSend={canUseStream}
                 canControl={canUseStream}

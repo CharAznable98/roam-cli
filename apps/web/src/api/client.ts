@@ -3,6 +3,7 @@ import type {
   ApiCreateProject,
   ApiCreateSession,
   ApiUpdateProject,
+  ApiUpdateSession,
   Approval,
   ClientCommand,
   ExecutionMode,
@@ -38,6 +39,7 @@ export interface RoamApiClient {
     prompt: string;
     title?: string;
   }): Promise<Session>;
+  updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
   fetchFileTree(
     sessionId: string,
@@ -221,6 +223,17 @@ export function createRoamApiClient(
         method: "POST",
         body: JSON.stringify(payload),
       });
+      return session;
+    },
+
+    async updateSession(sessionId, input) {
+      const { session } = await request<CreateSessionResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        },
+      );
       return session;
     },
 

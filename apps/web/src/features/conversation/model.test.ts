@@ -1,13 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   appendTokenMessage,
-  getCollapsedIntermediateMessageIds,
-  hasLaterFinalAssistantMessage,
+  getConversationDisplayItems,
   sortMessages,
   toUiMessage,
   upsertMessage,
+  type ConversationDisplayItem,
   type UiMessage,
 } from "./model";
+
+function makeMessage(
+  message: Pick<UiMessage, "content" | "id" | "role"> & Partial<UiMessage>,
+): UiMessage {
+  return {
+    sessionId: "session-1",
+    encrypted: false,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    ...message,
+  };
+}
+
+function displayShape(items: ConversationDisplayItem[]) {
+  return items.map((item) =>
+    item.type === "message"
+      ? item.message.id
+      : { intermediate: item.messages.map((message) => message.id) },
+  );
+}
 
 describe("conversation model", () => {
   it("marks tool messages for collapsible rendering", () => {
@@ -107,122 +126,115 @@ describe("conversation model", () => {
     ).toEqual(["newer-user", "stream-session-1-existing"]);
   });
 
-  it("marks stream messages as intermediate only when a final assistant follows in the same turn", () => {
-    const stream: UiMessage = {
-      id: "stream-session-1-existing",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "draft",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:01.000Z",
-    };
-    const final: UiMessage = {
-      ...stream,
-      id: "final",
-      content: "final",
-      createdAt: "2026-06-05T00:00:02.000Z",
-    };
-    const nextUser: UiMessage = {
-      ...stream,
-      id: "user",
-      role: "user",
-      content: "next question",
-      createdAt: "2026-06-05T00:00:03.000Z",
-    };
-
-    expect(hasLaterFinalAssistantMessage([stream, final], stream)).toBe(true);
-    expect(
-      hasLaterFinalAssistantMessage([stream, nextUser, final], stream),
-    ).toBe(false);
-  });
-
-  it("marks stream messages as intermediate when the final assistant sorts before the stream in the same turn", () => {
-    const user: UiMessage = {
-      id: "user",
-      sessionId: "session-1",
-      role: "user",
-      content: "question",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:01.000Z",
-    };
-    const final: UiMessage = {
-      id: "final",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "final",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:02.000Z",
-    };
-    const stream: UiMessage = {
-      id: "stream-session-1-existing",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "draft",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:03.000Z",
-    };
-
-    expect(hasLaterFinalAssistantMessage([user, final, stream], stream)).toBe(
-      true,
-    );
-  });
-
-  it("precomputes collapsed intermediate message ids by turn", () => {
-    const user: UiMessage = {
-      id: "user",
-      sessionId: "session-1",
-      role: "user",
-      content: "question",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:01.000Z",
-    };
-    const stream: UiMessage = {
-      id: "stream-session-1-existing",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "draft",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:03.000Z",
-    };
-    const final: UiMessage = {
-      id: "final",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "final",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:02.000Z",
-    };
-    const nextUser: UiMessage = {
-      ...user,
-      id: "next-user",
-      content: "next question",
-      createdAt: "2026-06-05T00:00:04.000Z",
-    };
-    const nextStream: UiMessage = {
-      ...stream,
-      id: "stream-session-1-next",
-      content: "next draft",
-      createdAt: "2026-06-05T00:00:05.000Z",
-    };
-    const lateFinal: UiMessage = {
-      ...final,
-      id: "late-final",
-      content: "late final",
-      createdAt: "2026-06-05T00:00:06.000Z",
-    };
-
-    expect(
-      [...getCollapsedIntermediateMessageIds([user, final, stream, nextUser])],
-    ).toEqual(["stream-session-1-existing"]);
-    expect(
+  it("groups completed turn output before the final assistant message", () => {
+    const items = getConversationDisplayItems(
       [
-        ...getCollapsedIntermediateMessageIds([
-          stream,
-          nextUser,
-          lateFinal,
-          nextStream,
-        ]),
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({ id: "progress", role: "assistant", content: "working" }),
+        makeMessage({ id: "final", role: "assistant", content: "answer" }),
       ],
-    ).toEqual(["stream-session-1-next"]);
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { intermediate: ["progress"] },
+      "final",
+    ]);
+  });
+
+  it("does not collapse the active turn until the session is completed", () => {
+    const messages = [
+      makeMessage({ id: "user", role: "user", content: "question" }),
+      makeMessage({ id: "progress", role: "assistant", content: "working" }),
+      makeMessage({ id: "latest", role: "assistant", content: "still going" }),
+    ];
+
+    expect(
+      displayShape(getConversationDisplayItems(messages, "running")),
+    ).toEqual(["user", "progress", "latest"]);
+    expect(
+      displayShape(getConversationDisplayItems(messages, "failed")),
+    ).toEqual(["user", "progress", "latest"]);
+    expect(
+      displayShape(getConversationDisplayItems(messages, "stopped")),
+    ).toEqual(["user", "progress", "latest"]);
+    expect(
+      displayShape(getConversationDisplayItems(messages, "waiting_approval")),
+    ).toEqual(["user", "progress", "latest"]);
+  });
+
+  it("keeps old turns collapsed while a resumed turn is running", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user-1", role: "user", content: "first" }),
+        makeMessage({ id: "progress-1", role: "assistant", content: "work" }),
+        makeMessage({ id: "final-1", role: "assistant", content: "answer" }),
+        makeMessage({ id: "user-2", role: "user", content: "second" }),
+        makeMessage({ id: "progress-2", role: "assistant", content: "work" }),
+        makeMessage({ id: "latest-2", role: "assistant", content: "running" }),
+      ],
+      "running",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user-1",
+      { intermediate: ["progress-1"] },
+      "final-1",
+      "user-2",
+      "progress-2",
+      "latest-2",
+    ]);
+  });
+
+  it("treats stream messages as ordinary turn output for grouping", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "stream-session-1-existing",
+          role: "assistant",
+          content: "draft",
+        }),
+        makeMessage({ id: "final", role: "assistant", content: "answer" }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { intermediate: ["stream-session-1-existing"] },
+      "final",
+    ]);
+  });
+
+  it("does not render an empty intermediate group", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({ id: "final", role: "assistant", content: "answer" }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual(["user", "final"]);
+  });
+
+  it("includes future non-assistant output before the final assistant in the outer group", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({ id: "tool", role: "tool", content: "pnpm test" }),
+        makeMessage({ id: "system", role: "system", content: "note" }),
+        makeMessage({ id: "final", role: "assistant", content: "answer" }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { intermediate: ["tool", "system"] },
+      "final",
+    ]);
   });
 });

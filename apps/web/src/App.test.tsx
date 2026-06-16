@@ -176,6 +176,8 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
+  let failNextSessionRename: boolean;
+  let remoteSessionTitle: string;
   let remoteSessionStatus: string;
   let sessionDetailMessages: Array<{
     id: string;
@@ -192,6 +194,8 @@ describe("App", () => {
     deferredFileContent = new Map();
     failNextProjectCreate = false;
     failNextSessionCreate = false;
+    failNextSessionRename = false;
+    remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
     sessionDetailMessages = [
       {
@@ -262,15 +266,43 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({
-            sessions: [{ ...session, status: remoteSessionStatus }],
+            sessions: [
+              {
+                ...session,
+                title: remoteSessionTitle,
+                status: remoteSessionStatus,
+              },
+            ],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
+          if (init?.method === "PATCH") {
+            if (failNextSessionRename) {
+              failNextSessionRename = false;
+              return jsonResponse({ error: "rename_failed" }, 500);
+            }
+            const body = JSON.parse(String(init.body ?? "{}")) as {
+              title?: string;
+            };
+            remoteSessionTitle = body.title ?? remoteSessionTitle;
+            return jsonResponse({
+              session: {
+                ...session,
+                title: remoteSessionTitle,
+                status: remoteSessionStatus,
+                updatedAt: "2026-06-05T00:01:00.000Z",
+              },
+            });
+          }
           if (init?.method === "DELETE") {
             return new Response(null, { status: 204 });
           }
           return jsonResponse({
-            session: { ...session, status: remoteSessionStatus },
+            session: {
+              ...session,
+              title: remoteSessionTitle,
+              status: remoteSessionStatus,
+            },
             messages: sessionDetailMessages,
             approvals: [patchApproval],
             artifacts: [patchArtifact],
@@ -399,6 +431,80 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("renames the selected session", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Rename session",
+    });
+    const titleInput = within(dialog).getByLabelText("Session name");
+    const saveButton = within(dialog).getByRole("button", { name: "Save" });
+    expect(titleInput).toHaveValue("Real session");
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(titleInput, { target: { value: "   " } });
+    expect(saveButton).toBeDisabled();
+    expect(
+      fetchCalls.find(
+        (call) =>
+          new URL(call.url).pathname === "/v1/sessions/session-1" &&
+          call.init?.method === "PATCH",
+      ),
+    ).toBeUndefined();
+
+    fireEvent.change(titleInput, {
+      target: { value: "  Renamed session  " },
+    });
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Switch Session: Renamed session",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Rename session" }),
+    ).not.toBeInTheDocument();
+    const patchCall = fetchCalls.find(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1" &&
+        call.init?.method === "PATCH",
+    );
+    expect(JSON.parse(String(patchCall?.init?.body))).toEqual({
+      title: "Renamed session",
+    });
+  });
+
+  it("keeps the rename dialog open when the session update fails", async () => {
+    failNextSessionRename = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Rename session",
+    });
+    const titleInput = within(dialog).getByLabelText("Session name");
+    fireEvent.change(titleInput, {
+      target: { value: "Rejected session title" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByText(/500/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Rename session" }),
+    ).toBeInTheDocument();
+    expect(titleInput).toHaveValue("Rejected session title");
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Real session" }),
+    ).toBeInTheDocument();
+  });
+
   it("does not auto-load files for a selected session whose runner is offline", async () => {
     const offlineProject = {
       ...project,
@@ -488,9 +594,7 @@ describe("App", () => {
         ".message-list",
       ) as HTMLElement | null;
       expect(messageList).not.toBeNull();
-      await waitFor(() =>
-        expect(messageList!.scrollTop).toBe(1200),
-      );
+      await waitFor(() => expect(messageList!.scrollTop).toBe(1200));
 
       scrollHeight = 1800;
       act(() => {
@@ -507,9 +611,7 @@ describe("App", () => {
       });
 
       await screen.findByText("streamed answer");
-      await waitFor(() =>
-        expect(messageList!.scrollTop).toBe(1800),
-      );
+      await waitFor(() => expect(messageList!.scrollTop).toBe(1800));
 
       messageList!.scrollTop = 1000;
       fireEvent.scroll(messageList!);
@@ -1539,7 +1641,7 @@ describe("App", () => {
     expect(preview.tagName.toLowerCase()).toBe("strong");
   });
 
-  it("collapses streamed intermediate output after the final assistant message", async () => {
+  it("collapses completed turn intermediates after the final assistant message", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -1547,10 +1649,45 @@ describe("App", () => {
       sockets[0]?.dispatchEvent(
         new MessageEvent("message", {
           data: JSON.stringify({
-            type: "token",
-            sessionId: "session-1",
-            content: "draft answer",
-            encrypted: false,
+            type: "message:created",
+            message: {
+              id: "message-user-fold",
+              sessionId: "session-1",
+              role: "user",
+              content: "question",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-progress-1",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "checking files",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 2000).toISOString(),
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-progress-2",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "running tests",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 3000).toISOString(),
+            },
           }),
         }),
       );
@@ -1564,7 +1701,7 @@ describe("App", () => {
               role: "assistant",
               content: "final answer",
               encrypted: false,
-              createdAt: new Date(Date.now() + 1000).toISOString(),
+              createdAt: new Date(Date.now() + 4000).toISOString(),
             },
           }),
         }),
@@ -1572,10 +1709,32 @@ describe("App", () => {
     });
 
     const conversation = screen.getByRole("region", { name: "Conversation" });
-    const intermediate = await within(conversation).findByText(
-      "Intermediate output",
-    );
-    expect(intermediate.closest("details")).not.toHaveAttribute("open");
+    expect(
+      within(conversation).queryByText("中间过程（2 条）"),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:updated",
+            session: {
+              ...session,
+              status: "completed",
+              updatedAt: new Date(Date.now() + 5000).toISOString(),
+            },
+          }),
+        }),
+      );
+    });
+
+    const intermediate =
+      await within(conversation).findByText("中间过程（2 条）");
+    const group = intermediate.closest("details");
+    expect(group).not.toHaveAttribute("open");
+    expect(group).not.toBeNull();
+    expect(within(group!).getByText("checking files")).toBeInTheDocument();
+    expect(within(group!).getByText("running tests")).toBeInTheDocument();
     expect(within(conversation).getByText("final answer")).toBeInTheDocument();
   });
 
