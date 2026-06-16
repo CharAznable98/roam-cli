@@ -1,9 +1,13 @@
-import type { Message } from "@roamcli/shared/protocol";
+import type { Message, SessionStatus } from "@roamcli/shared/protocol";
 
 export type UiMessage = Message & {
   variant?: "message" | "thought" | "tool";
   toolName?: string;
 };
+
+export type ConversationDisplayItem =
+  | { type: "message"; id: string; message: UiMessage }
+  | { type: "intermediateGroup"; id: string; messages: UiMessage[] };
 
 export function toUiMessage(message: Message): UiMessage {
   if (message.role === "tool") {
@@ -60,7 +64,7 @@ export function nextMessageTimestamp(previous: Message | undefined): string {
   return new Date(Math.max(now, previousTime + 1)).toISOString();
 }
 
-export function isStreamAssistantMessage(message: Message): boolean {
+function isStreamAssistantMessage(message: Message): boolean {
   if (message.role !== "assistant") {
     return false;
   }
@@ -70,104 +74,92 @@ export function isStreamAssistantMessage(message: Message): boolean {
   );
 }
 
-export function hasLaterFinalAssistantMessage(
-  messages: Message[],
-  message: Message,
-): boolean {
-  if (!isStreamAssistantMessage(message)) {
-    return false;
-  }
-  const index = messages.findIndex((item) => item.id === message.id);
-  if (index === -1) {
-    return false;
-  }
-  const sameSession = (item: Message) => item.sessionId === message.sessionId;
-  let turnStart = -1;
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const item = messages[cursor];
-    if (item && sameSession(item) && item.role === "user") {
-      turnStart = cursor;
-      break;
-    }
-  }
-  const nextUserOffset = messages
-    .slice(index + 1)
-    .findIndex((item) => sameSession(item) && item.role === "user");
-  const turnEnd =
-    nextUserOffset === -1 ? messages.length : index + 1 + nextUserOffset;
+export function getConversationDisplayItems(
+  messages: UiMessage[],
+  sessionStatus: SessionStatus,
+): ConversationDisplayItem[] {
+  const displayItems: ConversationDisplayItem[] = [];
+  let activeUser: UiMessage | undefined;
+  let turnMessages: UiMessage[] = [];
 
-  for (const item of messages.slice(turnStart + 1, turnEnd)) {
-    if (
-      sameSession(item) &&
-      item.id !== message.id &&
-      item.role === "assistant" &&
-      !isStreamAssistantMessage(item)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-type IntermediateTurn = {
-  streamMessageIds: string[];
-  hasFinalAssistant: boolean;
-};
-
-export function getCollapsedIntermediateMessageIds(
-  messages: Message[],
-): Set<string> {
-  const collapsedIds = new Set<string>();
-  const turns = new Map<string, IntermediateTurn>();
-
-  const getTurn = (sessionId: string) => {
-    const existing = turns.get(sessionId);
-    if (existing) {
-      return existing;
-    }
-    const next: IntermediateTurn = {
-      streamMessageIds: [],
-      hasFinalAssistant: false,
-    };
-    turns.set(sessionId, next);
-    return next;
-  };
-  const flushTurn = (sessionId: string) => {
-    const turn = turns.get(sessionId);
-    if (!turn) {
+  const flushTurn = (closedByNextUser: boolean) => {
+    if (activeUser === undefined) {
+      for (const message of turnMessages) {
+        displayItems.push(toDisplayMessage(message));
+      }
+      turnMessages = [];
       return;
     }
-    if (turn.hasFinalAssistant) {
-      for (const id of turn.streamMessageIds) {
-        collapsedIds.add(id);
-      }
-    }
-    turns.set(sessionId, {
-      streamMessageIds: [],
-      hasFinalAssistant: false,
-    });
+
+    displayItems.push(toDisplayMessage(activeUser));
+    const shouldCollapse = closedByNextUser || sessionStatus === "completed";
+    pushTurnOutput(displayItems, activeUser, turnMessages, shouldCollapse);
+    turnMessages = [];
   };
 
   for (const message of messages) {
     if (message.role === "user") {
-      flushTurn(message.sessionId);
+      flushTurn(true);
+      activeUser = message;
       continue;
     }
-    if (message.role !== "assistant") {
-      continue;
-    }
-
-    const turn = getTurn(message.sessionId);
-    if (isStreamAssistantMessage(message)) {
-      turn.streamMessageIds.push(message.id);
-    } else {
-      turn.hasFinalAssistant = true;
-    }
+    turnMessages.push(message);
   }
 
-  for (const sessionId of turns.keys()) {
-    flushTurn(sessionId);
+  flushTurn(false);
+  return displayItems;
+}
+
+function pushTurnOutput(
+  displayItems: ConversationDisplayItem[],
+  userMessage: UiMessage,
+  messages: UiMessage[],
+  shouldCollapse: boolean,
+): void {
+  if (!shouldCollapse) {
+    for (const message of messages) {
+      displayItems.push(toDisplayMessage(message));
+    }
+    return;
   }
 
-  return collapsedIds;
+  const finalAssistantIndex = findLastAssistantIndex(messages);
+  if (finalAssistantIndex <= 0) {
+    for (const message of messages) {
+      displayItems.push(toDisplayMessage(message));
+    }
+    return;
+  }
+
+  const intermediateMessages = messages.slice(0, finalAssistantIndex);
+  const finalMessage = messages[finalAssistantIndex];
+  if (!finalMessage) {
+    for (const message of messages) {
+      displayItems.push(toDisplayMessage(message));
+    }
+    return;
+  }
+  const trailingMessages = messages.slice(finalAssistantIndex + 1);
+  displayItems.push({
+    type: "intermediateGroup",
+    id: `intermediate-${userMessage.id}-${finalMessage.id}`,
+    messages: intermediateMessages,
+  });
+  displayItems.push(toDisplayMessage(finalMessage));
+  for (const message of trailingMessages) {
+    displayItems.push(toDisplayMessage(message));
+  }
+}
+
+function findLastAssistantIndex(messages: UiMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "assistant") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function toDisplayMessage(message: UiMessage): ConversationDisplayItem {
+  return { type: "message", id: message.id, message };
 }

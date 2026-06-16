@@ -534,6 +534,10 @@
     padding-top: 0;
   }
 
+  .rename-session-dialog .form-actions {
+    gap: 8px;
+  }
+
   .form-actions {
     display: flex;
     justify-content: flex-end;
@@ -975,6 +979,36 @@
     transform: rotate(180deg);
   }
 
+  .intermediate-group-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .intermediate-message {
+    border-left: 2px solid #d9e1ea;
+    padding-left: 10px;
+  }
+
+  .intermediate-message-meta {
+    margin-bottom: 4px;
+    color: #71869d;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .intermediate-message-body > :first-child {
+    margin-top: 0;
+  }
+
+  .intermediate-message-body > :last-child {
+    margin-bottom: 0;
+  }
+
+  .intermediate-message-body .collapsible-message {
+    max-width: none;
+  }
+
   .collapsible-message pre,
   .approval-card pre,
   .hunk pre,
@@ -1067,6 +1101,7 @@
 
   .icon-button:disabled,
   .primary-icon-button:disabled,
+  .primary-action-button:disabled,
   .small-button:disabled {
     cursor: not-allowed;
     opacity: 0.48;
@@ -1558,7 +1593,7 @@
 
 @media (min-width: 768px) {
   .notification-stack {
-    top: 72px;
+    top: 188px;
     bottom: auto;
   }
 

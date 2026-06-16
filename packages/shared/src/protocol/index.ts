@@ -432,6 +432,11 @@ export const ApiCreateSessionSchema = z.object({
 });
 export type ApiCreateSession = z.infer<typeof ApiCreateSessionSchema>;
 
+export const ApiUpdateSessionSchema = z.object({
+  title: z.string().trim().min(1),
+});
+export type ApiUpdateSession = z.infer<typeof ApiUpdateSessionSchema>;
+
 export const ApiCreateProjectSchema = z.object({
   name: z.string().min(1),
   runnerId: z.string().min(1),

@@ -3,14 +3,16 @@ import {
   Bot,
   ChevronDown,
   CircleStop,
+  Pencil,
   Play,
   Send,
   SquareTerminal,
   Trash2,
   User,
+  X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { getCollapsedIntermediateMessageIds, type UiMessage } from "./model";
+import { getConversationDisplayItems, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -21,6 +23,7 @@ type ChatPanelProps = {
   messages: UiMessage[];
   onSend: (content: string) => void;
   onControl?: (signal: "stop" | "resume") => void;
+  onRename?: (title: string) => void | Promise<void>;
   onDelete?: () => void;
   canSend?: boolean;
   canControl?: boolean;
@@ -32,20 +35,27 @@ export function ChatPanel({
   messages,
   onSend,
   onControl,
+  onRename,
   onDelete,
   canSend = true,
   canControl = true,
   onOpenSessionSwitcher,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(session.title);
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const [renameError, setRenameError] = useState<string | undefined>();
   const messageListRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
-  const collapsedIntermediateMessageIds = useMemo(
-    () => getCollapsedIntermediateMessageIds(messages),
-    [messages],
+  const conversationLayoutKey = `${session.status}|${messageScrollKey}`;
+  const displayItems = useMemo(
+    () => getConversationDisplayItems(messages, session.status),
+    [messages, session.status],
   );
 
   const scrollToBottom = () => {
@@ -62,11 +72,25 @@ export function ChatPanel({
   }, [session.id]);
 
   useEffect(() => {
+    setRenameDialogOpen(false);
+    setRenameDraft(session.title);
+    setRenameSubmitting(false);
+    setRenameError(undefined);
+  }, [session.id, session.title]);
+
+  useEffect(() => {
+    if (renameDialogOpen) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renameDialogOpen]);
+
+  useEffect(() => {
     if (!shouldAutoScrollRef.current) {
       return;
     }
     scrollToBottom();
-  }, [messageScrollKey]);
+  }, [conversationLayoutKey]);
 
   const handleMessageListScroll = () => {
     const list = messageListRef.current;
@@ -86,6 +110,50 @@ export function ChatPanel({
     onSend(cleanDraft);
     setDraft("");
   };
+
+  const openRenameDialog = () => {
+    setRenameDraft(session.title);
+    setRenameError(undefined);
+    setRenameDialogOpen(true);
+  };
+
+  const closeRenameDialog = () => {
+    if (renameSubmitting) {
+      return;
+    }
+    setRenameDialogOpen(false);
+    setRenameDraft(session.title);
+    setRenameError(undefined);
+  };
+
+  const submitRename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const cleanTitle = renameDraft.trim();
+    if (
+      !onRename ||
+      renameSubmitting ||
+      !cleanTitle ||
+      cleanTitle === session.title
+    ) {
+      return;
+    }
+    setRenameSubmitting(true);
+    setRenameError(undefined);
+    try {
+      await onRename(cleanTitle);
+      setRenameDialogOpen(false);
+    } catch (error) {
+      setRenameError(getErrorMessage(error));
+    } finally {
+      setRenameSubmitting(false);
+    }
+  };
+
+  const canSubmitRename =
+    Boolean(onRename) &&
+    !renameSubmitting &&
+    renameDraft.trim().length > 0 &&
+    renameDraft.trim() !== session.title;
 
   return (
     <section className="chat-column" aria-label="Conversation">
@@ -118,6 +186,16 @@ export function ChatPanel({
           <button
             className="icon-button"
             type="button"
+            aria-label="Rename session"
+            title="Rename session"
+            disabled={!onRename}
+            onClick={openRenameDialog}
+          >
+            <Pencil size={17} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
             aria-label="Resume session"
             title="Resume session"
             disabled={!canControl}
@@ -147,6 +225,77 @@ export function ChatPanel({
         </div>
       </div>
 
+      {renameDialogOpen ? (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (!renameSubmitting && event.target === event.currentTarget) {
+              closeRenameDialog();
+            }
+          }}
+        >
+          <form
+            className="modal-panel rename-session-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rename-session-title"
+            onSubmit={submitRename}
+          >
+            <div className="modal-header">
+              <h2 id="rename-session-title" className="panel-title">
+                Rename session
+              </h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close rename dialog"
+                title="Close"
+                onClick={closeRenameDialog}
+                disabled={renameSubmitting}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <label className="field">
+              <span>Session name</span>
+              <input
+                ref={renameInputRef}
+                value={renameDraft}
+                onChange={(event) => setRenameDraft(event.target.value)}
+                aria-label="Session name"
+                aria-describedby={
+                  renameError ? "rename-session-error" : undefined
+                }
+                aria-invalid={renameError ? "true" : undefined}
+                disabled={renameSubmitting}
+              />
+            </label>
+            {renameError ? (
+              <p className="form-error" id="rename-session-error">
+                {renameError}
+              </p>
+            ) : null}
+            <div className="form-actions">
+              <button
+                className="small-button"
+                type="button"
+                onClick={closeRenameDialog}
+                disabled={renameSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-action-button"
+                type="submit"
+                disabled={!canSubmitRename}
+              >
+                {renameSubmitting ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       <div
         className="message-list"
         ref={messageListRef}
@@ -157,15 +306,13 @@ export function ChatPanel({
             No messages have been recorded for this session yet.
           </div>
         ) : (
-          messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              collapsedIntermediate={collapsedIntermediateMessageIds.has(
-                message.id,
-              )}
-            />
-          ))
+          displayItems.map((item) =>
+            item.type === "intermediateGroup" ? (
+              <IntermediateOutputGroup key={item.id} messages={item.messages} />
+            ) : (
+              <MessageBubble key={item.id} message={item.message} />
+            ),
+          )
         )}
       </div>
 
@@ -199,25 +346,54 @@ function isNearMessageListBottom(list: HTMLElement): boolean {
   return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
-function MessageBubble({
-  message,
-  collapsedIntermediate,
-}: {
-  message: UiMessage;
-  collapsedIntermediate?: boolean;
-}) {
-  if (collapsedIntermediate) {
-    return (
-      <details className="collapsible-message intermediate">
-        <summary>
-          <ChevronDown size={16} />
-          Intermediate output
-        </summary>
-        <MarkdownMessage content={message.content} />
-      </details>
-    );
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
   }
+  return "Unable to rename session.";
+}
 
+function IntermediateOutputGroup({ messages }: { messages: UiMessage[] }) {
+  return (
+    <details className="collapsible-message intermediate-group">
+      <summary>
+        <ChevronDown size={16} />
+        中间过程（{messages.length} 条）
+      </summary>
+      <div className="intermediate-group-list">
+        {messages.map((message) => (
+          <IntermediateMessage key={message.id} message={message} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function IntermediateMessage({ message }: { message: UiMessage }) {
+  const label = message.variant === "tool" ? "tool" : message.role;
+  return (
+    <div className={`intermediate-message ${message.role}`}>
+      <div className="intermediate-message-meta">{label}</div>
+      <div className="intermediate-message-body">
+        {message.variant === "tool" ? (
+          <details className="collapsible-message tool">
+            <summary>
+              <SquareTerminal size={16} />
+              Tool call {message.toolName ? `· ${message.toolName}` : ""}
+            </summary>
+            <pre>{message.content}</pre>
+          </details>
+        ) : message.role === "user" ? (
+          <p>{message.content}</p>
+        ) : (
+          <MarkdownMessage content={message.content} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message }: { message: UiMessage }) {
   if (message.variant === "thought") {
     return (
       <details className="collapsible-message">

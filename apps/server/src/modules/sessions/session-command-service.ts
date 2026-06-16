@@ -1,6 +1,7 @@
 import {
   nowIso,
   type ApiCreateSession,
+  type ApiUpdateSession,
   type ClientCommand,
   type Session,
 } from "@roamcli/shared/protocol";
@@ -25,6 +26,28 @@ export class SessionCommandService {
 
   createSession(input: ApiCreateSession): ServiceResult<{ session: Session }> {
     return this.createAndStartSession(input);
+  }
+
+  updateSession(
+    sessionId: string,
+    input: ApiUpdateSession,
+  ): ServiceResult<{ session: Session }> {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      return fail("session_not_found");
+    }
+
+    const updated = this.store.updateSessionTitle(
+      session.id,
+      input.title,
+      nowIso(),
+    );
+    if (!updated) {
+      return fail("session_not_found");
+    }
+
+    this.hub.broadcast({ type: "session:updated", session: updated });
+    return ok({ session: updated });
   }
 
   deleteSession(sessionId: string): ServiceResult<void> {

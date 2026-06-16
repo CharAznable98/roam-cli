@@ -5,6 +5,7 @@ import {
   ApiCreateProjectSchema,
   ApiCreateSessionSchema,
   ApiUpdateProjectSchema,
+  ApiUpdateSessionSchema,
   ApiWriteFileSchema,
   nowIso,
 } from "@roamcli/shared/protocol";
@@ -74,6 +75,29 @@ function registerSessionRoutes(
     return reply.code(201).send(result.value);
   });
 
+  app.patch("/v1/sessions/:id", async (request, reply) => {
+    const params = SessionParamsSchema.parse(request.params);
+    const parsed = ApiUpdateSessionSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+
+    const result = context.services.sessions.updateSession(
+      params.id,
+      parsed.data,
+    );
+    if (!result.ok) {
+      if (result.error === "session_not_found") {
+        return reply.code(404).send({ error: "session_not_found" });
+      }
+      return reply.code(400).send({ error: result.error });
+    }
+
+    return result.value;
+  });
+
   app.get("/v1/sessions/:id", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
     const session = context.store.getSession(params.id);
@@ -101,7 +125,10 @@ function registerSessionRoutes(
   });
 }
 
-function registerProjectRoutes(app: FastifyInstance, context: AppContext): void {
+function registerProjectRoutes(
+  app: FastifyInstance,
+  context: AppContext,
+): void {
   app.get("/v1/projects", async () => ({
     projects: context.store.listProjects(),
   }));
@@ -120,11 +147,13 @@ function registerProjectRoutes(app: FastifyInstance, context: AppContext): void 
     if (!runner) {
       return reply.code(404).send({ error: "runner_not_found" });
     }
-    const duplicateProject = context.store.listProjects().find(
-      (project) =>
-        project.runnerId === parsed.data.runnerId &&
-        project.directory === parsed.data.directory,
-    );
+    const duplicateProject = context.store
+      .listProjects()
+      .find(
+        (project) =>
+          project.runnerId === parsed.data.runnerId &&
+          project.directory === parsed.data.directory,
+      );
     if (duplicateProject) {
       return reply.code(409).send({ error: "project_already_exists" });
     }
@@ -177,7 +206,9 @@ function registerProjectRoutes(app: FastifyInstance, context: AppContext): void 
     }
     const update = {
       ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
-      ...(parsed.data.directory === undefined ? {} : { directory: parsed.data.directory }),
+      ...(parsed.data.directory === undefined
+        ? {}
+        : { directory: parsed.data.directory }),
       updatedAt: nowIso(),
     };
     const project = context.store.updateProject(params.id, update);

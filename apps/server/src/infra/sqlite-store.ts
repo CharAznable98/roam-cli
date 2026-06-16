@@ -248,14 +248,18 @@ export class ServerStore {
 
   archiveSession(id: string, archivedAt: string): Session | undefined {
     this.db
-      .prepare("UPDATE sessions SET archived_at = ?, archived_by_project_id = NULL, updated_at = ? WHERE id = ?")
+      .prepare(
+        "UPDATE sessions SET archived_at = ?, archived_by_project_id = NULL, updated_at = ? WHERE id = ?",
+      )
       .run(archivedAt, archivedAt, id);
     return this.getSession(id);
   }
 
   restoreSession(id: string, restoredAt: string): Session | undefined {
     this.db
-      .prepare("UPDATE sessions SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ? WHERE id = ?")
+      .prepare(
+        "UPDATE sessions SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ? WHERE id = ?",
+      )
       .run(restoredAt, id);
     return this.getSession(id);
   }
@@ -268,6 +272,17 @@ export class ServerStore {
     this.db
       .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
       .run(status, updatedAt, id);
+    return this.getSession(id);
+  }
+
+  updateSessionTitle(
+    id: string,
+    title: string,
+    updatedAt: string,
+  ): Session | undefined {
+    this.db
+      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+      .run(title, updatedAt, id);
     return this.getSession(id);
   }
 
@@ -551,7 +566,11 @@ export class ServerStore {
       );
     `);
     this.addColumnIfMissing("sessions", "project_id", "TEXT");
-    this.addColumnIfMissing("sessions", "execution_mode", "TEXT NOT NULL DEFAULT 'direct'");
+    this.addColumnIfMissing(
+      "sessions",
+      "execution_mode",
+      "TEXT NOT NULL DEFAULT 'direct'",
+    );
     this.addColumnIfMissing("sessions", "execution_folder", "TEXT");
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
