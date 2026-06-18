@@ -230,6 +230,7 @@ export function useRoamController() {
   const selectedGitContext = useMemo<ApiGitContext | undefined>(() => {
     if (
       selectedSession?.executionMode === "managed_worktree" &&
+      selectedSession.status !== "pending" &&
       !selectedSession.worktreeDeletedAt
     ) {
       return { kind: "session_worktree", sessionId: selectedSession.id };
@@ -241,6 +242,7 @@ export function useRoamController() {
     selectedProject,
     selectedSession?.executionMode,
     selectedSession?.id,
+    selectedSession?.status,
     selectedSession?.worktreeDeletedAt,
   ]);
 

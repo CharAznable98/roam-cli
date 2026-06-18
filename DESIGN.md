@@ -126,9 +126,9 @@
 - Principle 3: Runner owns filesystem and Git execution.
   - Web never sends arbitrary paths.
   - Web sends `GitContextRef`; Server resolves it to Project/session identity; Runner executes in the resolved path.
-- Principle 4: Isolation is the default.
-  - New sessions default to worktree mode.
-  - Local mode is available but explicit.
+- Principle 4: Isolation is explicit and visible.
+  - New sessions default to local/direct mode to match the existing Project default.
+  - Worktree mode is explicit when the user wants new-branch isolation.
 - Principle 5: Simple default UI, complete advanced surface.
   - Default commit UI stays small.
   - Advanced actions live in menus or contextual actions.
@@ -302,8 +302,8 @@ type GitContextRef =
 
 - Web must not send arbitrary filesystem paths for Git operations.
 - Session creation:
-  - New sessions default to worktree mode.
-  - Local mode remains explicit.
+  - New sessions default to local/direct mode.
+  - Worktree mode remains explicit.
   - Worktree mode creates a new branch and a worktree.
   - Worktree base ref selector defaults to the Project current branch.
   - Detached HEAD is allowed as a base by resolving and displaying the base SHA.

@@ -130,6 +130,12 @@ export class WorkspaceService {
       return fail("session_not_found");
     }
     if (
+      session.executionMode === "managed_worktree" &&
+      session.worktreeDeletedAt
+    ) {
+      return fail("worktree_not_available");
+    }
+    if (
       !this.signatures.isPatchSignatureValid(
         session.id,
         body.patch,

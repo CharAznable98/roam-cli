@@ -1,4 +1,4 @@
-import type { RunnerCommand } from "@roamcli/shared/protocol";
+import type { GitJob, RunnerCommand } from "@roamcli/shared/protocol";
 import { applyUnifiedDiff } from "../workspace/patch.js";
 import {
   readFileContent,
@@ -20,6 +20,20 @@ import {
   unstageGitPaths,
 } from "../workspace/git.js";
 import type { RunnerEventSink } from "./types.js";
+
+type GitMutationCommand = Extract<
+  RunnerCommand,
+  {
+    type:
+      | "gitInit"
+      | "gitStagePaths"
+      | "gitUnstagePaths"
+      | "gitDiscardPaths"
+      | "gitCommit"
+      | "gitRemoteOperation"
+      | "gitRemoveWorktree";
+  }
+>;
 
 export interface WorkspaceCommandHandlerOptions {
   workspace: string;
@@ -261,104 +275,111 @@ export class WorkspaceCommandHandler {
   public async initGitRepository(
     command: Extract<RunnerCommand, { type: "gitInit" }>,
   ): Promise<void> {
-    const job = await initGitRepository({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "init",
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "init", () =>
+      initGitRepository({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "init",
+      }),
+    );
   }
 
   public async stageGitPaths(
     command: Extract<RunnerCommand, { type: "gitStagePaths" }>,
   ): Promise<void> {
-    const job = await stageGitPaths({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "stage",
-      paths: command.paths,
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "stage", () =>
+      stageGitPaths({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "stage",
+        paths: command.paths,
+      }),
+    );
   }
 
   public async unstageGitPaths(
     command: Extract<RunnerCommand, { type: "gitUnstagePaths" }>,
   ): Promise<void> {
-    const job = await unstageGitPaths({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "unstage",
-      paths: command.paths,
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "unstage", () =>
+      unstageGitPaths({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "unstage",
+        paths: command.paths,
+      }),
+    );
   }
 
   public async discardGitPaths(
     command: Extract<RunnerCommand, { type: "gitDiscardPaths" }>,
   ): Promise<void> {
-    const job = await discardGitPaths({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "discard",
-      paths: command.paths,
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "discard", () =>
+      discardGitPaths({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "discard",
+        paths: command.paths,
+      }),
+    );
   }
 
   public async commitGitChanges(
     command: Extract<RunnerCommand, { type: "gitCommit" }>,
   ): Promise<void> {
-    const job = await commitGitChanges({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "commit",
-      message: command.message,
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "commit", () =>
+      commitGitChanges({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "commit",
+        message: command.message,
+      }),
+    );
   }
 
   public async runGitRemoteOperation(
     command: Extract<RunnerCommand, { type: "gitRemoteOperation" }>,
   ): Promise<void> {
-    const job = await runGitRemoteOperation({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: command.operation,
-      remoteOperation: command.operation,
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, command.operation, () =>
+      runGitRemoteOperation({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: command.operation,
+        remoteOperation: command.operation,
+      }),
+    );
   }
 
   public async removeGitWorktree(
     command: Extract<RunnerCommand, { type: "gitRemoveWorktree" }>,
   ): Promise<void> {
-    const job = await removeGitWorktree({
-      workspace: this.#workspace,
-      cwd: command.cwd,
-      requestId: command.requestId,
-      projectId: command.projectId,
-      context: command.context,
-      operation: "remove_worktree",
-    });
-    await this.#emit({ type: "gitJobResult", job });
+    await this.#runGitMutation(command, "remove_worktree", () =>
+      removeGitWorktree({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        operation: "remove_worktree",
+      }),
+    );
   }
 
   async #resolveFileCommandCwd(
@@ -416,6 +437,22 @@ export class WorkspaceCommandHandler {
     }
   }
 
+  async #runGitMutation(
+    command: GitMutationCommand,
+    operation: string,
+    run: () => Promise<GitJob>,
+  ): Promise<void> {
+    try {
+      const job = await run();
+      await this.#emit({ type: "gitJobResult", job });
+    } catch (error: unknown) {
+      await this.#emit({
+        type: "gitJobResult",
+        job: failedGitJob(command, operation, error),
+      });
+    }
+  }
+
   async #emitPatchResult(
     command: Extract<RunnerCommand, { type: "applyPatch" }>,
     message: string,
@@ -432,4 +469,28 @@ export class WorkspaceCommandHandler {
       },
     });
   }
+}
+
+function failedGitJob(
+  command: GitMutationCommand,
+  operation: string,
+  error: unknown,
+): GitJob {
+  const timestamp = new Date().toISOString();
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    id: command.requestId,
+    projectId: command.projectId,
+    ...(command.context.kind === "session_worktree"
+      ? { sessionId: command.context.sessionId }
+      : {}),
+    contextKind: command.context.kind,
+    operation,
+    status: "failed",
+    createdAt: timestamp,
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    errorCode: "GIT_OPERATION_ERROR",
+    errorSummary: message,
+  };
 }

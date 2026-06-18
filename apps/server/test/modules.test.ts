@@ -439,6 +439,40 @@ describe("WorkspaceService", () => {
     });
     expect(runnerMessages).toEqual([]);
   });
+
+  it("does not apply patches to a deleted managed worktree", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+      worktreeDeletedAt: new Date().toISOString(),
+    });
+    const service = new WorkspaceService(
+      store,
+      rpc,
+      new ApprovalSignatureVerifier(undefined),
+      100,
+    );
+
+    const result = await service.applyPatch("session-1", {
+      patch: "diff --git a/README.md b/README.md\n",
+      strip: 1,
+      signedAt: new Date().toISOString(),
+      signature: "unsigned-mode",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "worktree_not_available",
+    });
+    expect(runnerMessages).toEqual([]);
+  });
 });
 
 describe("RunnerEventService", () => {

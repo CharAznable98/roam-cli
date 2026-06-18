@@ -85,6 +85,7 @@ export function GitPanel({
   const [diffState, setDiffState] = useState<AsyncState>("idle");
   const [diffError, setDiffError] = useState("");
   const [blame, setBlame] = useState<GitBlame | undefined>();
+  const [blameError, setBlameError] = useState("");
   const [jobState, setJobState] = useState<AsyncState>("idle");
   const [jobError, setJobError] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
@@ -136,6 +137,7 @@ export function GitPanel({
     setSelectedChange(undefined);
     setDiff(undefined);
     setBlame(undefined);
+    setBlameError("");
 
     void onFetchStatus(selectedContext)
       .then((nextStatus) => {
@@ -167,12 +169,14 @@ export function GitPanel({
       setDiff(undefined);
       setDiffState("idle");
       setDiffError("");
+      setBlameError("");
       return;
     }
     let cancelled = false;
     setDiffState("loading");
     setDiffError("");
     setBlame(undefined);
+    setBlameError("");
     void onFetchDiff({
       context: selectedContext,
       path: selectedChange.path,
@@ -251,8 +255,14 @@ export function GitPanel({
   const loadBlame = () => {
     if (!selectedContext || !selectedChange) return;
     void onFetchBlame({ context: selectedContext, path: selectedChange.path })
-      .then(setBlame)
-      .catch((error: unknown) => setDiffError(errorMessage(error)));
+      .then((nextBlame) => {
+        setBlame(nextBlame);
+        setBlameError("");
+      })
+      .catch((error: unknown) => {
+        setBlame(undefined);
+        setBlameError(errorMessage(error));
+      });
   };
 
   if (!project || !selectedContext) {
@@ -580,6 +590,13 @@ export function GitPanel({
             />
           ) : null}
 
+          {blameError ? (
+            <GitErrorPanel
+              title="Git blame failed"
+              message={blameError}
+              compact
+            />
+          ) : null}
           {blame ? <BlameSummary blame={blame} /> : null}
         </main>
       </div>
@@ -704,6 +721,7 @@ function buildContextOptions(
   for (const session of sessions) {
     if (
       session.executionMode !== "managed_worktree" ||
+      session.status === "pending" ||
       session.worktreeDeletedAt
     ) {
       continue;

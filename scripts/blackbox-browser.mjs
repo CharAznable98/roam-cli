@@ -404,7 +404,7 @@ async function assertManagedWorktreeGitUi(
   );
 
   await openTab(page, scenario, "git");
-  await expectText(page, "Selected Session");
+  await expectGitContextLabel(page, `Worktree - ${session.title}`);
   await expectText(page, values.fileName);
   await expectText(page, "Working tree diff");
   await waitForGitStatus(gitContext, (status) => !status.clean);
@@ -442,10 +442,28 @@ async function assertManagedWorktreeGitUi(
     const payload = await requestJson(`/v1/sessions/${session.id}`);
     return typeof payload.session?.worktreeDeletedAt === "string";
   }, `worktree removal to be persisted for ${session.id}`);
-  await expectText(page, `${project.name} project repository`);
+  await expectGitContextLabel(page, `Project - ${project.name}`);
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-remove");
   pass(`${scenario.name}: Git worktree stage/commit/remove`);
+}
+
+async function expectGitContextLabel(page, text) {
+  await waitFor(
+    async () =>
+      page
+        .locator(".git-context-field select")
+        .evaluate((select, expectedText) => {
+          if (!(select instanceof HTMLSelectElement)) {
+            return false;
+          }
+          const selectedLabel =
+            select.options[select.selectedIndex]?.textContent ?? "";
+          return selectedLabel.includes(expectedText);
+        }, text)
+        .catch(() => false),
+    `Git context label ${text}`,
+  );
 }
 
 async function assertProjectGitUi(page, scenario, project, fileName) {

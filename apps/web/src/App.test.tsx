@@ -179,6 +179,11 @@ describe("App", () => {
   let failNextSessionRename: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
+  let remoteSessionExecutionMode: "direct" | "managed_worktree";
+  let remoteSessionExecutionFolder: string;
+  let remoteSessionWorktreeDeletedAt: string | undefined;
+  let gitStatusClean: boolean;
+  let failGitBlame: boolean;
   let sessionDetailMessages: Array<{
     id: string;
     sessionId: string;
@@ -197,6 +202,11 @@ describe("App", () => {
     failNextSessionRename = false;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
+    remoteSessionExecutionMode = "direct";
+    remoteSessionExecutionFolder = session.executionFolder;
+    remoteSessionWorktreeDeletedAt = undefined;
+    gitStatusClean = true;
+    failGitBlame = false;
     sessionDetailMessages = [
       {
         id: "message-1",
@@ -271,6 +281,11 @@ describe("App", () => {
                 ...session,
                 title: remoteSessionTitle,
                 status: remoteSessionStatus,
+                executionMode: remoteSessionExecutionMode,
+                executionFolder: remoteSessionExecutionFolder,
+                ...(remoteSessionWorktreeDeletedAt === undefined
+                  ? {}
+                  : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
               },
             ],
           });
@@ -290,6 +305,11 @@ describe("App", () => {
                 ...session,
                 title: remoteSessionTitle,
                 status: remoteSessionStatus,
+                executionMode: remoteSessionExecutionMode,
+                executionFolder: remoteSessionExecutionFolder,
+                ...(remoteSessionWorktreeDeletedAt === undefined
+                  ? {}
+                  : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
                 updatedAt: "2026-06-05T00:01:00.000Z",
               },
             });
@@ -302,6 +322,11 @@ describe("App", () => {
               ...session,
               title: remoteSessionTitle,
               status: remoteSessionStatus,
+              executionMode: remoteSessionExecutionMode,
+              executionFolder: remoteSessionExecutionFolder,
+              ...(remoteSessionWorktreeDeletedAt === undefined
+                ? {}
+                : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
             },
             messages: sessionDetailMessages,
             approvals: [patchApproval],
@@ -399,11 +424,22 @@ describe("App", () => {
               upstream: "origin/main",
               ahead: 0,
               behind: 0,
-              clean: true,
+              clean: gitStatusClean,
               unborn: false,
               groups: [
                 { id: "staged", changes: [] },
-                { id: "changes", changes: [] },
+                {
+                  id: "changes",
+                  changes: gitStatusClean
+                    ? []
+                    : [
+                        {
+                          path: "src/App.tsx",
+                          status: "modified",
+                          staged: false,
+                        },
+                      ],
+                },
                 { id: "conflicts", changes: [] },
                 { id: "untracked", changes: [] },
                 { id: "ignored", changes: [] },
@@ -438,6 +474,21 @@ describe("App", () => {
                   refs: [],
                 },
               ],
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/git/blame") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          if (failGitBlame) {
+            return jsonResponse({ error: "blame_failed" }, 500);
+          }
+          return jsonResponse({
+            result: {
+              requestId: "git-blame-1",
+              context: body.context,
+              path: body.path ?? "src/App.tsx",
+              ranges: [],
+              commits: {},
             },
           });
         }
@@ -520,6 +571,65 @@ describe("App", () => {
     expect(
       screen.getByRole("complementary", { name: "Workspace tools" }),
     ).toBeInTheDocument();
+  });
+
+  it("uses project git context while a managed worktree session is pending", async () => {
+    remoteSessionStatus = "pending";
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) => new URL(call.url).pathname === "/v1/git/status",
+        ),
+      ).toBe(true),
+    );
+    const statusCalls = fetchCalls.filter(
+      (call) => new URL(call.url).pathname === "/v1/git/status",
+    );
+    expect(
+      statusCalls.map((call) => JSON.parse(String(call.init?.body ?? "{}"))),
+    ).toEqual([{ kind: "project", projectId: "project-1" }]);
+  });
+
+  it("renders blame fetch failures inside the Git panel", async () => {
+    gitStatusClean = false;
+    failGitBlame = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) => new URL(call.url).pathname === "/v1/git/diff",
+        ),
+      ).toBe(true),
+    );
+
+    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) => new URL(call.url).pathname === "/v1/git/blame",
+        ),
+      ).toBe(true),
+    );
+    expect(await tools.findByText("Git blame failed")).toBeInTheDocument();
+    expect(await tools.findByText(/blame_failed/)).toBeInTheDocument();
   });
 
   it("renames the selected session", async () => {

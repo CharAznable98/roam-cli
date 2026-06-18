@@ -353,6 +353,43 @@ describe("SessionManager", () => {
     });
   });
 
+  it("emits failed git jobs when mutation cwd resolution fails", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-git-cwd-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.handle({
+      type: "gitStagePaths",
+      requestId: "git-stage-1",
+      projectId: "project-1",
+      cwd: "../outside",
+      context: { kind: "project", projectId: "project-1" },
+      paths: ["README.md"],
+    });
+
+    expect(events).toContainEqual({
+      type: "gitJobResult",
+      job: expect.objectContaining({
+        id: "git-stage-1",
+        projectId: "project-1",
+        contextKind: "project",
+        operation: "stage",
+        status: "failed",
+        errorCode: "GIT_OPERATION_ERROR",
+        errorSummary: "Path escapes workspace: ../outside",
+      }),
+    });
+  });
+
   it("resolves plugin-emitted artifact paths inside the started codex session cwd", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-artifact-"),
