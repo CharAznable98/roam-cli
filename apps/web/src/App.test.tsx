@@ -130,6 +130,23 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+function gitBlamePayload(context: unknown, path: string, summary: string) {
+  const sha = `sha-${path.replace(/[^a-z0-9]/gi, "-")}`;
+  return {
+    requestId: `git-blame-${path}`,
+    context,
+    path,
+    ranges: [{ startLine: 1, endLine: 1, commitSha: sha }],
+    commits: {
+      [sha]: {
+        sha,
+        authorName: "Test User",
+        summary,
+      },
+    },
+  };
+}
+
 class TestWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -174,6 +191,7 @@ describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
   let deferredFileContent: Map<string, Deferred<Response>>;
+  let deferredGitBlame: Map<string, Deferred<Response>>;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
@@ -183,6 +201,11 @@ describe("App", () => {
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
   let gitStatusClean: boolean;
+  let gitStatusChanges: Array<{
+    path: string;
+    status: string;
+    staged: boolean;
+  }>;
   let failGitBlame: boolean;
   let sessionDetailMessages: Array<{
     id: string;
@@ -197,6 +220,7 @@ describe("App", () => {
     fetchRequests = [];
     fetchCalls = [];
     deferredFileContent = new Map();
+    deferredGitBlame = new Map();
     failNextProjectCreate = false;
     failNextSessionCreate = false;
     failNextSessionRename = false;
@@ -206,6 +230,13 @@ describe("App", () => {
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
     gitStatusClean = true;
+    gitStatusChanges = [
+      {
+        path: "src/App.tsx",
+        status: "modified",
+        staged: false,
+      },
+    ];
     failGitBlame = false;
     sessionDetailMessages = [
       {
@@ -432,13 +463,7 @@ describe("App", () => {
                   id: "changes",
                   changes: gitStatusClean
                     ? []
-                    : [
-                        {
-                          path: "src/App.tsx",
-                          status: "modified",
-                          staged: false,
-                        },
-                      ],
+                    : gitStatusChanges,
                 },
                 { id: "conflicts", changes: [] },
                 { id: "untracked", changes: [] },
@@ -479,17 +504,20 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/blame") {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          const requestedPath = body.path ?? "src/App.tsx";
           if (failGitBlame) {
             return jsonResponse({ error: "blame_failed" }, 500);
           }
+          const deferredResponse = deferredGitBlame.get(requestedPath);
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           return jsonResponse({
-            result: {
-              requestId: "git-blame-1",
-              context: body.context,
-              path: body.path ?? "src/App.tsx",
-              ranges: [],
-              commits: {},
-            },
+            result: gitBlamePayload(
+              body.context,
+              requestedPath,
+              `Blame for ${requestedPath}`,
+            ),
           });
         }
         if (requestUrl.pathname === "/v1/git/diff") {
@@ -650,6 +678,8 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
+    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
+    expect(await tools.findByText("Blame for src/App.tsx")).toBeInTheDocument();
 
     gitStatusClean = true;
     fireEvent.click(tools.getByRole("button", { name: "Refresh Git" }));
@@ -667,6 +697,86 @@ describe("App", () => {
         toolsPanel.querySelector(".git-surface .git-diff-pane h3"),
       ).toHaveTextContent("No file selected"),
     );
+    expect(tools.queryByText("Blame for src/App.tsx")).not.toBeInTheDocument();
+  });
+
+  it("ignores stale Git blame responses after changing selected file", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/App.tsx",
+        status: "modified",
+        staged: false,
+      },
+      {
+        path: "src/Slow.tsx",
+        status: "modified",
+        staged: false,
+      },
+    ];
+    const appBlame = deferred<Response>();
+    const slowBlame = deferred<Response>();
+    deferredGitBlame.set("src/App.tsx", appBlame);
+    deferredGitBlame.set("src/Slow.tsx", slowBlame);
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/blame") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return body.path === "src/App.tsx";
+        }),
+      ).toBe(true),
+    );
+
+    fireEvent.click(tools.getByRole("button", { name: "src/Slow.tsx" }));
+    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/blame") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return body.path === "src/Slow.tsx";
+        }),
+      ).toBe(true),
+    );
+
+    await act(async () => {
+      slowBlame.resolve(
+        jsonResponse({
+          result: gitBlamePayload(
+            { kind: "project", projectId: "project-1" },
+            "src/Slow.tsx",
+            "Current slow blame",
+          ),
+        }),
+      );
+    });
+    expect(await tools.findByText("Current slow blame")).toBeInTheDocument();
+
+    await act(async () => {
+      appBlame.resolve(
+        jsonResponse({
+          result: gitBlamePayload(
+            { kind: "project", projectId: "project-1" },
+            "src/App.tsx",
+            "Stale app blame",
+          ),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(tools.queryByText("Stale app blame")).not.toBeInTheDocument(),
+    );
+    expect(tools.getByText("Current slow blame")).toBeInTheDocument();
   });
 
   it("renames the selected session", async () => {

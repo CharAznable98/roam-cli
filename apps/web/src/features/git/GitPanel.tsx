@@ -29,7 +29,14 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 type AsyncState = "idle" | "loading" | "ready" | "error";
 
@@ -90,6 +97,8 @@ export function GitPanel({
   const [jobError, setJobError] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [diffEditorMounted, setDiffEditorMounted] = useState(active);
+  const blameSelectionKeyRef = useRef("");
+  const blameRequestSequenceRef = useRef(0);
   const compactDiff = useCompactDiff();
 
   useEffect(() => {
@@ -108,6 +117,10 @@ export function GitPanel({
   );
   const selectedContext =
     contextFromKey(selectedContextKey, contextOptions) ?? defaultContext;
+  const blameSelectionKey =
+    selectedContext && selectedChange
+      ? `${contextKey(selectedContext)}:${changeKey(selectedChange)}`
+      : "";
   const stagedChanges =
     status?.groups.find((group) => group.id === "staged")?.changes ?? [];
   const selectedMode = selectedChange?.staged ? "staged" : "working_tree";
@@ -121,6 +134,11 @@ export function GitPanel({
     hasCurrentDiff && !diff.binary && !diff.tooLarge;
   const diffLanguage = showTextDiff ? (diff.language ?? "plaintext") : "plaintext";
   const canInit = Boolean(selectedContext && isNonGitError(statusError));
+
+  useLayoutEffect(() => {
+    blameSelectionKeyRef.current = blameSelectionKey;
+    blameRequestSequenceRef.current += 1;
+  }, [blameSelectionKey]);
 
   useEffect(() => {
     if (!active) {
@@ -169,6 +187,7 @@ export function GitPanel({
       setDiff(undefined);
       setDiffState("idle");
       setDiffError("");
+      setBlame(undefined);
       setBlameError("");
       return;
     }
@@ -258,12 +277,28 @@ export function GitPanel({
 
   const loadBlame = () => {
     if (!selectedContext || !selectedChange) return;
+    const requestSelectionKey = blameSelectionKey;
+    const requestSequence = blameRequestSequenceRef.current + 1;
+    blameRequestSequenceRef.current = requestSequence;
+    setBlameError("");
     void onFetchBlame({ context: selectedContext, path: selectedChange.path })
       .then((nextBlame) => {
+        if (
+          blameRequestSequenceRef.current !== requestSequence ||
+          blameSelectionKeyRef.current !== requestSelectionKey
+        ) {
+          return;
+        }
         setBlame(nextBlame);
         setBlameError("");
       })
       .catch((error: unknown) => {
+        if (
+          blameRequestSequenceRef.current !== requestSequence ||
+          blameSelectionKeyRef.current !== requestSelectionKey
+        ) {
+          return;
+        }
         setBlame(undefined);
         setBlameError(errorMessage(error));
       });
@@ -770,6 +805,10 @@ function changeStillExists(status: GitStatus, change: GitChange): boolean {
         candidate.path === change.path && candidate.staged === change.staged,
     ),
   );
+}
+
+function changeKey(change: GitChange): string {
+  return `${change.path}:${change.staged ? "staged" : "working_tree"}`;
 }
 
 function groupLabel(groupId: string): string {
