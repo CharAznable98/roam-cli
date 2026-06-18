@@ -11,7 +11,14 @@ import {
   User,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { getConversationDisplayItems, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -100,8 +107,7 @@ export function ChatPanel({
     shouldAutoScrollRef.current = isNearMessageListBottom(list);
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const submitDraft = () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !canSend) {
       return;
@@ -109,6 +115,27 @@ export function ChatPanel({
 
     onSend(cleanDraft);
     setDraft("");
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    submitDraft();
+  };
+
+  const handleComposerKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    const isSubmitShortcut = event.metaKey || event.ctrlKey;
+    if (
+      event.key !== "Enter" ||
+      !isSubmitShortcut ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    submitDraft();
   };
 
   const openRenameDialog = () => {
@@ -320,9 +347,12 @@ export function ChatPanel({
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
           rows={2}
           placeholder={
-            canSend ? "Message the active session" : "Stream is reconnecting"
+            canSend
+              ? "Message the active session, Cmd/Ctrl+Enter to send"
+              : "Stream is reconnecting"
           }
           aria-label="Chat composer"
         />
