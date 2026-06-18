@@ -209,7 +209,11 @@ export function GitPanel({
         setStatus(nextStatus);
         setStatusState("ready");
         setStatusError("");
-        setSelectedChange((current) => current ?? firstChange(nextStatus));
+        setSelectedChange((current) =>
+          current && changeStillExists(nextStatus, current)
+            ? current
+            : firstChange(nextStatus),
+        );
       }),
     ]).then((results) => {
       const failed = results.find((result) => result.status === "rejected");

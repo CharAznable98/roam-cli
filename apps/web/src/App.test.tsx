@@ -632,6 +632,43 @@ describe("App", () => {
     expect(await tools.findByText(/blame_failed/)).toBeInTheDocument();
   });
 
+  it("clears stale selected Git changes after refresh", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const toolsPanel = screen.getByRole("complementary", {
+      name: "Workspace tools",
+    });
+    const tools = within(toolsPanel);
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) => new URL(call.url).pathname === "/v1/git/diff",
+        ),
+      ).toBe(true),
+    );
+
+    gitStatusClean = true;
+    fireEvent.click(tools.getByRole("button", { name: "Refresh Git" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) => new URL(call.url).pathname === "/v1/git/status",
+        ).length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        toolsPanel.querySelector(".git-surface .git-diff-pane h3"),
+      ).toHaveTextContent("No file selected"),
+    );
+  });
+
   it("renames the selected session", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");

@@ -5,6 +5,7 @@ import type {
   FileTreeResult,
   FileWriteResult,
   PatchApplyResult,
+  Session,
 } from "@roamcli/shared/protocol";
 import { RunnerRpcClient } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
@@ -38,11 +39,9 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
-    if (
-      session.executionMode === "managed_worktree" &&
-      session.worktreeDeletedAt
-    ) {
-      return fail("worktree_not_available");
+    const unavailable = this.#worktreeUnavailable(session);
+    if (unavailable) {
+      return unavailable;
     }
 
     const result = await this.rpc.requestRunner<FileTreeResult>(
@@ -68,11 +67,9 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
-    if (
-      session.executionMode === "managed_worktree" &&
-      session.worktreeDeletedAt
-    ) {
-      return fail("worktree_not_available");
+    const unavailable = this.#worktreeUnavailable(session);
+    if (unavailable) {
+      return unavailable;
     }
 
     const result = await this.rpc.requestRunner<FileContentResult>(
@@ -98,11 +95,9 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
-    if (
-      session.executionMode === "managed_worktree" &&
-      session.worktreeDeletedAt
-    ) {
-      return fail("worktree_not_available");
+    const unavailable = this.#worktreeUnavailable(session);
+    if (unavailable) {
+      return unavailable;
     }
 
     const result = await this.rpc.requestRunner<FileWriteResult>(
@@ -129,11 +124,9 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
-    if (
-      session.executionMode === "managed_worktree" &&
-      session.worktreeDeletedAt
-    ) {
-      return fail("worktree_not_available");
+    const unavailable = this.#worktreeUnavailable(session);
+    if (unavailable) {
+      return unavailable;
     }
     if (
       !this.signatures.isPatchSignatureValid(
@@ -175,5 +168,12 @@ export class WorkspaceService {
       },
       this.runnerRpcTimeoutMs,
     );
+  }
+
+  #worktreeUnavailable(session: Session): ServiceResult<never> | undefined {
+    return session.executionMode === "managed_worktree" &&
+      session.worktreeDeletedAt
+      ? fail("worktree_not_available")
+      : undefined;
   }
 }
