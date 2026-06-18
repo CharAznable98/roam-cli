@@ -2,6 +2,7 @@ import { ApprovalCenter } from "../features/approvals/ApprovalCenter";
 import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import { FilePanel } from "../features/files/FilePanel";
+import { GitPanel } from "../features/git/GitPanel";
 import { PushSettings } from "../features/pwa/PushSettings";
 import type { Project, Session } from "@roamcli/shared/protocol";
 import {
@@ -44,6 +45,7 @@ export function AppShell({ controller }: AppShellProps) {
     dispatch,
     selectedRunner,
     selectedProject,
+    selectedGitContext,
     runnerSessions,
     selectedSession,
     sessionMessages,
@@ -65,6 +67,16 @@ export function AppShell({ controller }: AppShellProps) {
     deleteSelectedSession,
     selectFile,
     saveSelectedFile,
+    fetchGitStatus,
+    fetchGitDiff,
+    fetchGitBlame,
+    initGitRepository,
+    stageGitPaths,
+    unstageGitPaths,
+    discardGitPaths,
+    commitGitChanges,
+    runGitRemoteOperation,
+    removeGitWorktree,
   } = controller;
 
   const setActiveTab = (tab: WorkspaceTab) =>
@@ -259,6 +271,25 @@ export function AppShell({ controller }: AppShellProps) {
                       dispatch({ type: "editorContentChanged", content })
                     }
                     onSaveFile={saveSelectedFile}
+                  />
+                </div>
+                <div className="workspace-surface git-surface">
+                  <GitPanel
+                    active={state.activeTab === "git"}
+                    project={selectedProject}
+                    runnerOnline={Boolean(selectedRunner)}
+                    sessions={runnerSessions}
+                    defaultContext={selectedGitContext}
+                    onFetchStatus={fetchGitStatus}
+                    onFetchDiff={fetchGitDiff}
+                    onFetchBlame={fetchGitBlame}
+                    onInitRepository={initGitRepository}
+                    onStagePaths={stageGitPaths}
+                    onUnstagePaths={unstageGitPaths}
+                    onDiscardPaths={discardGitPaths}
+                    onCommit={commitGitChanges}
+                    onRemoteOperation={runGitRemoteOperation}
+                    onRemoveWorktree={removeGitWorktree}
                   />
                 </div>
                 <div className="workspace-surface approvals-surface">

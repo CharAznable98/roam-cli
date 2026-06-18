@@ -89,6 +89,7 @@ Use `dev-token` in the Web UI token field if it is not already filled.
 | `--token` | `ROAM_RUNNER_TOKEN` | Bearer token used when connecting to the Server. |
 | `--runner-id` | `ROAM_RUNNER_ID` | Stable Runner identifier. Defaults to hostname plus a generated UUID. |
 | `--workspace` | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory. |
+| `--data-dir` | `ROAM_RUNNER_DATA_DIR` | Relative runner data directory under the workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths and parent traversal are rejected. |
 | `--profile` | `ROAM_RUNNER_PROFILE` | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`. |
 | `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Agent plugin package to load. Repeatable by CLI, comma-separated by environment variable. |
 

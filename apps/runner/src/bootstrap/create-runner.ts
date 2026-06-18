@@ -3,8 +3,14 @@ import type { RunnerCommand } from "@roamcli/shared/protocol";
 import { loadAgentRegistry } from "../agents/registry.js";
 import { AuditLog } from "../persistence/audit.js";
 import { EventCache } from "../persistence/cache.js";
-import { SessionManager, type SessionManagerOptions } from "../sessions/manager.js";
-import { RunnerConnection, type WebSocketFactory } from "../transport/connection.js";
+import {
+  SessionManager,
+  type SessionManagerOptions,
+} from "../sessions/manager.js";
+import {
+  RunnerConnection,
+  type WebSocketFactory,
+} from "../transport/connection.js";
 import { parseCliArgs } from "./cli.js";
 import { createRunnerRegistration, runnerStateDir } from "./registration.js";
 
@@ -17,15 +23,19 @@ export async function createRunner(
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
   const cli = parseCliArgs(argv);
-  const registry = await loadAgentRegistry(cli.profile, cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined);
+  const registry = await loadAgentRegistry(
+    cli.profile,
+    cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined,
+  );
   const registration = createRunnerRegistration({
     runnerId: cli.runnerId,
     workspace: cli.workspace,
+    dataDir: cli.dataDir,
     profile: cli.profile,
-    capabilities: registry.capabilities
+    capabilities: registry.capabilities,
   });
 
-  const stateDir = runnerStateDir(cli.workspace);
+  const stateDir = runnerStateDir(cli.workspace, cli.dataDir);
   const audit = new AuditLog(join(stateDir, "audit.jsonl"));
   const cache = new EventCache(join(stateDir, "pending-events.jsonl"));
   let connection: RunnerConnection;

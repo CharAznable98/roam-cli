@@ -23,6 +23,7 @@ export const RunnerRegistrationSchema = z.object({
   displayName: z.string().min(1),
   hostname: z.string().min(1),
   workspaceRoot: z.string().min(1),
+  dataDir: z.string().min(1).optional(),
   profile: RunnerProfileSchema,
   publicKey: z.string().min(16),
   capabilities: z.array(RunnerCapabilitySchema).min(1),
@@ -59,6 +60,179 @@ export const ExecutionModeSchema = z.enum([
 ]);
 export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 
+export const GitContextRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("project"),
+    projectId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("session_worktree"),
+    sessionId: z.string().min(1),
+  }),
+]);
+export type GitContextRef = z.infer<typeof GitContextRefSchema>;
+
+export const GitChangeStatusSchema = z.enum([
+  "modified",
+  "added",
+  "deleted",
+  "renamed",
+  "copied",
+  "untracked",
+  "ignored",
+  "conflicted",
+  "submodule",
+]);
+export type GitChangeStatus = z.infer<typeof GitChangeStatusSchema>;
+
+export const GitChangeSchema = z.object({
+  path: z.string().min(1),
+  oldPath: z.string().min(1).optional(),
+  status: GitChangeStatusSchema,
+  staged: z.boolean(),
+});
+export type GitChange = z.infer<typeof GitChangeSchema>;
+
+export const GitChangeGroupSchema = z.object({
+  id: z.enum([
+    "staged",
+    "changes",
+    "conflicts",
+    "untracked",
+    "ignored",
+    "submodules",
+  ]),
+  changes: z.array(GitChangeSchema),
+});
+export type GitChangeGroup = z.infer<typeof GitChangeGroupSchema>;
+
+export const GitStatusSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  branch: z.string().min(1).optional(),
+  detached: z.boolean().default(false),
+  headSha: z.string().optional(),
+  upstream: z.string().min(1).optional(),
+  ahead: z.number().int().nonnegative().default(0),
+  behind: z.number().int().nonnegative().default(0),
+  clean: z.boolean(),
+  unborn: z.boolean().default(false),
+  groups: z.array(GitChangeGroupSchema),
+});
+export type GitStatus = z.infer<typeof GitStatusSchema>;
+
+export const GitDiffModeSchema = z.enum([
+  "working_tree",
+  "staged",
+  "commit",
+  "ref_compare",
+]);
+export type GitDiffMode = z.infer<typeof GitDiffModeSchema>;
+
+export const GitFileDiffSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  path: z.string().min(1),
+  oldPath: z.string().min(1).optional(),
+  mode: GitDiffModeSchema,
+  oldRef: z.string().min(1).optional(),
+  newRef: z.string().min(1).optional(),
+  oldContent: z.string(),
+  newContent: z.string(),
+  language: z.string().min(1).optional(),
+  binary: z.boolean(),
+  tooLarge: z.boolean(),
+});
+export type GitFileDiff = z.infer<typeof GitFileDiffSchema>;
+
+export const GitBlameRangeSchema = z.object({
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  commitSha: z.string().min(1),
+});
+export type GitBlameRange = z.infer<typeof GitBlameRangeSchema>;
+
+export const GitBlameCommitSchema = z.object({
+  sha: z.string().min(1),
+  authorName: z.string().min(1),
+  authorEmail: z.string().optional(),
+  authoredAt: z.string().datetime().optional(),
+  summary: z.string(),
+});
+export type GitBlameCommit = z.infer<typeof GitBlameCommitSchema>;
+
+export const GitBlameSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  path: z.string().min(1),
+  ref: z.string().min(1).optional(),
+  ranges: z.array(GitBlameRangeSchema),
+  commits: z.record(GitBlameCommitSchema),
+});
+export type GitBlame = z.infer<typeof GitBlameSchema>;
+
+export const GitCommitSummarySchema = z.object({
+  sha: z.string().min(1),
+  parents: z.array(z.string()),
+  authorName: z.string(),
+  authoredAt: z.string().datetime().optional(),
+  committerName: z.string(),
+  committedAt: z.string().datetime().optional(),
+  summary: z.string(),
+  refs: z.array(z.string()).default([]),
+  changedFiles: z.number().int().nonnegative().optional(),
+  insertions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+});
+export type GitCommitSummary = z.infer<typeof GitCommitSummarySchema>;
+
+export const GitCommitPageSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  commits: z.array(GitCommitSummarySchema),
+  nextCursor: z.string().min(1).optional(),
+});
+export type GitCommitPage = z.infer<typeof GitCommitPageSchema>;
+
+export const GitBranchSchema = z.object({
+  name: z.string().min(1),
+  current: z.boolean(),
+  remote: z.boolean().default(false),
+  upstream: z.string().min(1).optional(),
+});
+export type GitBranch = z.infer<typeof GitBranchSchema>;
+
+export const GitBranchListSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  branches: z.array(GitBranchSchema),
+});
+export type GitBranchList = z.infer<typeof GitBranchListSchema>;
+
+export const GitJobStatusSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+export type GitJobStatus = z.infer<typeof GitJobStatusSchema>;
+
+export const GitJobSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
+  contextKind: z.enum(["project", "session_worktree"]),
+  operation: z.string().min(1),
+  status: GitJobStatusSchema,
+  createdAt: z.string().datetime(),
+  startedAt: z.string().datetime().optional(),
+  finishedAt: z.string().datetime().optional(),
+  errorCode: z.string().min(1).optional(),
+  errorSummary: z.string().optional(),
+});
+export type GitJob = z.infer<typeof GitJobSchema>;
+
 export const SessionSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -69,6 +243,10 @@ export const SessionSchema = z.object({
   executionMode: ExecutionModeSchema.default("direct"),
   executionFolder: z.string().min(1),
   cwd: z.string().min(1),
+  gitBranchName: z.string().min(1).optional(),
+  gitBaseRef: z.string().min(1).optional(),
+  gitBaseSha: z.string().min(1).optional(),
+  worktreeDeletedAt: z.string().datetime().optional(),
   agentThreadId: z.string().min(1).optional(),
   archivedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime(),
@@ -241,6 +419,8 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     projectId: z.string().min(1),
     agent: AgentKindSchema,
     executionMode: ExecutionModeSchema.default("direct"),
+    gitBaseRef: z.string().min(1).optional(),
+    gitBranchName: z.string().min(1).optional(),
     prompt: z.string().min(1),
   }),
   z.object({
@@ -318,6 +498,105 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     signature: z.string().min(1),
   }),
   z.object({
+    type: z.literal("gitStatus"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("gitFileDiff"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    path: z.string().min(1),
+    mode: GitDiffModeSchema.default("working_tree"),
+    oldRef: z.string().min(1).optional(),
+    newRef: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("gitBlame"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    path: z.string().min(1),
+    ref: z.string().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("gitCommitPage"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    ref: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
+    cursor: z.string().min(1).optional(),
+    limit: z.number().int().positive().max(200).default(50),
+  }),
+  z.object({
+    type: z.literal("gitBranchList"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("gitInit"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("gitStagePaths"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    paths: z.array(z.string().min(1)).min(1),
+  }),
+  z.object({
+    type: z.literal("gitUnstagePaths"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    paths: z.array(z.string().min(1)).min(1),
+  }),
+  z.object({
+    type: z.literal("gitDiscardPaths"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    paths: z.array(z.string().min(1)).min(1),
+  }),
+  z.object({
+    type: z.literal("gitCommit"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    message: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("gitRemoteOperation"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    operation: z.enum(["fetch", "pull", "push"]),
+  }),
+  z.object({
+    type: z.literal("gitRemoveWorktree"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+  }),
+  z.object({
     type: z.literal("resolveApproval"),
     approvalId: z.string().min(1),
     approved: z.boolean(),
@@ -366,6 +645,12 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("patch:applied"),
     result: PatchApplyResultSchema,
   }),
+  z.object({ type: z.literal("git:status"), result: GitStatusSchema }),
+  z.object({ type: z.literal("git:diff"), result: GitFileDiffSchema }),
+  z.object({ type: z.literal("git:blame"), result: GitBlameSchema }),
+  z.object({ type: z.literal("git:history"), result: GitCommitPageSchema }),
+  z.object({ type: z.literal("git:branches"), result: GitBranchListSchema }),
+  z.object({ type: z.literal("git:job"), job: GitJobSchema }),
   z.object({
     type: z.literal("error"),
     message: z.string(),
@@ -411,6 +696,18 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("patchApplyResult"),
     result: PatchApplyResultSchema,
   }),
+  z.object({ type: z.literal("gitStatusResult"), result: GitStatusSchema }),
+  z.object({ type: z.literal("gitFileDiffResult"), result: GitFileDiffSchema }),
+  z.object({ type: z.literal("gitBlameResult"), result: GitBlameSchema }),
+  z.object({
+    type: z.literal("gitCommitPageResult"),
+    result: GitCommitPageSchema,
+  }),
+  z.object({
+    type: z.literal("gitBranchListResult"),
+    result: GitBranchListSchema,
+  }),
+  z.object({ type: z.literal("gitJobResult"), job: GitJobSchema }),
   z.object({ type: z.literal("approvalRequested"), approval: ApprovalSchema }),
   z.object({ type: z.literal("artifactCreated"), artifact: ArtifactSchema }),
   z.object({
@@ -427,6 +724,8 @@ export const ApiCreateSessionSchema = z.object({
   projectId: z.string().min(1),
   agent: AgentKindSchema,
   executionMode: ExecutionModeSchema.default("direct"),
+  gitBaseRef: z.string().min(1).optional(),
+  gitBranchName: z.string().min(1).optional(),
   prompt: z.string().min(1),
   title: z.string().min(1).optional(),
 });
@@ -471,6 +770,65 @@ export const ApiWriteFileSchema = z.object({
   encoding: z.literal("utf8").default("utf8"),
 });
 export type ApiWriteFile = z.infer<typeof ApiWriteFileSchema>;
+
+export const ApiGitContextSchema = GitContextRefSchema;
+export type ApiGitContext = z.infer<typeof ApiGitContextSchema>;
+
+export const ApiGitFileDiffQuerySchema = z.object({
+  context: GitContextRefSchema,
+  path: z.string().min(1),
+  mode: GitDiffModeSchema.default("working_tree"),
+  oldRef: z.string().min(1).optional(),
+  newRef: z.string().min(1).optional(),
+});
+export type ApiGitFileDiffQuery = z.infer<typeof ApiGitFileDiffQuerySchema>;
+
+export const ApiGitBlameQuerySchema = z.object({
+  context: GitContextRefSchema,
+  path: z.string().min(1),
+  ref: z.string().min(1).optional(),
+});
+export type ApiGitBlameQuery = z.infer<typeof ApiGitBlameQuerySchema>;
+
+export const ApiGitHistoryQuerySchema = z.object({
+  context: GitContextRefSchema,
+  ref: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.number().int().positive().max(200).default(50),
+});
+export type ApiGitHistoryQuery = z.infer<typeof ApiGitHistoryQuerySchema>;
+
+export const ApiGitPathsSchema = z.object({
+  context: GitContextRefSchema,
+  paths: z.array(z.string().min(1)).min(1),
+});
+export type ApiGitPaths = z.infer<typeof ApiGitPathsSchema>;
+
+export const ApiGitCommitSchema = z.object({
+  context: GitContextRefSchema,
+  message: z.string().min(1),
+});
+export type ApiGitCommit = z.infer<typeof ApiGitCommitSchema>;
+
+export const ApiGitRemoteOperationSchema = z.object({
+  context: GitContextRefSchema,
+  operation: z.enum(["fetch", "pull", "push"]),
+});
+export type ApiGitRemoteOperation = z.infer<typeof ApiGitRemoteOperationSchema>;
+
+export const ApiGitInitSchema = z.object({
+  context: GitContextRefSchema,
+});
+export type ApiGitInit = z.infer<typeof ApiGitInitSchema>;
+
+export const ApiGitRemoveWorktreeSchema = z.object({
+  context: z.object({
+    kind: z.literal("session_worktree"),
+    sessionId: z.string().min(1),
+  }),
+});
+export type ApiGitRemoveWorktree = z.infer<typeof ApiGitRemoveWorktreeSchema>;
 
 export function nowIso(): string {
   return new Date().toISOString();

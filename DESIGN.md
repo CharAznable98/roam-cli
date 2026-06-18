@@ -1,0 +1,396 @@
+# Design
+
+## Source of truth
+
+- Status: Active
+- Last refreshed: 2026-06-17
+- Primary product surfaces:
+  - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
+  - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
+  - Runner execution model for direct sessions and Git worktree sessions.
+- Evidence reviewed:
+  - `CONTEXT.md`: Project, Runner, Session, execution folder, direct mode, managed worktree, archive, and project-directory vocabulary.
+  - `README.md` / `README_ch.md`: Server + Runner + Web architecture, runner workspace, and Git prerequisite.
+  - `docs/adr/0004-project-directories-use-runner-paths.md`: project directories are interpreted from the runner filesystem perspective.
+  - `docs/prd-todo-list.md`: current product implementation status and planned Monaco/file editing work.
+  - `docs/implementation-plan.md`: shared contracts, server, runner, and web implementation tracks.
+  - `packages/shared/src/protocol/index.ts`: current schema and event boundaries.
+  - `apps/server/src/modules/workspace/workspace-service.ts`: current HTTP-to-runner workspace RPC pattern.
+  - `apps/runner/src/sessions/manager.ts`: current direct and managed worktree execution behavior.
+  - `apps/runner/src/bootstrap/cli.ts` and `apps/runner/src/bootstrap/registration.ts`: runner workspace and `.roam-runner` state directory behavior.
+  - `apps/web/src/app/AppShell.tsx`, `apps/web/src/app/navigation.ts`, and `apps/web/src/app/BottomTabs.tsx`: current workspace tab model.
+  - `apps/web/src/features/sessions/NewSessionForm.tsx`: current direct / managed worktree session creation UI.
+  - `apps/web/src/features/files/FilePanel.tsx`: current lightweight file tree and text editor surface.
+  - `apps/web/src/index.css` and `apps/web/tailwind.config.ts`: responsive shell, restrained operational palette, and component styling.
+
+## Brand
+
+- Personality:
+  - Quiet, operational, precise, and developer-focused.
+  - The UI should feel like a control surface for real development machines, not a marketing application.
+- Trust signals:
+  - Explicit operation scope before side effects.
+  - Clear Git context labels.
+  - Direct Git failure output with copy support.
+  - Minimal server-side persistence and runner-local credential usage.
+- Avoid:
+  - Decorative visual noise.
+  - Hidden platform magic.
+  - Ambiguous Git actions whose target repo, branch, worktree, or file is unclear.
+  - GitHub/GitLab/Bitbucket platform features in the Git tab scope.
+
+## Product goals
+
+- Goals:
+  - Add a Project-bound Git tab that manages local Git capabilities for the selected Project.
+  - Keep all Git, GitLens-like inspection, diff, branch, remote, stash, merge, rebase, and worktree controls inside the Git tab.
+  - Support Session creation in two modes: local mode and worktree mode.
+  - Make worktree mode create a new branch-backed Git worktree for the session.
+  - Provide VS Code-like Source Control and GitLens-like local inspection without implementing provider APIs.
+  - Use Monaco as the Git tab file/diff inspection foundation.
+  - Store the minimum product data needed for identity, session-worktree association, job audit, and session Git artifacts.
+- Non-goals:
+  - No PR, issue, CI, review comment, provider login, or provider token management.
+  - No automatic nested repository discovery under the Project directory.
+  - No strong preflight blocking for destructive Git actions beyond clear user confirmation.
+  - No long-term persistence of full diff, blame, commit graph, file history, stdout, or stderr.
+  - No Git credential storage in Server or Web.
+- Success signals:
+  - Users can understand which Project/session/worktree the Git tab is operating on.
+  - Worktree sessions are branch-backed and can commit, push, and be cleaned up predictably.
+  - Diff, blame, history, and commit inspection feel responsive on desktop and usable on mobile.
+  - Git actions route through the runner and respect runner filesystem boundaries.
+  - A browser refresh or reconnect can recover job status and essential audit state without storing large Git data.
+
+## Personas and jobs
+
+- Primary personas:
+  - Developer supervising AI coding sessions in one or more projects.
+  - Developer reviewing and committing agent-generated changes.
+  - Developer managing branch/worktree isolation for parallel session work.
+- User jobs:
+  - Create an isolated branch worktree for a new session.
+  - Review working tree changes and stage files, hunks, or ranges.
+  - Inspect blame, file history, line history, and commit details.
+  - Commit staged changes and push/pull/fetch using the runner machine's Git credentials.
+  - Archive a session and decide whether to delete its associated worktree.
+  - Copy clear Git failure output and paste it to an agent for diagnosis.
+- Key contexts of use:
+  - Desktop review and commit work with side-by-side diff.
+  - Tablet inspection with inline diff and secondary panes.
+  - Mobile status/review flows with single-column inline diff.
+  - Offline runner states where historical product associations remain visible but live Git data is unavailable.
+
+## Information architecture
+
+- Primary navigation:
+  - Add a top-level workspace tab named `Git`.
+  - Git capabilities must not be split across Files, Approvals, or Chat.
+  - Bottom/mobile navigation adds the same Git tab.
+- Git tab top-level structure:
+  - Header: Project repo identity, active Git context, selected session context label, branch/upstream/ahead-behind status, dirty count, and sync state.
+  - Context selector: Project repository and current Project session worktrees only.
+  - Main Git views:
+    - `Changes`: Source Control groups, commit box, staging controls, sync status.
+    - `History`: commit history, commit graph, file history, line history, blame entry points, commit details.
+    - `Branches`: branch, tag, ref, compare, merge, rebase, cherry-pick, revert controls.
+    - `Worktrees`: session worktrees, worktree removal, worktree path, branch, base ref, and association to sessions.
+    - `Remotes`: remotes, fetch, pull, push, sync, upstream, incoming/outgoing.
+    - `Stashes`: stash list, create/apply/pop/drop, stash diff.
+  - Detail surface:
+    - Monaco diff/file viewer for selected change, commit, blame, history, stash, or compare item.
+- Git context rules:
+  - Git tab is Project-bound.
+  - Local session context is the Project directory repository.
+  - Worktree session context is the session-created branch worktree.
+  - Switching selected Session automatically switches Git context back to that session's context.
+  - There is no pinned context mode.
+  - The selected Session context must be visibly marked.
+  - Users may temporarily switch to another Project context, but session changes reset the active context.
+- Non-Git Project:
+  - If Project directory itself is not a Git repo, show a Git empty state with `Initialize Git repository`.
+  - Worktree session creation is disabled until the Project has a Git repo and at least one commit.
+  - Local session creation remains available.
+- Nested repositories:
+  - Do not scan subdirectories for nested repos.
+  - Do not open submodules as child contexts.
+  - Parent repo Git status may show submodule status as a parent repo change.
+
+## Design principles
+
+- Principle 1: Scope is visible before action.
+  - Every Git action must show the active context and target branch/file/ref before execution.
+- Principle 2: Git is the source of truth.
+  - Status, diff, blame, graph, remote, stash, and branch data are queried from Git on demand.
+  - Server stores product associations and audit metadata, not a second Git index.
+- Principle 3: Runner owns filesystem and Git execution.
+  - Web never sends arbitrary paths.
+  - Web sends `GitContextRef`; Server resolves it to Project/session identity; Runner executes in the resolved path.
+- Principle 4: Isolation is explicit and visible.
+  - New sessions default to local/direct mode to match the existing Project default.
+  - Worktree mode is explicit when the user wants new-branch isolation.
+- Principle 5: Simple default UI, complete advanced surface.
+  - Default commit UI stays small.
+  - Advanced actions live in menus or contextual actions.
+- Tradeoffs:
+  - The platform warns before dangerous actions but does not strongly block them.
+  - Full command output is copyable for active jobs but not persisted long term.
+  - Monaco is heavier than simple diff HTML, but better matches the desired end-state diff and inspection experience.
+
+## Visual language
+
+- Color:
+  - Continue the existing muted operational palette from `tailwind.config.ts`: ink neutrals plus signal green/amber/red/cyan.
+  - Avoid one-hue surfaces and large decorative gradients.
+  - Git statuses use concise, consistent signal tones:
+    - clean/success: signal green
+    - warning/diverged/conflict risk: signal amber
+    - destructive/error/conflict: signal red
+    - informational/sync/remote: signal cyan
+- Typography:
+  - Continue system sans-serif with compact operational hierarchy.
+  - Use monospace only for code, refs, SHAs, paths, and command output.
+- Spacing/layout rhythm:
+  - Dense but readable. Git views are work surfaces, not marketing panels.
+  - Keep fixed toolbar and row heights where possible to prevent diff/status reflow.
+- Shape/radius/elevation:
+  - Match existing restrained 7-8px radius and light panel shadows.
+  - Do not nest decorative cards inside cards.
+- Motion:
+  - Use minimal motion for loading/progress only.
+  - Respect reduced-motion preference.
+- Imagery/iconography:
+  - Use lucide icons for toolbar and tab actions where available.
+  - Prefer icons for common commands: refresh, stage, unstage, commit, pull, push, branch, tag, history, diff, trash.
+
+## Components
+
+- Existing components to reuse:
+  - `AppShell` workspace tab frame.
+  - `BottomTabs` mobile navigation pattern.
+  - `StatusPill` for compact state indicators.
+  - Notification stack for request errors.
+  - Form and button patterns from session creation and file editing.
+- New/changed components:
+  - `GitPanel`: root Git tab container.
+  - `GitContextHeader`: active context, selected session marker, branch/upstream/sync state.
+  - `GitContextSelector`: Project repo and session worktree switcher.
+  - `GitChangesView`: grouped status, staging controls, commit box.
+  - `GitCommitBox`: message, Stage All, Unstage All, Commit, and overflow menu.
+  - `GitDiffViewer`: Monaco wrapper for structured content diff.
+  - `GitHistoryView`: paginated history and graph container.
+  - `GitBlameOverlay`: Monaco line/range decorations and hover data.
+  - `GitWorktreesView`: session worktree list and removal action.
+  - `GitJobOutput`: active job failure/output panel with copy button.
+  - `GitEmptyState`: non-Git repo init state.
+- Variants and states:
+  - Git context: project, selected session local, selected session worktree, other session worktree.
+  - Repo state: clean, dirty, conflict, unborn, detached HEAD, remote-diverged, runner-offline.
+  - Diff state: loading, ready, too large, binary, read-only, editable current side.
+  - Job state: queued, running, succeeded, failed, cancelled.
+  - Worktree state: active, archived-session-linked, deleted, unavailable.
+- Token/component ownership:
+  - Extend existing Tailwind theme and component CSS.
+  - Do not introduce a second design-system framework.
+
+## Accessibility
+
+- Target standard:
+  - WCAG 2.1 AA for core Git flows.
+- Keyboard/focus behavior:
+  - Git tab must be keyboard navigable.
+  - Changes list supports arrow navigation, Enter to open diff, Space for selection where applicable.
+  - Commit message supports normal textarea behavior.
+  - Destructive confirmations must trap focus and return focus to the invoking control.
+  - Monaco shortcuts must not trap users without visible alternatives.
+- Contrast/readability:
+  - Status badges and diff line states must not rely on color only.
+  - Use icons/text labels for staged, unstaged, conflict, and deleted states.
+- Screen-reader semantics:
+  - Resource groups use headings and list semantics.
+  - Diff viewer has accessible file/path/ref labels.
+  - Job progress and failure output use live-region updates where appropriate.
+- Reduced motion and sensory considerations:
+  - Avoid animated graph effects.
+  - Progress indicators should be subtle and non-flashing.
+
+## Responsive behavior
+
+- Supported breakpoints/devices:
+  - Mobile: single-column tab flow.
+  - Tablet: two-pane where space allows, inline diff default.
+  - Desktop: multi-pane Git workbench with side-by-side diff default.
+- Layout adaptations:
+  - Desktop:
+    - Left: Git view navigation and resource lists.
+    - Right: Monaco detail/diff surface.
+    - Side-by-side diff default.
+  - Tablet:
+    - Inline diff default.
+    - Navigation and detail can stack or collapse.
+  - Mobile:
+    - Fixed inline diff only.
+    - File/change list first, selected item opens a single-detail view.
+    - Top controls: back, stage/unstage, next/previous hunk, copy output.
+    - No side-by-side toggle.
+- Touch/hover differences:
+  - Hover blame details must also be available by tap/click.
+  - Context menus need accessible button alternatives.
+- Monaco behavior:
+  - Lazy-load Monaco when entering Git tab or opening a diff.
+  - Dispose Monaco models on context/file changes and when leaving the Git tab.
+  - Large diff/file handling must avoid loading entire repository diffs into Monaco.
+
+## Interaction states
+
+- Loading:
+  - Status refresh shows lightweight inline progress.
+  - Long Git operations create a Git job and progress state.
+- Empty:
+  - No Git repo: show init repo action.
+  - Clean working tree: show clean state, branch/upstream, and sync actions.
+  - No history for file/query: show scoped empty state.
+- Error:
+  - Show direct, clear Git failure information.
+  - Provide `Copy error` for operation, context, branch/ref/file, exit code, stdout/stderr currently available.
+  - Do not persist complete stdout/stderr long term.
+- Success:
+  - Job success updates status and displays concise completion feedback.
+- Disabled:
+  - Worktree mode disabled for non-Git and unborn repos.
+  - Commit disabled when there are no staged changes.
+  - Operations disabled while a conflicting write job runs in the same context.
+- Offline/slow network:
+  - Runner offline keeps Project/Session records visible.
+  - Live Git status/diff/history unavailable until runner returns.
+  - Existing minimal audit/job state remains visible.
+
+## Content voice
+
+- Tone:
+  - Direct, factual, and operational.
+  - Avoid playful or decorative copy.
+- Terminology:
+  - Use repo, branch, worktree, staged, changes, conflicts, commit, remote, stash.
+  - Use Project, Session, Runner, Project directory, execution folder per `CONTEXT.md`.
+  - Avoid `workspace` when referring to product Project concepts, except for Runner workspace root.
+- Microcopy rules:
+  - Before destructive actions, name the object and consequence.
+  - Keep confirmations short; no type-to-confirm requirement.
+  - Do not over-explain Git errors; show copyable output for agent diagnosis.
+
+## Implementation constraints
+
+- Framework/styling system:
+  - React 19 + Vite + Tailwind.
+  - Use existing reducer/controller state pattern before adding a new state library.
+  - Use lucide icons for common Git actions.
+- Git execution:
+  - Runner executes all Git operations.
+  - Use `simple-git` for common Git commands and native `git` fallback for advanced commands.
+  - Server and Web never store Git CLI credentials.
+  - `fetch`, `pull`, `push`, and `sync` use the runner machine's system Git credentials.
+  - Provider platform APIs are out of scope.
+- Git context addressing:
+  - Web sends structured refs only:
+
+```ts
+type GitContextRef =
+  | { kind: "project"; projectId: string }
+  | { kind: "session_worktree"; sessionId: string };
+```
+
+- Web must not send arbitrary filesystem paths for Git operations.
+- Session creation:
+  - New sessions default to local/direct mode.
+  - Worktree mode remains explicit.
+  - Worktree mode creates a new branch and a worktree.
+  - Worktree base ref selector defaults to the Project current branch.
+  - Detached HEAD is allowed as a base by resolving and displaying the base SHA.
+  - Unborn repos cannot create worktree sessions.
+  - Branch names are auto-generated and editable.
+  - Default branch name: `roam/<date>-<session-slug>-<short-id>`.
+  - Existing branch name collisions are errors; do not overwrite.
+- Worktree storage:
+  - Reuse current runner-local state pattern.
+  - `--data-dir` is relative to the runner workspace root and defaults to `.roam-runner`.
+  - Reject absolute paths, `~`, `..`, and normalized escapes.
+  - Worktree path: `<runnerWorkspaceRoot>/<dataDir>/worktrees/<projectId>/<sessionId>`.
+  - Do not special-case `.roam-runner` if the runner workspace root is also a Git repo.
+- Worktree lifecycle:
+  - Session and worktree/branch are independent resources.
+  - Archiving a session linked to a worktree asks whether to delete the worktree.
+  - Deleting a worktree never deletes the branch.
+  - Before deleting a worktree, show expectation-setting warning only; do not run dirty/unpushed/merged preflight blockers.
+  - Use force removal behavior after user confirmation if needed.
+- Git API shape:
+  - Lightweight read operations may use request/response RPC.
+  - Long or mutating operations use Git jobs with status/progress/result.
+  - Writes are serialized per Git context; reads can run concurrently with debounce.
+  - Different contexts can run independently.
+- Status model:
+  - Runner parses porcelain and returns resource groups.
+  - Frontend does not parse Git porcelain.
+  - Groups include staged, changes, conflicts, untracked, ignored, and submodules.
+- Diff model:
+  - Expose one canonical diff API: structured content diff for Monaco.
+  - Do not expose raw patch as the main protocol.
+  - Frontend may derive unified/copy/export text from old/new content.
+  - Runner remains responsible for Git semantic operations.
+- Staging model:
+  - Stage/unstage files, hunks, and selected ranges.
+  - Frontend sends selected ranges for line/hunk staging.
+  - Runner converts selection into safe Git operations.
+- Blame model:
+  - Return compressed blame ranges and de-duplicated commit metadata.
+- History/graph model:
+  - Load commit history/graph incrementally with cursors and filters.
+  - Do not fetch or persist full graph data at once.
+- Commit UI:
+  - Default commit box: message, Stage All, Unstage All, Commit.
+  - Commit operates on staged changes only.
+  - Advanced options live in overflow menus.
+- Dangerous operations:
+  - Prompt clearly before discard, clean, reset, force push, and worktree deletion.
+  - Do not strongly block after confirmation.
+  - Display the exact object/ref/file affected.
+- Persistence constraints:
+  - Store only:
+    - existing Project and Session identity data,
+    - session Git branch name,
+    - session base ref,
+    - session base SHA,
+    - worktree deletion timestamp,
+    - Git job audit metadata,
+    - session Git artifact links such as commit SHA or local Git artifact refs.
+  - Do not store:
+    - full diff,
+    - blame results,
+    - commit graph,
+    - file history,
+    - branch/remote/stash lists,
+    - full stdout/stderr,
+    - Monaco models,
+    - active context UI state.
+- Performance constraints:
+  - Lazy-load Monaco.
+  - Page history/graph.
+  - Load diffs per selected file.
+  - Add size caps and binary/too-large states.
+  - Debounce status refresh.
+- Compatibility constraints:
+  - System Git is required on the runner.
+  - Git LFS and submodule behavior are mediated through system Git.
+  - LFS is not separately managed; errors are surfaced from Git.
+  - Submodule status can appear in the parent repo, but no child repo context is opened.
+- Test/screenshot expectations:
+  - Shared protocol tests for Git schemas.
+  - Runner tests using temporary Git repos for status, diff, branch worktree, commit, stash, and error handling.
+  - Server tests for context resolution, job persistence, runner routing, and minimal persistence.
+  - Web reducer/component tests for context switching, status groups, commit box, dangerous confirmations, and responsive Git tab states.
+  - Playwright or browser smoke tests for desktop/tablet/mobile Git tab layout once implemented.
+
+## Open questions
+
+- [ ] Confirm whether `Git` tab label should be English-only or localized with the existing mixed Chinese/English mobile labels.
+- [ ] Decide whether Git job stdout/stderr copy buffer should survive only while the page is open or also across WebSocket reconnects without DB persistence.

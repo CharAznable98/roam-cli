@@ -10,6 +10,8 @@ import type {
   Artifact,
   ArtifactKind,
   ChatRole,
+  GitJob,
+  GitJobStatus,
   Message,
   Project,
   RunnerRegistration,
@@ -38,6 +40,10 @@ interface SessionRow {
   execution_mode: "direct" | "managed_worktree" | "remote";
   execution_folder: string;
   cwd: string;
+  git_branch_name: string | null;
+  git_base_ref: string | null;
+  git_base_sha: string | null;
+  worktree_deleted_at: string | null;
   agent_thread_id: string | null;
   archived_at: string | null;
   archived_by_project_id: string | null;
@@ -84,6 +90,20 @@ interface RunnerRow {
   registration_json: string;
   online: number;
   last_seen_at: string;
+}
+
+interface GitJobRow {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  context_kind: "project" | "session_worktree";
+  operation: string;
+  status: GitJobStatus;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error_code: string | null;
+  error_summary: string | null;
 }
 
 export class ServerStore {
@@ -201,8 +221,8 @@ export class ServerStore {
   createSession(session: Session): Session {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, agent_thread_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, git_branch_name, git_base_ref, git_base_sha, worktree_deleted_at, agent_thread_id, archived_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -214,6 +234,10 @@ export class ServerStore {
         session.executionMode,
         session.executionFolder,
         session.cwd,
+        session.gitBranchName ?? null,
+        session.gitBaseRef ?? null,
+        session.gitBaseSha ?? null,
+        session.worktreeDeletedAt ?? null,
         session.agentThreadId ?? null,
         session.archivedAt ?? null,
         session.createdAt,
@@ -296,6 +320,18 @@ export class ServerStore {
         "UPDATE sessions SET agent_thread_id = ?, updated_at = ? WHERE id = ?",
       )
       .run(agentThreadId, updatedAt, id);
+    return this.getSession(id);
+  }
+
+  markSessionWorktreeDeleted(
+    id: string,
+    deletedAt: string,
+  ): Session | undefined {
+    this.db
+      .prepare(
+        "UPDATE sessions SET worktree_deleted_at = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(deletedAt, deletedAt, id);
     return this.getSession(id);
   }
 
@@ -490,6 +526,43 @@ export class ServerStore {
     );
   }
 
+  upsertGitJob(job: GitJob): GitJob {
+    this.db
+      .prepare(
+        `INSERT INTO git_jobs (id, project_id, session_id, context_kind, operation, status, created_at, started_at, finished_at, error_code, error_summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           status = excluded.status,
+           started_at = excluded.started_at,
+           finished_at = excluded.finished_at,
+           error_code = excluded.error_code,
+           error_summary = excluded.error_summary`,
+      )
+      .run(
+        job.id,
+        job.projectId,
+        job.sessionId ?? null,
+        job.contextKind,
+        job.operation,
+        job.status,
+        job.createdAt,
+        job.startedAt ?? null,
+        job.finishedAt ?? null,
+        job.errorCode ?? null,
+        job.errorSummary ?? null,
+      );
+    return job;
+  }
+
+  listGitJobs(projectId: string): GitJob[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM git_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 100",
+      )
+      .all(projectId) as unknown as GitJobRow[];
+    return rows.map(toGitJob);
+  }
+
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -564,6 +637,22 @@ export class ServerStore {
         online INTEGER NOT NULL DEFAULT 0,
         last_seen_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS git_jobs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        session_id TEXT,
+        context_kind TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        error_code TEXT,
+        error_summary TEXT,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE SET NULL
+      );
     `);
     this.addColumnIfMissing("sessions", "project_id", "TEXT");
     this.addColumnIfMissing(
@@ -572,6 +661,10 @@ export class ServerStore {
       "TEXT NOT NULL DEFAULT 'direct'",
     );
     this.addColumnIfMissing("sessions", "execution_folder", "TEXT");
+    this.addColumnIfMissing("sessions", "git_branch_name", "TEXT");
+    this.addColumnIfMissing("sessions", "git_base_ref", "TEXT");
+    this.addColumnIfMissing("sessions", "git_base_sha", "TEXT");
+    this.addColumnIfMissing("sessions", "worktree_deleted_at", "TEXT");
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
@@ -620,6 +713,12 @@ function toSession(row: SessionRow): Session {
     executionMode: row.execution_mode,
     executionFolder: row.execution_folder ?? row.cwd,
     cwd: row.cwd,
+    ...(row.git_branch_name ? { gitBranchName: row.git_branch_name } : {}),
+    ...(row.git_base_ref ? { gitBaseRef: row.git_base_ref } : {}),
+    ...(row.git_base_sha ? { gitBaseSha: row.git_base_sha } : {}),
+    ...(row.worktree_deleted_at
+      ? { worktreeDeletedAt: row.worktree_deleted_at }
+      : {}),
     ...(row.agent_thread_id ? { agentThreadId: row.agent_thread_id } : {}),
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     createdAt: row.created_at,
@@ -664,5 +763,21 @@ function toArtifact(row: ArtifactRow): Artifact {
     sha256: row.sha256,
     storagePath: row.storage_path,
     createdAt: row.created_at,
+  };
+}
+
+function toGitJob(row: GitJobRow): GitJob {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    contextKind: row.context_kind,
+    operation: row.operation,
+    status: row.status,
+    createdAt: row.created_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    ...(row.error_code ? { errorCode: row.error_code } : {}),
+    ...(row.error_summary ? { errorSummary: row.error_summary } : {}),
   };
 }

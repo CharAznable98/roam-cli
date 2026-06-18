@@ -45,6 +45,27 @@ describe("server", () => {
     expect(authorized.json()).toEqual({ sessions: [] });
   });
 
+  it("ignores invalid runner events without sending incompatible commands", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runnerMessages: Array<Record<string, any>> = [];
+    runner.on("message", (data) => {
+      runnerMessages.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+    runner.send(JSON.stringify({ type: "notARunnerEvent" }));
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(runner.readyState).toBe(WebSocket.OPEN);
+    expect(app.roam.hub.isRunnerOnline("runner-1")).toBe(true);
+    expect(runnerMessages).toEqual([]);
+
+    runner.close();
+  });
+
   it("creates projects only after validating the runner directory", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);

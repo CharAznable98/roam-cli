@@ -1,4 +1,10 @@
-import type { AgentKind, ExecutionMode, Project, RunnerCapability, RunnerRegistration } from "@roamcli/shared/protocol";
+import type {
+  AgentKind,
+  ExecutionMode,
+  Project,
+  RunnerCapability,
+  RunnerRegistration,
+} from "@roamcli/shared/protocol";
 import { Send } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
@@ -7,6 +13,8 @@ export type NewSessionValues = {
   prompt: string;
   agent: AgentKind;
   executionMode: ExecutionMode;
+  gitBaseRef?: string;
+  gitBranchName?: string;
 };
 
 type NewSessionFormProps = {
@@ -16,14 +24,30 @@ type NewSessionFormProps = {
   onCreated?: () => void;
 };
 
-export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSessionFormProps) {
+export function NewSessionForm({
+  project,
+  runner,
+  onCreate,
+  onCreated,
+}: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>("direct");
-  const agentOptions = useMemo(() => runner.capabilities.map((capability: RunnerCapability) => capability.kind), [runner.capabilities]);
-  const [agent, setAgent] = useState<AgentKind>(runner.capabilities[0]?.kind ?? "codex");
+  const [executionMode, setExecutionMode] =
+    useState<ExecutionMode>("managed_worktree");
+  const [gitBaseRef, setGitBaseRef] = useState("HEAD");
+  const [gitBranchName, setGitBranchName] = useState("");
+  const agentOptions = useMemo(
+    () =>
+      runner.capabilities.map(
+        (capability: RunnerCapability) => capability.kind,
+      ),
+    [runner.capabilities],
+  );
+  const [agent, setAgent] = useState<AgentKind>(
+    runner.capabilities[0]?.kind ?? "codex",
+  );
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -39,7 +63,13 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
         title: title.trim() || cleanPrompt.slice(0, 48),
         prompt: cleanPrompt,
         agent,
-        executionMode
+        executionMode,
+        ...(executionMode === "managed_worktree" && gitBaseRef.trim()
+          ? { gitBaseRef: gitBaseRef.trim() }
+          : {}),
+        ...(executionMode === "managed_worktree" && gitBranchName.trim()
+          ? { gitBranchName: gitBranchName.trim() }
+          : {}),
       });
       setTitle("");
       setPrompt("");
@@ -56,11 +86,18 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
     <form className="new-session-form" onSubmit={submit}>
       <label className="field">
         <span>Title</span>
-        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Optional task name" />
+        <input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Optional task name"
+        />
       </label>
       <label className="field">
         <span>Agent</span>
-        <select value={agent} onChange={(event) => setAgent(event.target.value as AgentKind)}>
+        <select
+          value={agent}
+          onChange={(event) => setAgent(event.target.value as AgentKind)}
+        >
           {agentOptions.map((option: AgentKind) => (
             <option key={option} value={option}>
               {option}
@@ -74,11 +111,36 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
       </label>
       <label className="field">
         <span>Execution</span>
-        <select value={executionMode} onChange={(event) => setExecutionMode(event.target.value as ExecutionMode)}>
-          <option value="direct">Direct</option>
-          <option value="managed_worktree">Managed worktree</option>
+        <select
+          value={executionMode}
+          onChange={(event) =>
+            setExecutionMode(event.target.value as ExecutionMode)
+          }
+        >
+          <option value="managed_worktree">New branch worktree</option>
+          <option value="direct">Local</option>
         </select>
       </label>
+      {executionMode === "managed_worktree" ? (
+        <>
+          <label className="field">
+            <span>Base ref</span>
+            <input
+              value={gitBaseRef}
+              onChange={(event) => setGitBaseRef(event.target.value)}
+              placeholder="HEAD"
+            />
+          </label>
+          <label className="field">
+            <span>Branch name</span>
+            <input
+              value={gitBranchName}
+              onChange={(event) => setGitBranchName(event.target.value)}
+              placeholder="Auto-generated"
+            />
+          </label>
+        </>
+      ) : null}
       <label className="field">
         <span>Prompt</span>
         <textarea
@@ -92,9 +154,18 @@ export function NewSessionForm({ project, runner, onCreate, onCreated }: NewSess
           placeholder="Describe the work"
         />
       </label>
-      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="form-actions">
-        <button className="primary-action-button" type="submit" title="Create session" disabled={submitting}>
+        <button
+          className="primary-action-button"
+          type="submit"
+          title="Create session"
+          disabled={submitting}
+        >
           <Send size={16} />
           <span>{submitting ? "Creating session..." : "Create session"}</span>
         </button>

@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { AgentOutputParser, AgentParseResult } from "@roamcli/agent-plugin-sdk";
+import type {
+  AgentOutputParser,
+  AgentParseResult,
+} from "@roamcli/agent-plugin-sdk";
 import type { RunnerEvent, Session } from "@roamcli/shared/protocol";
 import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,14 +37,30 @@ describe("SessionManager", () => {
     await manager.start(makeSession(workspace), "hello");
 
     await vi.waitFor(() => {
-      expect(events).toContainEqual({ type: "sessionThread", sessionId: "s1", threadId: "codex-thread-1" });
-      expect(events.some((event) => event.type === "assistantMessage" && event.content.includes("codex answer: hello"))).toBe(true);
-      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+      expect(events).toContainEqual({
+        type: "sessionThread",
+        sessionId: "s1",
+        threadId: "codex-thread-1",
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantMessage" &&
+            event.content.includes("codex answer: hello"),
+        ),
+      ).toBe(true);
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
     });
   });
 
   it("handles file tree and content commands scoped to a started codex session cwd", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-files-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-files-"),
+    );
     await mkdir(join(workspace, "src"), { recursive: true });
     await writeFile(join(workspace, "src", "main.ts"), "console.log('ok');");
     const events: RunnerEvent[] = [];
@@ -55,8 +74,20 @@ describe("SessionManager", () => {
     });
 
     await manager.start(makeSession(workspace), "ready");
-    await manager.handle({ type: "readFileTree", requestId: "tree1", sessionId: "s1", path: ".", depth: 1 });
-    await manager.handle({ type: "readFileContent", requestId: "content1", sessionId: "s1", path: "src/main.ts", maxBytes: 7 });
+    await manager.handle({
+      type: "readFileTree",
+      requestId: "tree1",
+      sessionId: "s1",
+      path: ".",
+      depth: 1,
+    });
+    await manager.handle({
+      type: "readFileContent",
+      requestId: "content1",
+      sessionId: "s1",
+      path: "src/main.ts",
+      maxBytes: 7,
+    });
     await manager.handle({
       type: "writeFileContent",
       requestId: "write1",
@@ -68,7 +99,10 @@ describe("SessionManager", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "fileTreeResult",
-        result: expect.objectContaining({ requestId: "tree1", sessionId: "s1" }),
+        result: expect.objectContaining({
+          requestId: "tree1",
+          sessionId: "s1",
+        }),
       }),
     );
     expect(events).toContainEqual({
@@ -92,11 +126,15 @@ describe("SessionManager", () => {
         encoding: "utf8",
       },
     });
-    await expect(readFile(join(workspace, "src", "main.ts"), "utf8")).resolves.toBe("console.log('saved');");
+    await expect(
+      readFile(join(workspace, "src", "main.ts"), "utf8"),
+    ).resolves.toBe("console.log('saved');");
   });
 
   it("creates managed git worktrees and scopes the session to the execution folder", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-worktree-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-worktree-"),
+    );
     await writeFile(join(workspace, "README.md"), "hello\n", "utf8");
     await git(workspace, ["init"]);
     await git(workspace, ["config", "user.email", "test@example.com"]);
@@ -119,15 +157,29 @@ describe("SessionManager", () => {
       executionMode: "managed_worktree",
       executionFolder,
       cwd: workspace,
+      gitBranchName: "roam/test-worktree",
+      gitBaseRef: "HEAD",
     };
 
     await manager.start(managedSession, "managed");
     await vi.waitFor(() => {
-      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
     });
-    await manager.handle({ type: "readFileContent", requestId: "content1", sessionId: "s1", path: "README.md", maxBytes: 256 });
+    await manager.handle({
+      type: "readFileContent",
+      requestId: "content1",
+      sessionId: "s1",
+      path: "README.md",
+      maxBytes: 256,
+    });
 
-    await expect(readFile(join(executionFolder, "README.md"), "utf8")).resolves.toBe("hello\n");
+    await expect(
+      readFile(join(executionFolder, "README.md"), "utf8"),
+    ).resolves.toBe("hello\n");
     expect(events).toContainEqual({
       type: "fileContentResult",
       result: {
@@ -143,14 +195,28 @@ describe("SessionManager", () => {
     events.length = 0;
     await manager.start(managedSession, "resume managed", "codex-thread-1");
     await vi.waitFor(() => {
-      expect(events).toContainEqual({ type: "sessionThread", sessionId: "s1", threadId: "codex-thread-resumed" });
-      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+      expect(events).toContainEqual({
+        type: "sessionThread",
+        sessionId: "s1",
+        threadId: "codex-thread-resumed",
+      });
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
     });
-    expect(events.some((event) => event.type === "error" && event.code === "SPAWN_ERROR")).toBe(false);
+    expect(
+      events.some(
+        (event) => event.type === "error" && event.code === "SPAWN_ERROR",
+      ),
+    ).toBe(false);
   });
 
   it("rejects an existing managed worktree folder that is not a registered git worktree", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-invalid-worktree-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-invalid-worktree-"),
+    );
     await writeFile(join(workspace, "README.md"), "hello\n", "utf8");
     await git(workspace, ["init"]);
     await git(workspace, ["config", "user.email", "test@example.com"]);
@@ -224,7 +290,9 @@ describe("SessionManager", () => {
   });
 
   it("reports command cwd resolution errors instead of hiding them as missing sessions", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-invalid-cwd-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-invalid-cwd-"),
+    );
     const outsideWorkspace = join(tmpdir(), "roam-runner-outside-project");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
@@ -255,7 +323,9 @@ describe("SessionManager", () => {
   });
 
   it("returns request-scoped errors for file commands without cwd context", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-missing-cwd-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-missing-cwd-"),
+    );
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
@@ -283,8 +353,47 @@ describe("SessionManager", () => {
     });
   });
 
+  it("emits failed git jobs when mutation cwd resolution fails", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-git-cwd-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: await fakeCodexAgents(workspace),
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.handle({
+      type: "gitStagePaths",
+      requestId: "git-stage-1",
+      projectId: "project-1",
+      cwd: "../outside",
+      context: { kind: "project", projectId: "project-1" },
+      paths: ["README.md"],
+    });
+
+    expect(events).toContainEqual({
+      type: "gitJobResult",
+      job: expect.objectContaining({
+        id: "git-stage-1",
+        projectId: "project-1",
+        contextKind: "project",
+        operation: "stage",
+        status: "failed",
+        errorCode: "GIT_OPERATION_ERROR",
+        errorSummary: "Path escapes workspace: ../outside",
+      }),
+    });
+  });
+
   it("resolves plugin-emitted artifact paths inside the started codex session cwd", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-artifact-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-artifact-"),
+    );
     const sessionCwd = join(workspace, "task");
     await mkdir(sessionCwd, { recursive: true });
     await writeFile(join(sessionCwd, "result.log"), "artifact output", "utf8");
@@ -313,11 +422,17 @@ describe("SessionManager", () => {
         }),
       );
     });
-    expect(events.some((event) => event.type === "error" && event.code === "ARTIFACT_ERROR")).toBe(false);
+    expect(
+      events.some(
+        (event) => event.type === "error" && event.code === "ARTIFACT_ERROR",
+      ),
+    ).toBe(false);
   });
 
   it("does not mark an exited one-shot codex process running when a stale approval is resolved", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-stale-approval-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-stale-approval-"),
+    );
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
@@ -330,18 +445,35 @@ describe("SessionManager", () => {
 
     await manager.start(makeSession(workspace), "approval please");
     await vi.waitFor(() => {
-      expect(events.some((event) => event.type === "approvalRequested")).toBe(true);
-      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+      expect(events.some((event) => event.type === "approvalRequested")).toBe(
+        true,
+      );
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
     });
     const approval = events.find((event) => event.type === "approvalRequested");
     if (approval?.type !== "approvalRequested") {
       throw new Error("approval was not emitted");
     }
 
-    manager.resolveApproval(approval.approval.id, true, "2026-06-05T00:00:00.000Z", "signature");
+    manager.resolveApproval(
+      approval.approval.id,
+      true,
+      "2026-06-05T00:00:00.000Z",
+      "signature",
+    );
 
-    const statusEvents = events.filter((event) => event.type === "sessionStatus");
-    expect(statusEvents.at(-1)).toEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+    const statusEvents = events.filter(
+      (event) => event.type === "sessionStatus",
+    );
+    expect(statusEvents.at(-1)).toEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "completed",
+    });
     expect(statusEvents.slice(2)).not.toContainEqual({
       type: "sessionStatus",
       sessionId: "s1",
@@ -350,14 +482,19 @@ describe("SessionManager", () => {
   });
 
   it("emits one-shot process exit status after delayed approval output handling", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-approval-order-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-approval-order-"),
+    );
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
       profile: "standard",
       agents: [approvalCodexAgent()],
       emit: async (event) => {
-        if (event.type === "sessionStatus" && event.status === "waiting_approval") {
+        if (
+          event.type === "sessionStatus" &&
+          event.status === "waiting_approval"
+        ) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
         events.push(event);
@@ -367,7 +504,9 @@ describe("SessionManager", () => {
     await manager.start(makeSession(workspace), "approval please");
 
     await vi.waitFor(() => {
-      const statusEvents = events.filter((event) => event.type === "sessionStatus");
+      const statusEvents = events.filter(
+        (event) => event.type === "sessionStatus",
+      );
       expect(statusEvents.at(-1)).toEqual({
         type: "sessionStatus",
         sessionId: "s1",
@@ -377,7 +516,9 @@ describe("SessionManager", () => {
   });
 
   it("finalizes the session when output handling rejects", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-output-error-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-output-error-"),
+    );
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
       workspace,
@@ -391,7 +532,11 @@ describe("SessionManager", () => {
     await manager.start(makeSession(workspace), "ready");
 
     await vi.waitFor(() => {
-      expect(events).toContainEqual({ type: "sessionStatus", sessionId: "s1", status: "completed" });
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
     });
     manager.deliverInput("s1", "late input");
 
@@ -404,7 +549,9 @@ describe("SessionManager", () => {
   });
 
   it("handles patch commands with structured results", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-patch-"),
+    );
     await writeFile(join(workspace, "README.md"), "old\n");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
@@ -439,11 +586,15 @@ describe("SessionManager", () => {
         rejected: [],
       },
     });
-    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe("new\n");
+    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
+      "new\n",
+    );
   });
 
   it("rejects patch commands whose forwarded signature does not match the patch body", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-session-patch-signature-"));
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-patch-signature-"),
+    );
     await writeFile(join(workspace, "README.md"), "old\n");
     const events: RunnerEvent[] = [];
     const manager = new SessionManager({
@@ -466,7 +617,9 @@ describe("SessionManager", () => {
       "",
     ].join("\n");
     await manager.start(makeSession(workspace), "ready");
-    await manager.handle(signedPatchCommand(patch, `${patch}\n# tampered-target`));
+    await manager.handle(
+      signedPatchCommand(patch, `${patch}\n# tampered-target`),
+    );
 
     expect(events).toContainEqual({
       type: "patchApplyResult",
@@ -479,7 +632,9 @@ describe("SessionManager", () => {
         rejected: ["Patch signature is invalid"],
       },
     });
-    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe("old\n");
+    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
+      "old\n",
+    );
   });
 });
 
@@ -542,7 +697,9 @@ function artifactCodexAgent(): LoadedAgent {
             return {
               text: "",
               approvals: [],
-              artifacts: [{ path: "result.log", kind: "log", mimeType: "text/plain" }],
+              artifacts: [
+                { path: "result.log", kind: "log", mimeType: "text/plain" },
+              ],
             };
           },
         };
@@ -589,7 +746,13 @@ function approvalCodexAgent(): LoadedAgent {
             emitted = true;
             return {
               text: "",
-              approvals: [{ kind: "execCommand", summary: "Approve stale command", payload: { command: "echo ok" } }],
+              approvals: [
+                {
+                  kind: "execCommand",
+                  summary: "Approve stale command",
+                  payload: { command: "echo ok" },
+                },
+              ],
               artifacts: [],
             };
           },
@@ -662,6 +825,11 @@ function signedPatchCommand(patch: string, signedPatch = patch) {
     sessionId: "s1",
     patch,
     signedAt,
-    signature: signApproval(approvalSecret, `patch:s1:${hashPayload(signedPatch)}`, true, signedAt),
+    signature: signApproval(
+      approvalSecret,
+      `patch:s1:${hashPayload(signedPatch)}`,
+      true,
+      signedAt,
+    ),
   };
 }

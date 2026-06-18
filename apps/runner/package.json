@@ -19,7 +19,8 @@
     "@roamcli/agent-codex": "workspace:*",
     "@roamcli/agent-plugin-sdk": "workspace:*",
     "@roamcli/shared": "workspace:*",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "simple-git": "^3.36.0"
   },
   "devDependencies": {
     "tsx": "^4.22.4",

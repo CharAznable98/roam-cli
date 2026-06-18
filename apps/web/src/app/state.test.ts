@@ -328,6 +328,7 @@ describe("app reducer", () => {
         editorContent: "export const unsaved = true;",
         fileContentState: "ready",
         fileSaveState: "error",
+        filesBySession: { "session-2": [] },
       },
       {
         type: "sessionWorkspaceLoading",
@@ -366,6 +367,7 @@ describe("app reducer", () => {
     expect(next.editorContent).toBe("");
     expect(next.fileContentState).toBe("idle");
     expect(next.fileSaveState).toBe("idle");
+    expect(next.filesBySession).toEqual({});
     expect(next.fileTreeState["session-2"]).toBe("idle");
   });
 });

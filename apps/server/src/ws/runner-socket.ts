@@ -30,10 +30,11 @@ export function registerRunnerSocketRoute(
         const event = RunnerEventSchema.parse(payload);
         context.services.runnerEvents.handle(event);
       } catch (error) {
-        context.hub.sendError(
-          socket,
-          error instanceof Error ? error.message : "invalid runner event",
-          "invalid_runner_event",
+        request.log.warn(
+          { err: error },
+          registeredRunner
+            ? "ignored invalid runner event"
+            : "ignored invalid runner registration",
         );
       }
     });

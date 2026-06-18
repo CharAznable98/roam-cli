@@ -258,6 +258,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ? "idle"
           : state.fileContentState,
         fileSaveState: action.resetSelection ? "idle" : state.fileSaveState,
+        filesBySession: action.resetSelection
+          ? omitKey(state.filesBySession, action.sessionId)
+          : state.filesBySession,
         fileTreeState: {
           ...state.fileTreeState,
           [action.sessionId]: "idle",

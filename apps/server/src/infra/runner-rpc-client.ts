@@ -2,6 +2,12 @@ import type {
   FileContentResult,
   FileTreeResult,
   FileWriteResult,
+  GitBlame,
+  GitBranchList,
+  GitCommitPage,
+  GitFileDiff,
+  GitJob,
+  GitStatus,
   PatchApplyResult,
   RunnerCommand,
 } from "@roamcli/shared/protocol";
@@ -11,7 +17,13 @@ type RunnerRpcResult =
   | FileTreeResult
   | FileContentResult
   | FileWriteResult
-  | PatchApplyResult;
+  | PatchApplyResult
+  | GitStatus
+  | GitFileDiff
+  | GitBlame
+  | GitCommitPage
+  | GitBranchList
+  | GitJob;
 
 export type RunnerRpcCommand = Extract<
   RunnerCommand,
@@ -20,7 +32,19 @@ export type RunnerRpcCommand = Extract<
       | "readFileTree"
       | "readFileContent"
       | "writeFileContent"
-      | "applyPatch";
+      | "applyPatch"
+      | "gitStatus"
+      | "gitFileDiff"
+      | "gitBlame"
+      | "gitCommitPage"
+      | "gitBranchList"
+      | "gitInit"
+      | "gitStagePaths"
+      | "gitUnstagePaths"
+      | "gitDiscardPaths"
+      | "gitCommit"
+      | "gitRemoteOperation"
+      | "gitRemoveWorktree";
   }
 >;
 
@@ -89,13 +113,14 @@ export class RunnerRpcClient {
   }
 
   resolveRunnerResponse(result: RunnerRpcResult): boolean {
-    const pending = this.pendingRunnerRpcs.get(result.requestId);
+    const requestId = "requestId" in result ? result.requestId : result.id;
+    const pending = this.pendingRunnerRpcs.get(requestId);
     if (!pending) {
       return false;
     }
 
     clearTimeout(pending.timer);
-    this.pendingRunnerRpcs.delete(result.requestId);
+    this.pendingRunnerRpcs.delete(requestId);
     pending.resolve(result);
     return true;
   }
