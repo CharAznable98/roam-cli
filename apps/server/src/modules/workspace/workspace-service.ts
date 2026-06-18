@@ -38,6 +38,12 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
+    if (
+      session.executionMode === "managed_worktree" &&
+      session.worktreeDeletedAt
+    ) {
+      return fail("worktree_not_available");
+    }
 
     const result = await this.rpc.requestRunner<FileTreeResult>(
       session.runnerId,
@@ -62,6 +68,12 @@ export class WorkspaceService {
     if (!session) {
       return fail("session_not_found");
     }
+    if (
+      session.executionMode === "managed_worktree" &&
+      session.worktreeDeletedAt
+    ) {
+      return fail("worktree_not_available");
+    }
 
     const result = await this.rpc.requestRunner<FileContentResult>(
       session.runnerId,
@@ -85,6 +97,12 @@ export class WorkspaceService {
     const session = this.store.getSession(sessionId);
     if (!session) {
       return fail("session_not_found");
+    }
+    if (
+      session.executionMode === "managed_worktree" &&
+      session.worktreeDeletedAt
+    ) {
+      return fail("worktree_not_available");
     }
 
     const result = await this.rpc.requestRunner<FileWriteResult>(

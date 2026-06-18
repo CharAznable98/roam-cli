@@ -387,6 +387,97 @@ describe("App", () => {
             },
           });
         }
+        if (requestUrl.pathname === "/v1/git/status") {
+          const context = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            result: {
+              requestId: "git-status-1",
+              context,
+              branch: "main",
+              detached: false,
+              headSha: "abc123",
+              upstream: "origin/main",
+              ahead: 0,
+              behind: 0,
+              clean: true,
+              unborn: false,
+              groups: [
+                { id: "staged", changes: [] },
+                { id: "changes", changes: [] },
+                { id: "conflicts", changes: [] },
+                { id: "untracked", changes: [] },
+                { id: "ignored", changes: [] },
+                { id: "submodules", changes: [] },
+              ],
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/git/branches") {
+          const context = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            result: {
+              requestId: "git-branches-1",
+              context,
+              branches: [{ name: "main", current: true, remote: false }],
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/git/history") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            result: {
+              requestId: "git-history-1",
+              context: body.context,
+              commits: [
+                {
+                  sha: "abc123",
+                  parents: [],
+                  authorName: "Test User",
+                  committerName: "Test User",
+                  summary: "Initial commit",
+                  refs: [],
+                },
+              ],
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/git/diff") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            result: {
+              requestId: "git-diff-1",
+              context: body.context,
+              path: body.path ?? "src/App.tsx",
+              mode: body.mode ?? "working_tree",
+              oldContent: "",
+              newContent: "",
+              language: "typescript",
+              binary: false,
+              tooLarge: false,
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/projects/project-1/git/jobs") {
+          return jsonResponse({ jobs: [] });
+        }
+        if (requestUrl.pathname.startsWith("/v1/git/")) {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            job: {
+              id: "git-job-1",
+              projectId: "project-1",
+              ...(body.context?.kind === "session_worktree"
+                ? { sessionId: body.context.sessionId }
+                : {}),
+              contextKind: body.context?.kind ?? "project",
+              operation: requestUrl.pathname.split("/").at(-1) ?? "git",
+              status: "succeeded",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              startedAt: "2026-06-05T00:00:00.000Z",
+              finishedAt: "2026-06-05T00:00:00.000Z",
+            },
+          });
+        }
         if (requestUrl.pathname === "/v1/approvals/approval-1") {
           const body = JSON.parse(String(init?.body ?? "{}")) as {
             approved?: boolean;

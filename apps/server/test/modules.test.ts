@@ -28,6 +28,7 @@ import {
 import { RunnerEventService } from "../src/modules/runners/runner-event-service.js";
 import { ArtifactService } from "../src/modules/artifacts/artifact-service.js";
 import { SessionCommandService } from "../src/modules/sessions/session-command-service.js";
+import { WorkspaceService } from "../src/modules/workspace/workspace-service.js";
 
 describe("ApprovalSignatureVerifier", () => {
   it("allows unsigned mode and validates approval and patch signatures", () => {
@@ -243,7 +244,7 @@ describe("SessionCommandService", () => {
       cwd: "/workspace",
     });
     expect(result.value.session.executionFolder).toBe(
-      `/workspace/.roamcli-worktrees/${result.value.session.id}`,
+      `/workspace/.roam-runner/worktrees/project-1/${result.value.session.id}`,
     );
     expect(runnerMessages.at(-1)).toMatchObject({
       type: "startSession",
@@ -393,6 +394,53 @@ describe("ArtifactStorage", () => {
   });
 });
 
+describe("WorkspaceService", () => {
+  let dataDir: string;
+  let store: ServerStore;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "roamcli-workspace-test-"));
+    store = new ServerStore(dataDir);
+  });
+
+  afterEach(() => {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("does not read files from a deleted managed worktree", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+      worktreeDeletedAt: new Date().toISOString(),
+    });
+    const service = new WorkspaceService(
+      store,
+      rpc,
+      new ApprovalSignatureVerifier(undefined),
+      100,
+    );
+
+    const result = await service.readFileTree("session-1", {
+      path: ".",
+      depth: 1,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "worktree_not_available",
+    });
+    expect(runnerMessages).toEqual([]);
+  });
+});
+
 describe("RunnerEventService", () => {
   let dataDir: string;
   let store: ServerStore;
@@ -519,6 +567,25 @@ describe("RunnerEventService", () => {
         session: expect.objectContaining({ id: session.id, status: "stopped" }),
       }),
     );
+  });
+
+  it("does not broadcast unscoped runner connection parse errors to users", () => {
+    const streamEvents: ServerEvent[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    const service = new RunnerEventService(
+      store,
+      hub,
+      new RunnerRpcClient(hub),
+    );
+
+    service.handle({
+      type: "error",
+      message: "Invalid discriminator value",
+      code: "RUNNER_CONNECTION_ERROR",
+    });
+
+    expect(streamEvents).toEqual([]);
   });
 
   it("does not treat runner registered events as live socket registration", () => {

@@ -10,6 +10,7 @@ import { ServerStore } from "../infra/sqlite-store.js";
 import { ApprovalService } from "../modules/approvals/approval-service.js";
 import { ApprovalSignatureVerifier } from "../modules/approvals/approval-signatures.js";
 import { ArtifactService } from "../modules/artifacts/artifact-service.js";
+import { GitService } from "../modules/git/git-service.js";
 import { RunnerEventService } from "../modules/runners/runner-event-service.js";
 import { SessionCommandService } from "../modules/sessions/session-command-service.js";
 import { WorkspaceService } from "../modules/workspace/workspace-service.js";
@@ -50,6 +51,7 @@ export async function createServer(
     signatures,
     config.runnerRpcTimeoutMs,
   );
+  const gitService = new GitService(store, hub, rpc, config.runnerRpcTimeoutMs);
   const runnerEventService = new RunnerEventService(store, hub, rpc);
 
   const context: AppContext = {
@@ -60,6 +62,7 @@ export async function createServer(
     services: {
       approvals: approvalService,
       artifacts: artifactService,
+      git: gitService,
       runnerEvents: runnerEventService,
       sessions: sessionService,
       workspace: workspaceService,

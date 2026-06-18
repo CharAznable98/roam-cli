@@ -2,7 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
-import type { AgentKind, RunnerCommand, RunnerProfile, Session } from "@roamcli/shared/protocol";
+import type {
+  AgentKind,
+  RunnerCommand,
+  RunnerProfile,
+  Session,
+} from "@roamcli/shared/protocol";
 import { spawnAgentProcess, type AgentProcess } from "../agents/process.js";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";
@@ -35,26 +40,38 @@ export class SessionManager {
   public constructor(options: SessionManagerOptions) {
     this.#workspace = options.workspace;
     this.#profile = options.profile;
-    this.#agents = new Map(options.agents.map((agent) => [agent.capability.kind, agent]));
+    this.#agents = new Map(
+      options.agents.map((agent) => [agent.capability.kind, agent]),
+    );
     this.#emit = options.emit;
     this.#approvals = new ApprovalTracker({
       emit: this.#emit,
-      ...(options.approvalSecret === undefined ? {} : { approvalSecret: options.approvalSecret })
+      ...(options.approvalSecret === undefined
+        ? {}
+        : { approvalSecret: options.approvalSecret }),
     });
-    this.#output = new SessionOutputHandler({ approvals: this.#approvals, emit: this.#emit });
+    this.#output = new SessionOutputHandler({
+      approvals: this.#approvals,
+      emit: this.#emit,
+    });
     this.#workspaceCommands = new WorkspaceCommandHandler({
       workspace: this.#workspace,
       emit: this.#emit,
       getSessionCwd: (sessionId, cwd) => this.#getSessionCwd(sessionId, cwd),
       getStartedSessionCwd: (sessionId) => this.#sessionCwds.get(sessionId),
-      verifyPatchSignature: (command) => this.#approvals.verifyPatchSignature(command)
+      verifyPatchSignature: (command) =>
+        this.#approvals.verifyPatchSignature(command),
     });
   }
 
   public async handle(command: RunnerCommand): Promise<void> {
     switch (command.type) {
       case "startSession":
-        await this.start(command.session, command.prompt, command.resumeThreadId);
+        await this.start(
+          command.session,
+          command.prompt,
+          command.resumeThreadId,
+        );
         return;
       case "deliverInput":
         this.deliverInput(command.sessionId, command.content);
@@ -71,8 +88,49 @@ export class SessionManager {
       case "applyPatch":
         await this.#workspaceCommands.applyPatch(command);
         return;
+      case "gitStatus":
+        await this.#workspaceCommands.readGitStatus(command);
+        return;
+      case "gitFileDiff":
+        await this.#workspaceCommands.readGitFileDiff(command);
+        return;
+      case "gitBlame":
+        await this.#workspaceCommands.readGitBlame(command);
+        return;
+      case "gitCommitPage":
+        await this.#workspaceCommands.readGitCommitPage(command);
+        return;
+      case "gitBranchList":
+        await this.#workspaceCommands.readGitBranches(command);
+        return;
+      case "gitInit":
+        await this.#workspaceCommands.initGitRepository(command);
+        return;
+      case "gitStagePaths":
+        await this.#workspaceCommands.stageGitPaths(command);
+        return;
+      case "gitUnstagePaths":
+        await this.#workspaceCommands.unstageGitPaths(command);
+        return;
+      case "gitDiscardPaths":
+        await this.#workspaceCommands.discardGitPaths(command);
+        return;
+      case "gitCommit":
+        await this.#workspaceCommands.commitGitChanges(command);
+        return;
+      case "gitRemoteOperation":
+        await this.#workspaceCommands.runGitRemoteOperation(command);
+        return;
+      case "gitRemoveWorktree":
+        await this.#workspaceCommands.removeGitWorktree(command);
+        return;
       case "resolveApproval":
-        this.resolveApproval(command.approvalId, command.approved, command.signedAt, command.signature);
+        this.resolveApproval(
+          command.approvalId,
+          command.approved,
+          command.signedAt,
+          command.signature,
+        );
         return;
       case "controlSignal":
         this.control(command.sessionId, command.signal);
@@ -80,15 +138,29 @@ export class SessionManager {
     }
   }
 
-  public async start(session: Session, prompt: string, resumeThreadId?: string): Promise<void> {
+  public async start(
+    session: Session,
+    prompt: string,
+    resumeThreadId?: string,
+  ): Promise<void> {
     if (this.#sessions.has(session.id)) {
-      await this.#emit({ type: "error", sessionId: session.id, message: "Session is already running", code: "SESSION_EXISTS" });
+      await this.#emit({
+        type: "error",
+        sessionId: session.id,
+        message: "Session is already running",
+        code: "SESSION_EXISTS",
+      });
       return;
     }
 
     const agent = this.#agents.get(session.agent);
     if (agent === undefined) {
-      await this.#emit({ type: "error", sessionId: session.id, message: `Unsupported agent: ${session.agent}`, code: "UNSUPPORTED_AGENT" });
+      await this.#emit({
+        type: "error",
+        sessionId: session.id,
+        message: `Unsupported agent: ${session.agent}`,
+        code: "UNSUPPORTED_AGENT",
+      });
       return;
     }
 
@@ -97,7 +169,12 @@ export class SessionManager {
       cwd = await this.#prepareExecutionFolder(session);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.#emit({ type: "error", sessionId: session.id, message, code: "INVALID_CWD" });
+      await this.#emit({
+        type: "error",
+        sessionId: session.id,
+        message,
+        code: "INVALID_CWD",
+      });
       return;
     }
 
@@ -113,27 +190,36 @@ export class SessionManager {
         cwd,
         env: process.env,
         preferPty: launch.preferPty,
-        requirePty: launch.requirePty
+        requirePty: launch.requirePty,
       });
       const running: RunningSession = {
         session: { ...session, cwd },
         child,
         parser: agent.definition.createParser(),
         stopRequested: false,
-        outputTasks: new Set()
+        outputTasks: new Set(),
       };
       this.#sessions.set(session.id, running);
       this.#sessionCwds.set(session.id, cwd);
 
       child.onData((chunk) => this.#trackOutput(running, chunk));
       child.onError((error) => {
-        void this.#emit({ type: "error", sessionId: session.id, message: error.message, code: "SPAWN_ERROR" });
+        void this.#emit({
+          type: "error",
+          sessionId: session.id,
+          message: error.message,
+          code: "SPAWN_ERROR",
+        });
       });
       child.onExit(({ code, signal }) => {
         void this.#finishSession(running, code, signal);
       });
 
-      await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "running" });
+      await this.#emit({
+        type: "sessionStatus",
+        sessionId: session.id,
+        status: "running",
+      });
       if (launch.promptDelivery === "stdin") {
         child.write(prompt);
         if (!prompt.endsWith("\n")) {
@@ -144,8 +230,17 @@ export class SessionManager {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.#emit({ type: "error", sessionId: session.id, message, code: "SPAWN_ERROR" });
-      await this.#emit({ type: "sessionStatus", sessionId: session.id, status: "failed" });
+      await this.#emit({
+        type: "error",
+        sessionId: session.id,
+        message,
+        code: "SPAWN_ERROR",
+      });
+      await this.#emit({
+        type: "sessionStatus",
+        sessionId: session.id,
+        status: "failed",
+      });
       return;
     }
   }
@@ -153,7 +248,12 @@ export class SessionManager {
   public deliverInput(sessionId: string, content: string): void {
     const running = this.#sessions.get(sessionId);
     if (running === undefined) {
-      void this.#emit({ type: "error", sessionId, message: "Session is not running", code: "SESSION_NOT_RUNNING" });
+      void this.#emit({
+        type: "error",
+        sessionId,
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      });
       return;
     }
     running.child.write(content);
@@ -162,8 +262,21 @@ export class SessionManager {
     }
   }
 
-  public async readFileTree(requestId: string, sessionId: string, cwd: string | undefined, path = ".", depth = 3): Promise<void> {
-    await this.#workspaceCommands.readFileTree({ type: "readFileTree", requestId, sessionId, ...(cwd === undefined ? {} : { cwd }), path, depth });
+  public async readFileTree(
+    requestId: string,
+    sessionId: string,
+    cwd: string | undefined,
+    path = ".",
+    depth = 3,
+  ): Promise<void> {
+    await this.#workspaceCommands.readFileTree({
+      type: "readFileTree",
+      requestId,
+      sessionId,
+      ...(cwd === undefined ? {} : { cwd }),
+      path,
+      depth,
+    });
   }
 
   public async readFileContent(
@@ -171,9 +284,16 @@ export class SessionManager {
     sessionId: string,
     cwd: string | undefined,
     path: string,
-    maxBytes = 256 * 1024
+    maxBytes = 256 * 1024,
   ): Promise<void> {
-    await this.#workspaceCommands.readFileContent({ type: "readFileContent", requestId, sessionId, ...(cwd === undefined ? {} : { cwd }), path, maxBytes });
+    await this.#workspaceCommands.readFileContent({
+      type: "readFileContent",
+      requestId,
+      sessionId,
+      ...(cwd === undefined ? {} : { cwd }),
+      path,
+      maxBytes,
+    });
   }
 
   public async writeFileContent(
@@ -181,23 +301,45 @@ export class SessionManager {
     sessionId: string,
     cwd: string | undefined,
     path: string,
-    content: string
+    content: string,
   ): Promise<void> {
-    await this.#workspaceCommands.writeFileContent({ type: "writeFileContent", requestId, sessionId, ...(cwd === undefined ? {} : { cwd }), path, content });
+    await this.#workspaceCommands.writeFileContent({
+      type: "writeFileContent",
+      requestId,
+      sessionId,
+      ...(cwd === undefined ? {} : { cwd }),
+      path,
+      content,
+    });
   }
 
-  public async applyPatch(command: Extract<RunnerCommand, { type: "applyPatch" }>): Promise<void> {
+  public async applyPatch(
+    command: Extract<RunnerCommand, { type: "applyPatch" }>,
+  ): Promise<void> {
     await this.#workspaceCommands.applyPatch(command);
   }
 
-  public resolveApproval(approvalId: string, approved: boolean, signedAt: string, signature: string): void {
+  public resolveApproval(
+    approvalId: string,
+    approved: boolean,
+    signedAt: string,
+    signature: string,
+  ): void {
     this.#approvals.resolve(approvalId, approved, signedAt, signature);
   }
 
-  public control(sessionId: string, signal: "interrupt" | "stop" | "resume"): void {
+  public control(
+    sessionId: string,
+    signal: "interrupt" | "stop" | "resume",
+  ): void {
     const running = this.#sessions.get(sessionId);
     if (running === undefined) {
-      void this.#emit({ type: "error", sessionId, message: "Session is not running", code: "SESSION_NOT_RUNNING" });
+      void this.#emit({
+        type: "error",
+        sessionId,
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      });
       return;
     }
     if (signal === "interrupt") {
@@ -210,27 +352,44 @@ export class SessionManager {
       }, 1500);
       running.stopTimer.unref?.();
     } else {
-      running.child.write(`${JSON.stringify({ type: "controlSignal", signal: "resume" })}\n`);
+      running.child.write(
+        `${JSON.stringify({ type: "controlSignal", signal: "resume" })}\n`,
+      );
     }
   }
 
   #trackOutput(running: RunningSession, chunk: string | Buffer): void {
     const task = this.#output.handle(running, chunk);
     running.outputTasks.add(task);
-    void task.finally(() => {
-      running.outputTasks.delete(task);
-    }).catch(() => undefined);
+    void task
+      .finally(() => {
+        running.outputTasks.delete(task);
+      })
+      .catch(() => undefined);
   }
 
-  async #finishSession(running: RunningSession, code: number | null, signal: NodeJS.Signals | null): Promise<void> {
+  async #finishSession(
+    running: RunningSession,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): Promise<void> {
     this.#sessions.delete(running.session.id);
     await Promise.allSettled([...running.outputTasks]);
     this.#approvals.clear(running);
     if (running.stopTimer !== undefined) {
       clearTimeout(running.stopTimer);
     }
-    const status = code === 0 ? "completed" : running.stopRequested || signal === "SIGTERM" || signal === "SIGINT" ? "stopped" : "failed";
-    await this.#emit({ type: "sessionStatus", sessionId: running.session.id, status });
+    const status =
+      code === 0
+        ? "completed"
+        : running.stopRequested || signal === "SIGTERM" || signal === "SIGINT"
+          ? "stopped"
+          : "failed";
+    await this.#emit({
+      type: "sessionStatus",
+      sessionId: running.session.id,
+      status,
+    });
   }
 
   #resolveCwd(cwd: string): string {
@@ -245,40 +404,86 @@ export class SessionManager {
     const projectCwd = this.#resolveCwd(session.cwd);
     const worktreeCwd = this.#resolveCwd(session.executionFolder);
     const existing = await stat(worktreeCwd).catch((error: unknown) => {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return undefined;
       }
       throw error;
     });
     if (existing !== undefined) {
       if (!existing.isDirectory()) {
-        throw new Error(`Managed worktree path is not a directory: ${session.executionFolder}`);
+        throw new Error(
+          `Managed worktree path is not a directory: ${session.executionFolder}`,
+        );
       }
       await this.#assertManagedWorktree(projectCwd, worktreeCwd);
       return worktreeCwd;
     }
+    const branchName = session.gitBranchName;
+    if (branchName === undefined) {
+      throw new Error("Managed worktree sessions require a git branch name");
+    }
+    const baseRef = session.gitBaseRef ?? "HEAD";
+    await execFileAsync("git", [
+      "-C",
+      projectCwd,
+      "rev-parse",
+      "--verify",
+      `${baseRef}^{commit}`,
+    ]);
     await mkdir(dirname(worktreeCwd), { recursive: true });
-    await execFileAsync("git", ["-C", projectCwd, "worktree", "add", "--detach", worktreeCwd, "HEAD"]);
+    await execFileAsync("git", [
+      "-C",
+      projectCwd,
+      "worktree",
+      "add",
+      "-b",
+      branchName,
+      worktreeCwd,
+      baseRef,
+    ]);
     return worktreeCwd;
   }
 
-  async #assertManagedWorktree(projectCwd: string, worktreeCwd: string): Promise<void> {
+  async #assertManagedWorktree(
+    projectCwd: string,
+    worktreeCwd: string,
+  ): Promise<void> {
     const [projectRealPath, worktreeRealPath] = await Promise.all([
       realpath(projectCwd),
       realpath(worktreeCwd),
     ]);
     if (projectRealPath === worktreeRealPath) {
-      throw new Error(`Managed worktree path points at the project directory: ${worktreeCwd}`);
+      throw new Error(
+        `Managed worktree path points at the project directory: ${worktreeCwd}`,
+      );
     }
 
-    const inside = await execFileAsync("git", ["-C", worktreeCwd, "rev-parse", "--is-inside-work-tree"])
+    const inside = await execFileAsync("git", [
+      "-C",
+      worktreeCwd,
+      "rev-parse",
+      "--is-inside-work-tree",
+    ])
       .then(({ stdout }) => String(stdout).trim())
       .catch(() => "false");
     if (inside !== "true") {
-      throw new Error(`Managed worktree path is not a git worktree: ${worktreeCwd}`);
+      throw new Error(
+        `Managed worktree path is not a git worktree: ${worktreeCwd}`,
+      );
     }
 
-    const { stdout } = await execFileAsync("git", ["-C", projectCwd, "worktree", "list", "--porcelain"]);
+    const { stdout } = await execFileAsync("git", [
+      "-C",
+      projectCwd,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
     const worktreePaths = String(stdout)
       .split("\n")
       .filter((line) => line.startsWith("worktree "))
@@ -287,11 +492,16 @@ export class SessionManager {
       worktreePaths.map((path) => realpath(path).catch(() => path)),
     );
     if (!realWorktreePaths.includes(worktreeRealPath)) {
-      throw new Error(`Managed worktree path is not registered for the project: ${worktreeCwd}`);
+      throw new Error(
+        `Managed worktree path is not registered for the project: ${worktreeCwd}`,
+      );
     }
   }
 
-  #getSessionCwd(sessionId: string, cwd: string | undefined): string | undefined {
+  #getSessionCwd(
+    sessionId: string,
+    cwd: string | undefined,
+  ): string | undefined {
     const existing = this.#sessionCwds.get(sessionId);
     if (existing !== undefined) {
       return existing;

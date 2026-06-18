@@ -242,7 +242,7 @@ async function runUserJourney(browser, scenario) {
       if (
         session.executionMode !== "managed_worktree" ||
         session.executionFolder === projectDir ||
-        !session.executionFolder.includes(".roamcli-worktrees")
+        !session.executionFolder.includes(".roam-runner/worktrees")
       ) {
         throw new Error(
           `desktop session did not use a managed worktree: ${JSON.stringify(session)}`,
@@ -267,6 +267,10 @@ async function runUserJourney(browser, scenario) {
     pass(`${scenario.name}: chat round-trip`);
     await waitForSessionStatus(session.id, "completed");
     if (executionMode === "managed_worktree") {
+      await assertManagedWorktreeGitUi(page, scenario, project, session, {
+        fileName,
+        editedValue,
+      });
       await Promise.allSettled(browserHttpErrorReads);
       if (consoleErrors.length > 0 || browserHttpErrors.length > 0) {
         throw new Error(
@@ -291,6 +295,10 @@ async function runUserJourney(browser, scenario) {
     await expectText(page, "Saved");
     await captureScreenshot(page, scenario, "file-edit-save");
     pass(`${scenario.name}: file browse/edit/save`);
+
+    await assertProjectGitUi(page, scenario, project, fileName);
+    await captureScreenshot(page, scenario, "git-project-diff");
+    pass(`${scenario.name}: project Git tab diff`);
 
     await waitForSessionStatus(session.id, "completed");
     await assertExecApprovals(page, scenario, session.id);
@@ -378,6 +386,130 @@ async function runUserJourney(browser, scenario) {
     );
   } finally {
     await context.close();
+  }
+}
+
+async function assertManagedWorktreeGitUi(
+  page,
+  scenario,
+  project,
+  session,
+  values,
+) {
+  const gitContext = { kind: "session_worktree", sessionId: session.id };
+  await writeFile(
+    resolve(session.executionFolder, values.fileName),
+    `${values.editedValue}\n`,
+    "utf8",
+  );
+
+  await openTab(page, scenario, "git");
+  await expectText(page, "Selected Session");
+  await expectText(page, values.fileName);
+  await expectText(page, "Working tree diff");
+  await waitForGitStatus(gitContext, (status) => !status.clean);
+  await waitForGitDiffReady(page);
+  await assertNoRunnerRequestFailed(page);
+  await captureScreenshot(page, scenario, "git-worktree-diff");
+
+  await clickGitActionAndExpectJob(page, "/v1/git/stage", () =>
+    page.getByRole("button", { name: "Stage", exact: true }).click(),
+  );
+  await waitForGitStatus(gitContext, (status) =>
+    status.groups.some(
+      (group) =>
+        group.id === "staged" &&
+        group.changes.some((change) => change.path === values.fileName),
+    ),
+  );
+
+  await page
+    .locator(".git-commit-box textarea")
+    .fill(`blackbox git ${scenario.name} ${Date.now()}`);
+  await clickGitActionAndExpectJob(page, "/v1/git/commit", () =>
+    page.getByRole("button", { name: "Commit staged" }).click(),
+  );
+  await waitForGitStatus(gitContext, (status) => status.clean);
+  await expectText(page, "Working tree is clean");
+  await assertNoRunnerRequestFailed(page);
+  await captureScreenshot(page, scenario, "git-worktree-commit");
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await clickGitActionAndExpectJob(page, "/v1/git/worktree/remove", () =>
+    page.getByRole("button", { name: "Remove worktree" }).click(),
+  );
+  await waitFor(async () => {
+    const payload = await requestJson(`/v1/sessions/${session.id}`);
+    return typeof payload.session?.worktreeDeletedAt === "string";
+  }, `worktree removal to be persisted for ${session.id}`);
+  await expectText(page, `${project.name} project repository`);
+  await assertNoRunnerRequestFailed(page);
+  await captureScreenshot(page, scenario, "git-worktree-remove");
+  pass(`${scenario.name}: Git worktree stage/commit/remove`);
+}
+
+async function assertProjectGitUi(page, scenario, project, fileName) {
+  const gitContext = { kind: "project", projectId: project.id };
+  await openTab(page, scenario, "git");
+  await expectText(page, "Git");
+  await expectText(page, fileName);
+  await expectText(page, "Working tree diff");
+  await waitForGitStatus(gitContext, (status) => !status.clean);
+  await waitForGitDiffReady(page);
+  await assertNoRunnerRequestFailed(page);
+}
+
+async function waitForGitStatus(gitContext, predicate) {
+  return waitFor(async () => {
+    const payload = await requestJson("/v1/git/status", {
+      method: "POST",
+      body: JSON.stringify(gitContext),
+    });
+    const status = payload.result;
+    return status !== undefined && predicate(status);
+  }, `Git status ${JSON.stringify(gitContext)}`);
+}
+
+async function clickGitActionAndExpectJob(page, path, click) {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (candidate) =>
+        candidate.request().method() === "POST" &&
+        new URL(candidate.url()).pathname === path,
+      { timeout: timeoutMs },
+    ),
+    click(),
+  ]);
+  const text = await response.text();
+  const payload = text.length > 0 ? JSON.parse(text) : {};
+  if (!response.ok()) {
+    throw new Error(
+      `${path} failed with ${response.status()} ${response.statusText()}: ${JSON.stringify(payload)}`,
+    );
+  }
+  if (payload.job?.status === "failed") {
+    throw new Error(
+      `${path} returned failed job: ${payload.job.errorSummary ?? JSON.stringify(payload.job)}`,
+    );
+  }
+  return payload.job;
+}
+
+async function waitForGitDiffReady(page) {
+  await waitFor(async () => {
+    if (await hasVisibleText(page, "Loading diff...")) return false;
+    if (await hasVisibleText(page, "Loading...")) return false;
+    const renderedLines = await page
+      .locator(".git-diff-pane .view-line")
+      .count()
+      .catch(() => 0);
+    return renderedLines > 0;
+  }, "Git Monaco diff to render");
+}
+
+async function assertNoRunnerRequestFailed(page) {
+  if (await hasVisibleText(page, "Runner request failed")) {
+    throw new Error("Runner request failed notification is visible");
   }
 }
 
@@ -768,7 +900,14 @@ async function sendChatMessageUntil(
 
 async function openTab(page, scenario, tab) {
   if (scenario.mobile) {
-    const label = tab === "chat" ? "对话" : tab === "files" ? "文件" : "审批";
+    const label =
+      tab === "chat"
+        ? "对话"
+        : tab === "files"
+          ? "文件"
+          : tab === "git"
+            ? "Git"
+            : "审批";
     await page
       .getByRole("navigation", { name: "Mobile tabs" })
       .getByRole("button", { name: label })

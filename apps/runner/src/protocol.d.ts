@@ -13,9 +13,33 @@ declare module "@roamcli/shared/protocol" {
   export type ApprovalKind = "execCommand" | "applyPatch";
   export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
   export type ArtifactKind = "patch" | "file" | "log";
+  export type GitDiffMode =
+    | "working_tree"
+    | "staged"
+    | "commit"
+    | "ref_compare";
+  export type GitChangeStatus =
+    | "modified"
+    | "added"
+    | "deleted"
+    | "renamed"
+    | "copied"
+    | "untracked"
+    | "ignored"
+    | "conflicted"
+    | "submodule";
+  export type GitJobStatus =
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled";
 
   export interface ParserSchema<T> {
     parse(value: unknown): T;
+    safeParse(value: unknown):
+      | { success: true; data: T }
+      | { success: false; error: Error };
   }
 
   export const RunnerProfileSchema: ParserSchema<RunnerProfile>;
@@ -37,6 +61,7 @@ declare module "@roamcli/shared/protocol" {
     displayName: string;
     hostname: string;
     workspaceRoot: string;
+    dataDir?: string;
     profile: RunnerProfile;
     publicKey: string;
     capabilities: RunnerCapability[];
@@ -53,6 +78,10 @@ declare module "@roamcli/shared/protocol" {
     executionMode: ExecutionMode;
     executionFolder: string;
     cwd: string;
+    gitBranchName?: string;
+    gitBaseRef?: string;
+    gitBaseSha?: string;
+    worktreeDeletedAt?: string;
     agentThreadId?: string;
     archivedAt?: string;
     createdAt: string;
@@ -133,6 +162,135 @@ declare module "@roamcli/shared/protocol" {
     rejected: string[];
   }
 
+  export type GitContextRef =
+    | { kind: "project"; projectId: string }
+    | { kind: "session_worktree"; sessionId: string };
+
+  export interface GitChange {
+    path: string;
+    oldPath?: string;
+    status: GitChangeStatus;
+    staged: boolean;
+  }
+
+  export interface GitChangeGroup {
+    id:
+      | "staged"
+      | "changes"
+      | "conflicts"
+      | "untracked"
+      | "ignored"
+      | "submodules";
+    changes: GitChange[];
+  }
+
+  export interface GitStatus {
+    requestId: string;
+    context: GitContextRef;
+    branch?: string;
+    detached: boolean;
+    headSha?: string;
+    upstream?: string;
+    ahead: number;
+    behind: number;
+    clean: boolean;
+    unborn: boolean;
+    groups: GitChangeGroup[];
+  }
+
+  export interface GitFileDiff {
+    requestId: string;
+    context: GitContextRef;
+    path: string;
+    oldPath?: string;
+    mode: GitDiffMode;
+    oldRef?: string;
+    newRef?: string;
+    oldContent: string;
+    newContent: string;
+    language?: string;
+    binary: boolean;
+    tooLarge: boolean;
+  }
+
+  export interface GitBlameRange {
+    startLine: number;
+    endLine: number;
+    commitSha: string;
+  }
+
+  export interface GitBlameCommit {
+    sha: string;
+    authorName: string;
+    authorEmail?: string;
+    authoredAt?: string;
+    summary: string;
+  }
+
+  export interface GitBlame {
+    requestId: string;
+    context: GitContextRef;
+    path: string;
+    ref?: string;
+    ranges: GitBlameRange[];
+    commits: Record<string, GitBlameCommit>;
+  }
+
+  export interface GitCommitSummary {
+    sha: string;
+    parents: string[];
+    authorName: string;
+    authoredAt?: string;
+    committerName: string;
+    committedAt?: string;
+    summary: string;
+    refs: string[];
+    changedFiles?: number;
+    insertions?: number;
+    deletions?: number;
+  }
+
+  export interface GitCommitPage {
+    requestId: string;
+    context: GitContextRef;
+    commits: GitCommitSummary[];
+    nextCursor?: string;
+  }
+
+  export interface GitBranch {
+    name: string;
+    current: boolean;
+    remote: boolean;
+    upstream?: string;
+  }
+
+  export interface GitBranchList {
+    requestId: string;
+    context: GitContextRef;
+    branches: GitBranch[];
+  }
+
+  export interface GitJob {
+    id: string;
+    projectId: string;
+    sessionId?: string;
+    contextKind: "project" | "session_worktree";
+    operation: string;
+    status: GitJobStatus;
+    createdAt: string;
+    startedAt?: string;
+    finishedAt?: string;
+    errorCode?: string;
+    errorSummary?: string;
+  }
+
+  export interface GitCommandBase {
+    requestId: string;
+    projectId: string;
+    context: GitContextRef;
+    cwd: string;
+  }
+
   export type RunnerCommand =
     | {
         type: "startSession";
@@ -175,6 +333,33 @@ declare module "@roamcli/shared/protocol" {
         signedAt: string;
         signature: string;
       }
+    | ({ type: "gitStatus" } & GitCommandBase)
+    | ({
+        type: "gitFileDiff";
+        path: string;
+        mode?: GitDiffMode;
+        oldRef?: string;
+        newRef?: string;
+      } & GitCommandBase)
+    | ({ type: "gitBlame"; path: string; ref?: string } & GitCommandBase)
+    | ({
+        type: "gitCommitPage";
+        ref?: string;
+        path?: string;
+        cursor?: string;
+        limit?: number;
+      } & GitCommandBase)
+    | ({ type: "gitBranchList" } & GitCommandBase)
+    | ({ type: "gitInit" } & GitCommandBase)
+    | ({ type: "gitStagePaths"; paths: string[] } & GitCommandBase)
+    | ({ type: "gitUnstagePaths"; paths: string[] } & GitCommandBase)
+    | ({ type: "gitDiscardPaths"; paths: string[] } & GitCommandBase)
+    | ({ type: "gitCommit"; message: string } & GitCommandBase)
+    | ({
+        type: "gitRemoteOperation";
+        operation: "fetch" | "pull" | "push";
+      } & GitCommandBase)
+    | ({ type: "gitRemoveWorktree" } & GitCommandBase)
     | {
         type: "resolveApproval";
         approvalId: string;
@@ -203,6 +388,12 @@ declare module "@roamcli/shared/protocol" {
     | { type: "fileContentResult"; result: FileContentResult }
     | { type: "fileWriteResult"; result: FileWriteResult }
     | { type: "patchApplyResult"; result: PatchApplyResult }
+    | { type: "gitStatusResult"; result: GitStatus }
+    | { type: "gitFileDiffResult"; result: GitFileDiff }
+    | { type: "gitBlameResult"; result: GitBlame }
+    | { type: "gitCommitPageResult"; result: GitCommitPage }
+    | { type: "gitBranchListResult"; result: GitBranchList }
+    | { type: "gitJobResult"; job: GitJob }
     | { type: "approvalRequested"; approval: Approval }
     | { type: "artifactCreated"; artifact: Artifact }
     | {

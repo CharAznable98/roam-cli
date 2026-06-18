@@ -1,9 +1,18 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   ApiApplyPatchSchema,
   ApiApprovalResponseSchema,
   ApiCreateProjectSchema,
   ApiCreateSessionSchema,
+  ApiGitBlameQuerySchema,
+  ApiGitCommitSchema,
+  ApiGitContextSchema,
+  ApiGitFileDiffQuerySchema,
+  ApiGitHistoryQuerySchema,
+  ApiGitInitSchema,
+  ApiGitPathsSchema,
+  ApiGitRemoteOperationSchema,
+  ApiGitRemoveWorktreeSchema,
   ApiUpdateProjectSchema,
   ApiUpdateSessionSchema,
   ApiWriteFileSchema,
@@ -13,6 +22,7 @@ import { newId } from "../infra/ids.js";
 import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js";
 import type { AppContext } from "../server/context.js";
 import { sendRunnerRpcError } from "./errors.js";
+import type { ServiceResult } from "../modules/result.js";
 import {
   ApprovalParamsSchema,
   FileContentQuerySchema,
@@ -29,6 +39,7 @@ export async function registerApiRoutes(
   registerProjectRoutes(app, context);
   registerSessionRoutes(app, context);
   registerWorkspaceRoutes(app, context);
+  registerGitRoutes(app, context);
   registerApprovalRoutes(app, context);
   registerArtifactRoutes(app, context);
 }
@@ -259,7 +270,7 @@ function registerWorkspaceRoutes(
         parsed.data,
       );
       if (!result.ok) {
-        return reply.code(404).send({ error: "session_not_found" });
+        return sendServiceError(reply, result);
       }
       return result.value;
     } catch (error) {
@@ -282,7 +293,7 @@ function registerWorkspaceRoutes(
         parsed.data,
       );
       if (!result.ok) {
-        return reply.code(404).send({ error: "session_not_found" });
+        return sendServiceError(reply, result);
       }
       return result.value;
     } catch (error) {
@@ -305,7 +316,7 @@ function registerWorkspaceRoutes(
         parsed.data,
       );
       if (!result.ok) {
-        return reply.code(404).send({ error: "session_not_found" });
+        return sendServiceError(reply, result);
       }
       return result.value;
     } catch (error) {
@@ -343,6 +354,233 @@ function registerWorkspaceRoutes(
   });
 }
 
+function registerGitRoutes(app: FastifyInstance, context: AppContext): void {
+  app.post("/v1/git/status", async (request, reply) => {
+    const parsed = ApiGitContextSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.status(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/diff", async (request, reply) => {
+    const parsed = ApiGitFileDiffQuerySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.fileDiff(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/blame", async (request, reply) => {
+    const parsed = ApiGitBlameQuerySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.blame(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/history", async (request, reply) => {
+    const parsed = ApiGitHistoryQuerySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.history(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/branches", async (request, reply) => {
+    const parsed = ApiGitContextSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.branches(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/stage", async (request, reply) => {
+    const parsed = ApiGitPathsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.stage(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/init", async (request, reply) => {
+    const parsed = ApiGitInitSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.init(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/unstage", async (request, reply) => {
+    const parsed = ApiGitPathsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.unstage(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/discard", async (request, reply) => {
+    const parsed = ApiGitPathsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.discard(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/commit", async (request, reply) => {
+    const parsed = ApiGitCommitSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.commit(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/remote", async (request, reply) => {
+    const parsed = ApiGitRemoteOperationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.remote(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/worktree/remove", async (request, reply) => {
+    const parsed = ApiGitRemoveWorktreeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.removeWorktree(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.get("/v1/projects/:id/git/jobs", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const result = context.services.git.jobs(params.id);
+    if (!result.ok) {
+      return sendServiceError(reply, result);
+    }
+    return result.value;
+  });
+}
+
 function registerApprovalRoutes(
   app: FastifyInstance,
   context: AppContext,
@@ -376,6 +614,26 @@ function registerApprovalRoutes(
       return reply.code(400).send({ error: result.error });
     }
     return result.value;
+  });
+}
+
+function sendServiceError(
+  reply: FastifyReply,
+  result: Exclude<ServiceResult<unknown>, { ok: true }>,
+) {
+  if (
+    result.error === "project_not_found" ||
+    result.error === "session_not_found"
+  ) {
+    return reply.code(404).send({ error: result.error });
+  }
+  if (result.error === "worktree_not_available") {
+    return reply.code(409).send({ error: result.error });
+  }
+  return reply.code(400).send({
+    error: result.error,
+    ...(result.message ? { message: result.message } : {}),
+    ...(result.code ? { code: result.code } : {}),
   });
 }
 

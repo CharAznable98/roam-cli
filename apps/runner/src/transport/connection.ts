@@ -108,7 +108,15 @@ export class RunnerConnection {
   async #onMessage(data: unknown): Promise<void> {
     const text = typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
     const parsed: unknown = JSON.parse(text);
-    const command = RunnerCommandSchema.parse(parsed);
+    const commandResult = RunnerCommandSchema.safeParse(parsed);
+    if (!commandResult.success) {
+      if (isServerErrorFrame(parsed)) {
+        await this.#options.audit.append("runner_ignored_server_error", parsed);
+        return;
+      }
+      throw commandResult.error;
+    }
+    const command = commandResult.data;
     await this.#options.audit.append("runner_command", command);
     await this.#options.onCommand(command);
   }
@@ -146,6 +154,15 @@ function createGlobalWebSocket(url: string): WebSocketLike {
     throw new Error("Global WebSocket is unavailable in this Node runtime");
   }
   return new WebSocketCtor(url) as WebSocketLike;
+}
+
+function isServerErrorFrame(value: unknown): value is { type: "error" } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "type" in value &&
+    value.type === "error"
+  );
 }
 
 function sleep(ms: number): Promise<void> {

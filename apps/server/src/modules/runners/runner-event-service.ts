@@ -101,6 +101,43 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "gitStatusResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:status", result: event.result });
+      return;
+    }
+
+    if (event.type === "gitFileDiffResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:diff", result: event.result });
+      return;
+    }
+
+    if (event.type === "gitBlameResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:blame", result: event.result });
+      return;
+    }
+
+    if (event.type === "gitCommitPageResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:history", result: event.result });
+      return;
+    }
+
+    if (event.type === "gitBranchListResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:branches", result: event.result });
+      return;
+    }
+
+    if (event.type === "gitJobResult") {
+      this.store.upsertGitJob(event.job);
+      this.rpc.resolveRunnerResponse(event.job);
+      this.hub.broadcast({ type: "git:job", job: event.job });
+      return;
+    }
+
     if (event.type === "approvalRequested") {
       this.store.upsertApproval(event.approval);
       const session = this.store.updateSessionStatus(
@@ -140,6 +177,10 @@ export class RunnerEventService {
       );
     }
 
+    if (!event.requestId && !event.sessionId && isInternalRunnerError(event)) {
+      return;
+    }
+
     this.hub.broadcast({
       type: "error",
       message: event.message,
@@ -168,4 +209,10 @@ export class RunnerEventService {
       }
     }
   }
+}
+
+function isInternalRunnerError(
+  event: Extract<RunnerEvent, { type: "error" }>,
+): boolean {
+  return event.code === "RUNNER_CONNECTION_ERROR";
 }

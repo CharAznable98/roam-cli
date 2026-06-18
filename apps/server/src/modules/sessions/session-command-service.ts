@@ -137,6 +137,9 @@ export class SessionCommandService {
       ...(runner?.workspaceRoot === undefined
         ? {}
         : { managedWorktreeBaseDirectory: runner.workspaceRoot }),
+      ...(runner?.dataDir === undefined
+        ? {}
+        : { managedWorktreeDataDirectory: runner.dataDir }),
     });
     const message = createUserMessage(session.id, input.prompt);
     this.store.createSession(session);

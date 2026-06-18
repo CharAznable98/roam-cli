@@ -2,6 +2,15 @@ import type {
   AgentKind,
   ApiCreateProject,
   ApiCreateSession,
+  ApiGitBlameQuery,
+  ApiGitCommit,
+  ApiGitContext,
+  ApiGitFileDiffQuery,
+  ApiGitHistoryQuery,
+  ApiGitInit,
+  ApiGitPaths,
+  ApiGitRemoteOperation,
+  ApiGitRemoveWorktree,
   ApiUpdateProject,
   ApiUpdateSession,
   Approval,
@@ -10,6 +19,12 @@ import type {
   FileContentResult,
   FileNode,
   FileWriteResult,
+  GitBlame,
+  GitBranchList,
+  GitCommitPage,
+  GitFileDiff,
+  GitJob,
+  GitStatus,
   PatchApplyResult,
   Project,
   RunnerRegistration,
@@ -36,6 +51,8 @@ export interface RoamApiClient {
     projectId: string;
     agent: AgentKind;
     executionMode?: ExecutionMode;
+    gitBaseRef?: string;
+    gitBranchName?: string;
     prompt: string;
     title?: string;
   }): Promise<Session>;
@@ -56,6 +73,19 @@ export interface RoamApiClient {
     content: string,
   ): Promise<FileWriteResult>;
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
+  fetchGitStatus(context: ApiGitContext): Promise<GitStatus>;
+  fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
+  fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
+  fetchGitHistory(query: ApiGitHistoryQuery): Promise<GitCommitPage>;
+  fetchGitBranches(context: ApiGitContext): Promise<GitBranchList>;
+  fetchGitJobs(projectId: string): Promise<GitJob[]>;
+  initGitRepository(input: ApiGitInit): Promise<GitJob>;
+  stageGitPaths(input: ApiGitPaths): Promise<GitJob>;
+  unstageGitPaths(input: ApiGitPaths): Promise<GitJob>;
+  discardGitPaths(input: ApiGitPaths): Promise<GitJob>;
+  commitGitChanges(input: ApiGitCommit): Promise<GitJob>;
+  runGitRemoteOperation(input: ApiGitRemoteOperation): Promise<GitJob>;
+  removeGitWorktree(input: ApiGitRemoveWorktree): Promise<GitJob>;
   resolveApproval(approvalId: string, approved: boolean): Promise<Approval>;
   connectStream(
     onEvent: (event: ServerEvent) => void,
@@ -105,6 +135,34 @@ interface FileWriteResponse {
 
 interface PatchApplyResponse {
   result: PatchApplyResult;
+}
+
+interface GitStatusResponse {
+  result: GitStatus;
+}
+
+interface GitDiffResponse {
+  result: GitFileDiff;
+}
+
+interface GitBlameResponse {
+  result: GitBlame;
+}
+
+interface GitHistoryResponse {
+  result: GitCommitPage;
+}
+
+interface GitBranchesResponse {
+  result: GitBranchList;
+}
+
+interface GitJobResponse {
+  job: GitJob;
+}
+
+interface GitJobsResponse {
+  jobs: GitJob[];
 }
 
 export function createRoamApiClient(
@@ -210,6 +268,12 @@ export function createRoamApiClient(
             projectId: input.projectId,
             agent: input.agent,
             executionMode: input.executionMode ?? "direct",
+            ...(input.gitBaseRef === undefined
+              ? {}
+              : { gitBaseRef: input.gitBaseRef }),
+            ...(input.gitBranchName === undefined
+              ? {}
+              : { gitBranchName: input.gitBranchName }),
             prompt: input.prompt,
             title: input.title,
           }
@@ -217,6 +281,12 @@ export function createRoamApiClient(
             projectId: input.projectId,
             agent: input.agent,
             executionMode: input.executionMode ?? "direct",
+            ...(input.gitBaseRef === undefined
+              ? {}
+              : { gitBaseRef: input.gitBaseRef }),
+            ...(input.gitBranchName === undefined
+              ? {}
+              : { gitBranchName: input.gitBranchName }),
             prompt: input.prompt,
           };
       const { session } = await request<CreateSessionResponse>("/v1/sessions", {
@@ -291,6 +361,112 @@ export function createRoamApiClient(
         },
       );
       return result;
+    },
+
+    async fetchGitStatus(context) {
+      const { result } = await request<GitStatusResponse>("/v1/git/status", {
+        method: "POST",
+        body: JSON.stringify(context),
+      });
+      return result;
+    },
+
+    async fetchGitDiff(query) {
+      const { result } = await request<GitDiffResponse>("/v1/git/diff", {
+        method: "POST",
+        body: JSON.stringify(query),
+      });
+      return result;
+    },
+
+    async fetchGitBlame(query) {
+      const { result } = await request<GitBlameResponse>("/v1/git/blame", {
+        method: "POST",
+        body: JSON.stringify(query),
+      });
+      return result;
+    },
+
+    async fetchGitHistory(query) {
+      const { result } = await request<GitHistoryResponse>("/v1/git/history", {
+        method: "POST",
+        body: JSON.stringify(query),
+      });
+      return result;
+    },
+
+    async fetchGitBranches(context) {
+      const { result } = await request<GitBranchesResponse>(
+        "/v1/git/branches",
+        {
+          method: "POST",
+          body: JSON.stringify(context),
+        },
+      );
+      return result;
+    },
+
+    async fetchGitJobs(projectId) {
+      const { jobs } = await request<GitJobsResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/git/jobs`,
+      );
+      return jobs;
+    },
+
+    async initGitRepository(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/init", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async stageGitPaths(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/stage", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async unstageGitPaths(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/unstage", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async discardGitPaths(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/discard", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async commitGitChanges(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/commit", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async runGitRemoteOperation(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/remote", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
+    },
+
+    async removeGitWorktree(input) {
+      const { job } = await request<GitJobResponse>("/v1/git/worktree/remove", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return job;
     },
 
     async resolveApproval(approvalId, approved) {

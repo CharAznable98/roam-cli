@@ -1,4 +1,4 @@
-import { Bell, Files, MessageSquare } from "lucide-react";
+import { Bell, Files, GitBranch, MessageSquare } from "lucide-react";
 import type { WorkspaceTab } from "./navigation";
 
 const tabs: Array<{
@@ -8,6 +8,7 @@ const tabs: Array<{
 }> = [
   { id: "chat", label: "对话", icon: MessageSquare },
   { id: "files", label: "文件", icon: Files },
+  { id: "git", label: "Git", icon: GitBranch },
   { id: "approvals", label: "审批", icon: Bell },
 ];
 
