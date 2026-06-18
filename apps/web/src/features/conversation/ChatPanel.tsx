@@ -125,7 +125,7 @@ export function ChatPanel({
   const handleComposerKeyDown = (
     event: KeyboardEvent<HTMLTextAreaElement>,
   ) => {
-    if (event.key !== "Enter" || !event.metaKey) {
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
       return;
     }
 
@@ -346,7 +346,7 @@ export function ChatPanel({
           rows={2}
           placeholder={
             canSend
-              ? "Message the active session, Cmd+Enter to send"
+              ? "Message the active session, Cmd/Ctrl+Enter to send"
               : "Stream is reconnecting"
           }
           aria-label="Chat composer"

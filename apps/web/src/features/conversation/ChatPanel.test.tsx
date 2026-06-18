@@ -27,7 +27,7 @@ describe("ChatPanel", () => {
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     expect(composer).toHaveAttribute(
       "placeholder",
-      "Message the active session, Cmd+Enter to send",
+      "Message the active session, Cmd/Ctrl+Enter to send",
     );
     fireEvent.change(composer, { target: { value: "  run tests  " } });
     fireEvent.keyDown(composer, {
@@ -37,6 +37,22 @@ describe("ChatPanel", () => {
     });
 
     expect(onSend).toHaveBeenCalledWith("run tests");
+    expect(composer).toHaveValue("");
+  });
+
+  it("submits the composer with Ctrl+Enter", () => {
+    const onSend = vi.fn();
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "  run lint  " } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+
+    expect(onSend).toHaveBeenCalledWith("run lint");
     expect(composer).toHaveValue("");
   });
 
