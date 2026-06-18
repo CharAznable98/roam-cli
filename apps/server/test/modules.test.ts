@@ -145,17 +145,23 @@ describe("SessionCommandService", () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("guards runner availability and agent support before starting sessions", () => {
+  it("guards runner availability and agent support before starting sessions", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(
       store,
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(store, hub, approvals);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      new RunnerRpcClient(hub),
+      100,
+    );
     store.createProject(projectRecord());
 
-    const offline = service.createSession({
+    const offline = await service.createSession({
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",
@@ -164,7 +170,7 @@ describe("SessionCommandService", () => {
 
     const runnerMessages: RunnerCommand[] = [];
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
-    const unsupported = service.createSession({
+    const unsupported = await service.createSession({
       projectId: "project-1",
       agent: "gemini",
       prompt: "hello",
@@ -174,7 +180,7 @@ describe("SessionCommandService", () => {
       error: "unsupported_agent",
     });
 
-    const created = service.createSession({
+    const created = await service.createSession({
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",
@@ -193,18 +199,132 @@ describe("SessionCommandService", () => {
     });
   });
 
-  it("rolls back session creation when startSession cannot be delivered", () => {
+  it("stores attachment metadata only after the runner writes image bytes", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "describe this image",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => {
+      expect(runnerMessages[0]).toMatchObject({
+        type: "writeSessionAttachments",
+      });
+    });
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write command was not sent");
+    }
+    const runnerAttachment = runnerAttachmentRef(writeCommand.sessionId);
+    rpc.resolveRunnerResponse({
+      requestId: writeCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      attachments: [runnerAttachment],
+    });
+
+    const created = await pending;
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("session with image was not created");
+    }
+    expect(created.value.attachments).toHaveLength(1);
+    expect(created.value.attachments[0]).not.toHaveProperty(
+      "runnerStoragePath",
+    );
+    expect(store.listMessages(created.value.session.id)).toMatchObject([
+      { role: "user", content: "describe this image" },
+    ]);
+    const publicAttachments = store.listMessageAttachments(
+      created.value.session.id,
+    );
+    expect(publicAttachments).toEqual(created.value.attachments);
+    expect(publicAttachments[0]).not.toHaveProperty("runnerStoragePath");
+    expect(
+      store.listStoredMessageAttachments(created.value.session.id)[0],
+    ).toMatchObject({
+      runnerStoragePath: runnerAttachment.runnerStoragePath,
+    });
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "startSession",
+      prompt: "describe this image",
+      attachments: [runnerAttachment],
+    });
+  });
+
+  it("does not persist sessions or messages when runner image writes fail", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "describe this image",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => {
+      expect(runnerMessages[0]).toMatchObject({
+        type: "writeSessionAttachments",
+      });
+    });
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write command was not sent");
+    }
+    rpc.rejectRunnerResponse(
+      writeCommand.requestId,
+      new RunnerRpcError("disk full", "runner_error", "ATTACHMENT_ERROR"),
+    );
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "attachment_write_failed",
+    });
+    expect(store.listSessions()).toEqual([]);
+    expect(store.listMessages(writeCommand.sessionId)).toEqual([]);
+    expect(store.listMessageAttachments(writeCommand.sessionId)).toEqual([]);
+    expect(runnerMessages).toHaveLength(1);
+  });
+
+  it("rolls back session creation when startSession cannot be delivered", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(
       store,
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(store, hub, approvals);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      new RunnerRpcClient(hub),
+      100,
+    );
     store.createProject(projectRecord());
     hub.registerRunner(runnerRegistration(), fakeSocket<RunnerCommand>([], 3));
 
-    const result = service.createSession({
+    const result = await service.createSession({
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",
@@ -214,19 +334,25 @@ describe("SessionCommandService", () => {
     expect(store.listSessions()).toEqual([]);
   });
 
-  it("creates managed worktree sessions under the owning project directory", () => {
+  it("creates managed worktree sessions under the owning project directory", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(
       store,
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(store, hub, approvals);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      new RunnerRpcClient(hub),
+      100,
+    );
     const runnerMessages: RunnerCommand[] = [];
     store.createProject(projectRecord());
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
 
-    const result = service.createSession({
+    const result = await service.createSession({
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",
@@ -587,6 +713,38 @@ describe("RunnerEventService", () => {
       code: "runner_error",
       runnerCode: "SESSION_NOT_FOUND",
     });
+    expect(store.getSession(session.id)?.status).toBe("waiting_approval");
+
+    const missingAttachment = rpc.requestRunner(
+      "runner-1",
+      {
+        type: "readSessionAttachment",
+        requestId: "request-attachment",
+        sessionId: session.id,
+        attachmentId: "attachment-1",
+        runnerStoragePath: "attachments/session-1/attachment-1/screen.png",
+        maxBytes: 1024,
+      },
+      100,
+    );
+    service.handle({
+      type: "error",
+      requestId: "request-attachment",
+      sessionId: session.id,
+      message: "ENOENT: no such file or directory",
+      code: "ATTACHMENT_READ_ERROR",
+    });
+    await expect(missingAttachment).rejects.toMatchObject({
+      code: "runner_error",
+      runnerCode: "ATTACHMENT_READ_ERROR",
+    });
+    expect(store.getSession(session.id)?.status).toBe("waiting_approval");
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: "ENOENT: no such file or directory",
+      }),
+    );
 
     service.handle({
       type: "error",
@@ -688,6 +846,43 @@ function runnerRegistration(): RunnerRegistration {
       },
     ],
   };
+}
+
+function imageRunnerRegistration(): RunnerRegistration {
+  const runner = runnerRegistration();
+  return {
+    ...runner,
+    capabilities: [
+      {
+        ...runner.capabilities[0]!,
+        supportsImages: true,
+        supportedImageMimeTypes: ["image/png"],
+        maxImagesPerTurn: 2,
+        maxImageBytes: 1024,
+      },
+    ],
+  };
+}
+
+function imageUpload() {
+  return {
+    name: "screen.png",
+    mimeType: "image/png",
+    size: 5,
+    contentBase64: "aGVsbG8=",
+  };
+}
+
+function runnerAttachmentRef(sessionId: string) {
+  return {
+    id: "attachment-1",
+    kind: "image",
+    name: "screen.png",
+    mimeType: "image/png",
+    size: 5,
+    sha256: "0123456789abcdef0123456789abcdef",
+    runnerStoragePath: `attachments/${sessionId}/attachment-1/screen.png`,
+  } as const;
 }
 
 function projectRecord() {

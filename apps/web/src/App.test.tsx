@@ -410,6 +410,24 @@ describe("App", () => {
             artifacts: [patchArtifact],
           });
         }
+        if (
+          requestUrl.pathname === "/v1/sessions/session-1/messages" &&
+          init?.method === "POST"
+        ) {
+          const body = JSON.parse(String(init.body ?? "{}")) as {
+            content?: string;
+          };
+          const message = {
+            id: "message-sent",
+            sessionId: "session-1",
+            role: "user",
+            content: body.content ?? "",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:02.000Z",
+          };
+          sessionDetailMessages = [...sessionDetailMessages, message];
+          return jsonResponse({ message, attachments: [] }, 201);
+        }
         if (requestUrl.pathname === "/v1/sessions/session-1/files") {
           return jsonResponse({
             root: {
@@ -723,7 +741,9 @@ describe("App", () => {
         ).length,
       ).toBeGreaterThanOrEqual(2),
     );
-    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(
         toolsPanel.querySelector(".git-surface .git-diff-pane h3"),
@@ -767,7 +787,9 @@ describe("App", () => {
       screen.getByRole("complementary", { name: "Workspace tools" }),
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
-    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
 
     const staleWorktreeStatus = deferred<Response>();
     deferredGitStatus.set("session:session-1", staleWorktreeStatus);
@@ -785,7 +807,9 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
-    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
 
     await act(async () => {
       staleWorktreeStatus.resolve(
@@ -1235,11 +1259,20 @@ describe("App", () => {
       ).toHaveValue("export const unsaved = true;\n");
       fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-      expect(JSON.parse(sockets[2]?.sent.at(-1) ?? "{}")).toMatchObject({
-        type: "userMessage",
-        sessionId: "session-1",
-        content: "draft before reconnect",
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
       });
+      const messageCall = fetchCalls.find(
+        (call) =>
+          new URL(call.url).pathname === "/v1/sessions/session-1/messages",
+      );
+      expect(JSON.parse(String(messageCall?.init?.body ?? "{}"))).toMatchObject(
+        {
+          content: "draft before reconnect",
+          attachments: [],
+        },
+      );
     } finally {
       vi.useRealTimers();
     }

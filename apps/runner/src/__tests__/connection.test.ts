@@ -131,9 +131,9 @@ describe("RunnerConnection", () => {
     connection.stop();
 
     expect(handled).toEqual([]);
-    expect(socket.sent.map((item) => JSON.parse(item) as { type: string })).toEqual([
-      expect.objectContaining({ type: "registered" }),
-    ]);
+    expect(
+      socket.sent.map((item) => JSON.parse(item) as { type: string }),
+    ).toEqual([expect.objectContaining({ type: "registered" })]);
     await expect(started).resolves.toBeInstanceOf(Error);
   });
 });
@@ -154,6 +154,10 @@ function testRegistration(workspaceRoot: string): RunnerRegistration {
         args: [],
         parser: "codex-json",
         supportsResume: true,
+        supportsImages: false,
+        supportedImageMimeTypes: [],
+        maxImagesPerTurn: 0,
+        maxImageBytes: 10 * 1024 * 1024,
         pluginName: "@roamcli/agent-codex",
         pluginVersion: "1.1.0",
       },

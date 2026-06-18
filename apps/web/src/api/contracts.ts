@@ -2,6 +2,7 @@ import type {
   Approval,
   Artifact,
   Message,
+  MessageAttachment,
   Project,
   RunnerRegistration,
   Session,
@@ -11,6 +12,7 @@ import type { UiMessage } from "../features/conversation/model";
 export interface SessionDetailPayload {
   session: Session;
   messages: Message[];
+  attachments: MessageAttachment[];
   approvals: Approval[];
   artifacts: Artifact[];
 }
@@ -20,6 +22,7 @@ export interface InitialRemoteState {
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];
+  messageAttachments: MessageAttachment[];
   approvals: Approval[];
   artifacts: Artifact[];
 }

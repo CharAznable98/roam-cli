@@ -13,6 +13,7 @@ import type {
   GitJob,
   GitJobStatus,
   Message,
+  MessageAttachment,
   Project,
   RunnerRegistration,
   Session,
@@ -60,6 +61,22 @@ interface MessageRow {
   created_at: string;
 }
 
+interface MessageAttachmentRow {
+  id: string;
+  session_id: string;
+  message_id: string;
+  runner_id: string;
+  kind: "image";
+  name: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  runner_storage_path: string;
+  status: "available" | "deleted";
+  created_at: string;
+  deleted_at: string | null;
+}
+
 interface ApprovalRow {
   id: string;
   session_id: string;
@@ -105,6 +122,10 @@ interface GitJobRow {
   error_code: string | null;
   error_summary: string | null;
 }
+
+export type StoredMessageAttachment = MessageAttachment & {
+  runnerStoragePath: string;
+};
 
 export class ServerStore {
   readonly dbPath: string;
@@ -399,6 +420,75 @@ export class ServerStore {
     return rows.map(toMessage);
   }
 
+  addMessageAttachments(
+    attachments: readonly StoredMessageAttachment[],
+  ): StoredMessageAttachment[] {
+    const insert = this.db.prepare(
+      `INSERT INTO message_attachments (id, session_id, message_id, runner_id, kind, name, mime_type, size, sha256, runner_storage_path, status, created_at, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         status = excluded.status,
+         deleted_at = excluded.deleted_at`,
+    );
+    for (const attachment of attachments) {
+      insert.run(
+        attachment.id,
+        attachment.sessionId,
+        attachment.messageId,
+        attachment.runnerId,
+        attachment.kind,
+        attachment.name,
+        attachment.mimeType,
+        attachment.size,
+        attachment.sha256,
+        attachment.runnerStoragePath,
+        attachment.status,
+        attachment.createdAt,
+        attachment.deletedAt ?? null,
+      );
+    }
+    return [...attachments];
+  }
+
+  listMessageAttachments(sessionId: string): MessageAttachment[] {
+    return this.listStoredMessageAttachments(sessionId).map(
+      toPublicMessageAttachment,
+    );
+  }
+
+  listStoredMessageAttachments(sessionId: string): StoredMessageAttachment[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM message_attachments WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(sessionId) as unknown as MessageAttachmentRow[];
+    return rows.map(toStoredMessageAttachment);
+  }
+
+  getStoredMessageAttachment(
+    sessionId: string,
+    attachmentId: string,
+  ): StoredMessageAttachment | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM message_attachments WHERE session_id = ? AND id = ?",
+      )
+      .get(sessionId, attachmentId) as MessageAttachmentRow | undefined;
+    return row ? toStoredMessageAttachment(row) : undefined;
+  }
+
+  markSessionAttachmentsDeleted(
+    sessionId: string,
+    deletedAt: string,
+  ): StoredMessageAttachment[] {
+    this.db
+      .prepare(
+        "UPDATE message_attachments SET status = 'deleted', deleted_at = ? WHERE session_id = ? AND status <> 'deleted'",
+      )
+      .run(deletedAt, sessionId);
+    return this.listStoredMessageAttachments(sessionId);
+  }
+
   upsertApproval(approval: Approval): Approval {
     this.db
       .prepare(
@@ -604,6 +694,24 @@ export class ServerStore {
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS message_attachments (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        runner_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        runner_storage_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT,
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -734,6 +842,45 @@ function toMessage(row: MessageRow): Message {
     content: row.content,
     encrypted: Boolean(row.encrypted),
     createdAt: row.created_at,
+  };
+}
+
+function toStoredMessageAttachment(
+  row: MessageAttachmentRow,
+): StoredMessageAttachment {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    messageId: row.message_id,
+    runnerId: row.runner_id,
+    kind: row.kind,
+    name: row.name,
+    mimeType: row.mime_type,
+    size: row.size,
+    sha256: row.sha256,
+    runnerStoragePath: row.runner_storage_path,
+    status: row.status,
+    createdAt: row.created_at,
+    ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
+  };
+}
+
+function toPublicMessageAttachment(
+  attachment: StoredMessageAttachment,
+): MessageAttachment {
+  return {
+    id: attachment.id,
+    sessionId: attachment.sessionId,
+    messageId: attachment.messageId,
+    runnerId: attachment.runnerId,
+    kind: attachment.kind,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    sha256: attachment.sha256,
+    status: attachment.status,
+    createdAt: attachment.createdAt,
+    ...(attachment.deletedAt ? { deletedAt: attachment.deletedAt } : {}),
   };
 }
 

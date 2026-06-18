@@ -25,6 +25,9 @@ import type {
   GitFileDiff,
   GitJob,
   GitStatus,
+  ImageAttachmentUpload,
+  Message,
+  MessageAttachment,
   PatchApplyResult,
   Project,
   RunnerRegistration,
@@ -55,9 +58,18 @@ export interface RoamApiClient {
     gitBranchName?: string;
     prompt: string;
     title?: string;
+    attachments?: ImageAttachmentUpload[];
   }): Promise<Session>;
+  createUserMessage(
+    sessionId: string,
+    input: { content: string; attachments?: ImageAttachmentUpload[] },
+  ): Promise<{ message: Message; attachments: MessageAttachment[] }>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
+  fetchMessageAttachmentContent(
+    sessionId: string,
+    attachmentId: string,
+  ): Promise<Blob>;
   fetchFileTree(
     sessionId: string,
     options?: { path?: string; depth?: number },
@@ -111,6 +123,12 @@ interface ProjectResponse {
 
 interface CreateSessionResponse {
   session: Session;
+  attachments?: MessageAttachment[];
+}
+
+interface CreateMessageResponse {
+  message: Message;
+  attachments: MessageAttachment[];
 }
 
 interface ApprovalResponse {
@@ -205,6 +223,18 @@ export function createRoamApiClient(
     return (await response.json()) as T;
   }
 
+  async function requestBlob(path: string): Promise<Blob> {
+    const headers = new Headers();
+    if (token) {
+      headers.set("authorization", `Bearer ${token}`);
+    }
+    const response = await fetchImpl(`${baseUrl}${path}`, { headers });
+    if (!response.ok) {
+      throw new Error("Attachment is unavailable.");
+    }
+    return response.blob();
+  }
+
   return {
     async loadInitialState() {
       const [{ runners }, { projects }, { sessions }] = await Promise.all([
@@ -221,7 +251,12 @@ export function createRoamApiClient(
         projects,
         runners,
         sessions,
-        messages: details.flatMap((detail) => detail.messages.map(toUiMessage)),
+        messages: details.flatMap((detail) =>
+          detail.messages.map((message) => toUiMessage(message)),
+        ),
+        messageAttachments: details.flatMap(
+          (detail) => detail.attachments ?? [],
+        ),
         approvals: details.flatMap((detail) => detail.approvals),
         artifacts: details.flatMap((detail) => detail.artifacts),
       };
@@ -275,6 +310,7 @@ export function createRoamApiClient(
               ? {}
               : { gitBranchName: input.gitBranchName }),
             prompt: input.prompt,
+            attachments: input.attachments ?? [],
             title: input.title,
           }
         : {
@@ -288,12 +324,26 @@ export function createRoamApiClient(
               ? {}
               : { gitBranchName: input.gitBranchName }),
             prompt: input.prompt,
+            attachments: input.attachments ?? [],
           };
       const { session } = await request<CreateSessionResponse>("/v1/sessions", {
         method: "POST",
         body: JSON.stringify(payload),
       });
       return session;
+    },
+
+    async createUserMessage(sessionId, input) {
+      return request<CreateMessageResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            content: input.content,
+            attachments: input.attachments ?? [],
+          }),
+        },
+      );
     },
 
     async updateSession(sessionId, input) {
@@ -311,6 +361,12 @@ export function createRoamApiClient(
       await request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
         method: "DELETE",
       });
+    },
+
+    async fetchMessageAttachmentContent(sessionId, attachmentId) {
+      return requestBlob(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`,
+      );
     },
 
     async fetchFileTree(sessionId, options = {}) {

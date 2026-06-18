@@ -18,7 +18,15 @@ export function registerClientStreamRoute(
     socket.on("message", (data) => {
       try {
         const command = ClientCommandSchema.parse(parseSocketJson(data));
-        context.services.sessions.handleClientCommand(command);
+        void context.services.sessions
+          .handleClientCommand(command)
+          .catch((error: unknown) => {
+            context.hub.sendError(
+              socket,
+              error instanceof Error ? error.message : "command failed",
+              "command_failed",
+            );
+          });
       } catch (error) {
         context.hub.sendError(
           socket,

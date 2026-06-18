@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { CodexJsonParser, agentPlugin, codexAgent, codexJsonArgs, parseArgs } from "./index.js";
+import {
+  CodexJsonParser,
+  agentPlugin,
+  codexAgent,
+  codexJsonArgs,
+  parseArgs,
+} from "./index.js";
 
 describe("codex agent plugin", () => {
   it("builds the default codex capability", () => {
-    expect(codexAgent.buildCapability({ profile: "trusted", env: {} })).toMatchObject({
+    expect(
+      codexAgent.buildCapability({ profile: "trusted", env: {} }),
+    ).toMatchObject({
       kind: "codex",
       label: "Codex",
       command: "codex",
@@ -17,18 +25,33 @@ describe("codex agent plugin", () => {
       ],
       parser: "codex-json",
       supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: ["image/png", "image/jpeg"],
+      maxImagesPerTurn: 5,
+      maxImageBytes: 10 * 1024 * 1024,
       pluginName: "@roamcli/agent-codex",
     });
   });
 
   it("exposes a default plugin with one codex agent", () => {
-    expect(agentPlugin.agents({ profile: "standard", env: {} }).map((agent) => agent.kind)).toEqual(["codex"]);
+    expect(
+      agentPlugin
+        .agents({ profile: "standard", env: {} })
+        .map((agent) => agent.kind),
+    ).toEqual(["codex"]);
   });
 
   it("builds codex json resume args with the stored thread id and prompt argument", () => {
     expect(
       codexJsonArgs(
-        ["exec", "--json", "--color", "never", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"],
+        [
+          "exec",
+          "--json",
+          "--color",
+          "never",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+        ],
         "next prompt",
         "thread-1",
       ),
@@ -43,13 +66,47 @@ describe("codex agent plugin", () => {
     ]);
   });
 
+  it("passes image paths to codex exec and resume invocations", () => {
+    expect(
+      codexJsonArgs(["exec", "--json"], "describe image", undefined, [
+        "/tmp/a.png",
+        "/tmp/b.jpg",
+      ]),
+    ).toEqual([
+      "exec",
+      "--json",
+      "--image",
+      "/tmp/a.png",
+      "--image",
+      "/tmp/b.jpg",
+      "describe image",
+    ]);
+
+    expect(
+      codexJsonArgs(
+        ["exec", "--json", "--color", "never"],
+        "resume image",
+        "thread-1",
+        ["/tmp/a.png"],
+      ),
+    ).toEqual([
+      "exec",
+      "resume",
+      "--json",
+      "--image",
+      "/tmp/a.png",
+      "thread-1",
+      "resume image",
+    ]);
+  });
+
   it("extracts complete assistant messages from codex json events", () => {
     const parser = new CodexJsonParser();
 
     const result = parser.feed(
       [
-        "{\"type\":\"thread.started\",\"thread_id\":\"codex-thread-1\"}",
-        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"Projects:\\n- roam-cli\"}}",
+        '{"type":"thread.started","thread_id":"codex-thread-1"}',
+        '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Projects:\\n- roam-cli"}}',
         "",
       ].join("\n"),
     );
@@ -64,8 +121,8 @@ describe("codex agent plugin", () => {
 
     const result = parser.feed(
       [
-        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"first\"}}",
-        "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"second\"}}",
+        '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"first"}}',
+        '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"second"}}',
         "",
       ].join("\n"),
     );
@@ -97,7 +154,11 @@ describe("codex agent plugin", () => {
   });
 
   it("supports JSON array and shell-like args overrides", () => {
-    expect(parseArgs("[\"--one\",\"two words\"]")).toEqual(["--one", "two words"]);
-    expect(parseArgs("exec --sandbox \"danger full\"")).toEqual(["exec", "--sandbox", "danger full"]);
+    expect(parseArgs('["--one","two words"]')).toEqual(["--one", "two words"]);
+    expect(parseArgs('exec --sandbox "danger full"')).toEqual([
+      "exec",
+      "--sandbox",
+      "danger full",
+    ]);
   });
 });

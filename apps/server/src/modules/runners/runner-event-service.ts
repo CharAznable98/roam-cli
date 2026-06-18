@@ -95,6 +95,21 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "attachmentWriteResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
+    if (event.type === "attachmentContentResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
+    if (event.type === "attachmentDeleteResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
     if (event.type === "patchApplyResult") {
       this.rpc.resolveRunnerResponse(event.result);
       this.hub.broadcast({ type: "patch:applied", result: event.result });
@@ -175,9 +190,10 @@ export class RunnerEventService {
         event.requestId,
         new RunnerRpcError(event.message, "runner_error", event.code),
       );
+      return;
     }
 
-    if (!event.requestId && !event.sessionId && isInternalRunnerError(event)) {
+    if (!event.sessionId && isInternalRunnerError(event)) {
       return;
     }
 

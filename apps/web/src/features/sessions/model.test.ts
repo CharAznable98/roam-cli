@@ -22,6 +22,10 @@ const runner: RunnerRegistration = {
       args: [],
       parser: "codex-json",
       supportsResume: true,
+      supportsImages: false,
+      supportedImageMimeTypes: [],
+      maxImagesPerTurn: 0,
+      maxImageBytes: 10 * 1024 * 1024,
     },
   ],
   version: "1.1.0",
@@ -59,9 +63,14 @@ describe("session model", () => {
       title: "Session Two",
       projectId: "project-2",
     };
-    const visibleSessions = getProjectSessions([session, otherSession], "project-1");
+    const visibleSessions = getProjectSessions(
+      [session, otherSession],
+      "project-1",
+    );
 
-    expect(getSelectedSession([session, otherSession], visibleSessions, "session-2")).toBe(session);
+    expect(
+      getSelectedSession([session, otherSession], visibleSessions, "session-2"),
+    ).toBe(session);
     expect(getSelectedSession([otherSession], [], "session-2")).toBeUndefined();
   });
 });

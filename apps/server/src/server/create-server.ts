@@ -44,7 +44,13 @@ export async function createServer(
   const signatures = new ApprovalSignatureVerifier(config.approvalSecret);
   const approvalService = new ApprovalService(store, hub, signatures);
   const artifactService = new ArtifactService(store, artifacts, hub);
-  const sessionService = new SessionCommandService(store, hub, approvalService);
+  const sessionService = new SessionCommandService(
+    store,
+    hub,
+    approvalService,
+    rpc,
+    config.runnerRpcTimeoutMs,
+  );
   const workspaceService = new WorkspaceService(
     store,
     rpc,

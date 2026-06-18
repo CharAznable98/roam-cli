@@ -667,6 +667,10 @@ function artifactCodexAgent(): LoadedAgent {
     args: [],
     parser: "test-artifact",
     supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: 10 * 1024 * 1024,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];
@@ -717,6 +721,10 @@ function approvalCodexAgent(): LoadedAgent {
     args: [],
     parser: "test-approval",
     supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: 10 * 1024 * 1024,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];
@@ -770,6 +778,10 @@ function throwingParserCodexAgent(): LoadedAgent {
     args: [],
     parser: "test-throwing-parser",
     supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: 10 * 1024 * 1024,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];

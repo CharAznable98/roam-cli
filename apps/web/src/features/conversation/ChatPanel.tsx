@@ -1,8 +1,15 @@
-import type { Session } from "@roamcli/shared/protocol";
+import type {
+  ImageAttachmentUpload,
+  MessageAttachment,
+  RunnerCapability,
+  Session,
+} from "@roamcli/shared/protocol";
 import {
   Bot,
   ChevronDown,
   CircleStop,
+  ImagePlus,
+  LoaderCircle,
   Pencil,
   Play,
   Send,
@@ -15,19 +22,34 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getConversationDisplayItems, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
+import {
+  addDraftImages,
+  draftImagesToUploads,
+  formatBytes,
+  imageInputLimits,
+  revokeDraftPreview,
+  type DraftImageAttachment,
+} from "./attachments";
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
 type ChatPanelProps = {
   session: Session;
   messages: UiMessage[];
-  onSend: (content: string) => void;
+  onSend: (
+    content: string,
+    attachments: ImageAttachmentUpload[],
+  ) => void | Promise<void>;
   onControl?: (signal: "stop" | "resume") => void;
   onRename?: (title: string) => void | Promise<void>;
   onDelete?: () => void;
   canSend?: boolean;
   canControl?: boolean;
   onOpenSessionSwitcher?: () => void;
+  imageCapability?: RunnerCapability | undefined;
+  onFetchAttachmentContent?:
+    | ((sessionId: string, attachmentId: string) => Promise<Blob>)
+    | undefined;
 };
 
 export function ChatPanel({
@@ -40,13 +62,19 @@ export function ChatPanel({
   canSend = true,
   canControl = true,
   onOpenSessionSwitcher,
+  imageCapability,
+  onFetchAttachmentContent,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | undefined>();
+  const [submitting, setSubmitting] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState(session.title);
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const [renameError, setRenameError] = useState<string | undefined>();
   const messageListRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const messageScrollKey = messages
@@ -56,6 +84,10 @@ export function ChatPanel({
   const displayItems = useMemo(
     () => getConversationDisplayItems(messages, session.status),
     [messages, session.status],
+  );
+  const imageLimits = useMemo(
+    () => imageInputLimits(imageCapability),
+    [imageCapability],
   );
 
   const scrollToBottom = () => {
@@ -69,6 +101,11 @@ export function ChatPanel({
 
   useEffect(() => {
     scrollToBottom();
+    setAttachmentError(undefined);
+    setDraftImages((current) => {
+      current.forEach(revokeDraftPreview);
+      return [];
+    });
   }, [session.id]);
 
   useEffect(() => {
@@ -100,15 +137,48 @@ export function ChatPanel({
     shouldAutoScrollRef.current = isNearMessageListBottom(list);
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const addFiles = (files: FileList | File[]) => {
+    const result = addDraftImages(
+      Array.from(files),
+      draftImages,
+      imageCapability,
+    );
+    if (result.attachments.length > 0) {
+      setDraftImages((current) => [...current, ...result.attachments]);
+    }
+    setAttachmentError(result.error);
+  };
+
+  const removeDraftImage = (id: string) => {
+    setDraftImages((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed) {
+        revokeDraftPreview(removed);
+      }
+      return current.filter((attachment) => attachment.id !== id);
+    });
+    setAttachmentError(undefined);
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const cleanDraft = draft.trim();
-    if (!cleanDraft || !canSend) {
+    if (!cleanDraft || !canSend || submitting) {
       return;
     }
 
-    onSend(cleanDraft);
-    setDraft("");
+    setSubmitting(true);
+    setAttachmentError(undefined);
+    try {
+      await onSend(cleanDraft, await draftImagesToUploads(draftImages));
+      draftImages.forEach(revokeDraftPreview);
+      setDraftImages([]);
+      setDraft("");
+    } catch (error) {
+      setAttachmentError(getErrorMessage(error, "Message was not sent."));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const openRenameDialog = () => {
@@ -310,30 +380,99 @@ export function ChatPanel({
             item.type === "intermediateGroup" ? (
               <IntermediateOutputGroup key={item.id} messages={item.messages} />
             ) : (
-              <MessageBubble key={item.id} message={item.message} />
+              <MessageBubble
+                key={item.id}
+                message={item.message}
+                onFetchAttachmentContent={onFetchAttachmentContent}
+              />
             ),
           )
         )}
       </div>
 
       <form className="composer" onSubmit={submit}>
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          rows={2}
-          placeholder={
-            canSend ? "Message the active session" : "Stream is reconnecting"
-          }
-          aria-label="Chat composer"
+        <div
+          className={`composer-input-surface ${
+            draftImages.length > 0 ? "has-attachments" : ""
+          }`}
+          onDragOver={(event) => {
+            if (imageLimits.supported) {
+              event.preventDefault();
+            }
+          }}
+          onDrop={(event) => {
+            if (!imageLimits.supported) {
+              return;
+            }
+            event.preventDefault();
+            addFiles(event.dataTransfer.files);
+          }}
+        >
+          {draftImages.length > 0 ? (
+            <DraftImageStrip
+              attachments={draftImages}
+              onRemove={removeDraftImage}
+            />
+          ) : null}
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.files).filter(
+                (file) => file.type.startsWith("image/"),
+              );
+              if (files.length > 0) {
+                event.preventDefault();
+                addFiles(files);
+              }
+            }}
+            rows={2}
+            placeholder={
+              canSend ? "Message the active session" : "Stream is reconnecting"
+            }
+            aria-label="Chat composer"
+          />
+          {attachmentError ? (
+            <p className="form-error composer-error" role="alert">
+              {attachmentError}
+            </p>
+          ) : null}
+        </div>
+        <input
+          ref={fileInputRef}
+          className="visually-hidden"
+          type="file"
+          accept={imageLimits.accept}
+          multiple
+          onChange={(event) => {
+            if (event.target.files) {
+              addFiles(event.target.files);
+            }
+            event.target.value = "";
+          }}
         />
+        <button
+          className="icon-button composer-attach-button"
+          type="button"
+          aria-label="Attach images"
+          title={
+            imageLimits.supported
+              ? "Attach images"
+              : "This agent does not accept image input"
+          }
+          disabled={!imageLimits.supported || submitting}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImagePlus size={17} />
+        </button>
         <button
           className="primary-icon-button"
           type="submit"
           aria-label="Send message"
           title="Send message"
-          disabled={!canSend || draft.trim().length === 0}
+          disabled={!canSend || submitting || draft.trim().length === 0}
         >
-          <Send size={17} />
+          {submitting ? <LoaderCircle size={17} /> : <Send size={17} />}
         </button>
       </form>
     </section>
@@ -346,11 +485,49 @@ function isNearMessageListBottom(list: HTMLElement): boolean {
   return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
-function getErrorMessage(error: unknown): string {
+function getErrorMessage(
+  error: unknown,
+  fallback = "Unable to rename session.",
+): string {
   if (error instanceof Error) {
     return error.message;
   }
-  return "Unable to rename session.";
+  return fallback;
+}
+
+function DraftImageStrip({
+  attachments,
+  onRemove,
+}: {
+  attachments: DraftImageAttachment[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="draft-image-strip" aria-label="Attached images">
+      {attachments.map((attachment) => (
+        <div className="draft-image-tile" key={attachment.id}>
+          {attachment.previewUrl ? (
+            <img src={attachment.previewUrl} alt="" />
+          ) : (
+            <div className="image-placeholder compact">Image preview</div>
+          )}
+          <div className="draft-image-meta">
+            <span>{attachment.file.name || "image"}</span>
+            <small>{formatBytes(attachment.file.size)}</small>
+          </div>
+          <button
+            className="draft-image-remove"
+            type="button"
+            aria-label={`Remove ${attachment.file.name || "image"}`}
+            title="Remove image"
+            onClick={() => onRemove(attachment.id)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function IntermediateOutputGroup({ messages }: { messages: UiMessage[] }) {
@@ -393,7 +570,15 @@ function IntermediateMessage({ message }: { message: UiMessage }) {
   );
 }
 
-function MessageBubble({ message }: { message: UiMessage }) {
+function MessageBubble({
+  message,
+  onFetchAttachmentContent,
+}: {
+  message: UiMessage;
+  onFetchAttachmentContent?:
+    | ((sessionId: string, attachmentId: string) => Promise<Blob>)
+    | undefined;
+}) {
   if (message.variant === "thought") {
     return (
       <details className="collapsible-message">
@@ -431,7 +616,104 @@ function MessageBubble({ message }: { message: UiMessage }) {
         ) : (
           <MarkdownMessage content={message.content} />
         )}
+        <MessageAttachmentGallery
+          attachments={message.attachments ?? []}
+          onFetchAttachmentContent={onFetchAttachmentContent}
+        />
       </div>
     </article>
+  );
+}
+
+function MessageAttachmentGallery({
+  attachments,
+  onFetchAttachmentContent,
+}: {
+  attachments: MessageAttachment[];
+  onFetchAttachmentContent?:
+    | ((sessionId: string, attachmentId: string) => Promise<Blob>)
+    | undefined;
+}) {
+  if (attachments.length === 0) {
+    return null;
+  }
+  return (
+    <div className="message-attachment-grid" aria-label="Message images">
+      {attachments.map((attachment) => (
+        <MessageAttachmentImage
+          key={attachment.id}
+          attachment={attachment}
+          onFetchAttachmentContent={onFetchAttachmentContent}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MessageAttachmentImage({
+  attachment,
+  onFetchAttachmentContent,
+}: {
+  attachment: MessageAttachment;
+  onFetchAttachmentContent?:
+    | ((sessionId: string, attachmentId: string) => Promise<Blob>)
+    | undefined;
+}) {
+  const [imageUrl, setImageUrl] = useState<string | undefined>();
+  const [unavailable, setUnavailable] = useState(
+    attachment.status !== "available",
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | undefined;
+    setImageUrl(undefined);
+    setUnavailable(attachment.status !== "available");
+    if (attachment.status !== "available" || !onFetchAttachmentContent) {
+      return undefined;
+    }
+
+    void onFetchAttachmentContent(attachment.sessionId, attachment.id)
+      .then((blob) => {
+        if (cancelled || typeof URL.createObjectURL !== "function") {
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setImageUrl(objectUrl);
+        setUnavailable(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUnavailable(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [
+    attachment.id,
+    attachment.sessionId,
+    attachment.status,
+    onFetchAttachmentContent,
+  ]);
+
+  if (unavailable || !imageUrl) {
+    return (
+      <div className="message-image-placeholder">
+        <ImagePlus size={18} />
+        <span>Image unavailable</span>
+      </div>
+    );
+  }
+
+  return (
+    <figure className="message-image-frame">
+      <img src={imageUrl} alt={attachment.name} />
+      <figcaption>{attachment.name}</figcaption>
+    </figure>
   );
 }

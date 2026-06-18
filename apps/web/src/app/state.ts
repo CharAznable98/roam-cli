@@ -3,6 +3,7 @@ import type {
   Artifact,
   FileContentResult,
   FileNode,
+  MessageAttachment,
   Project,
   RunnerRegistration,
   ServerEvent,
@@ -41,6 +42,7 @@ export interface AppState {
   messages: UiMessage[];
   approvals: Approval[];
   artifacts: Artifact[];
+  messageAttachments: MessageAttachment[];
   hunks: SessionPatchHunk[];
   filesBySession: Record<string, FileNode[]>;
   fileTreeState: Record<string, AsyncState>;
@@ -67,6 +69,7 @@ export const initialAppState: AppState = {
   messages: [],
   approvals: [],
   artifacts: [],
+  messageAttachments: [],
   hunks: [],
   filesBySession: {},
   fileTreeState: {},
@@ -188,6 +191,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         runners: action.remote.runners,
         sessions: action.remote.sessions,
         messages: action.remote.messages,
+        messageAttachments: action.remote.messageAttachments ?? [],
         approvals: action.remote.approvals,
         artifacts: action.remote.artifacts,
         hunks: extractPatchHunks(action.remote.approvals),
@@ -444,6 +448,16 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       messages: upsertMessage(state.messages, event.message),
     };
   }
+  if (event.type === "message_attachment:created") {
+    return {
+      ...state,
+      messageAttachments: upsertBy(
+        state.messageAttachments,
+        event.attachment,
+        (item) => item.id,
+      ),
+    };
+  }
   if (event.type === "token") {
     return {
       ...state,
@@ -544,6 +558,9 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
       state.selectedSessionId === sessionId ? "" : state.selectedSessionId,
     messages: state.messages.filter(
       (message) => message.sessionId !== sessionId,
+    ),
+    messageAttachments: state.messageAttachments.filter(
+      (attachment) => attachment.sessionId !== sessionId,
     ),
     approvals: state.approvals.filter(
       (approval) => approval.sessionId !== sessionId,

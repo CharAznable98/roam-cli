@@ -1,12 +1,21 @@
 import type {
   AgentKind,
   ExecutionMode,
+  ImageAttachmentUpload,
   Project,
   RunnerCapability,
   RunnerRegistration,
 } from "@roamcli/shared/protocol";
-import { Send } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { ImagePlus, Send, X } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  addDraftImages,
+  draftImagesToUploads,
+  formatBytes,
+  imageInputLimits,
+  revokeDraftPreview,
+  type DraftImageAttachment,
+} from "../conversation/attachments";
 
 export type NewSessionValues = {
   title: string;
@@ -15,6 +24,7 @@ export type NewSessionValues = {
   executionMode: ExecutionMode;
   gitBaseRef?: string;
   gitBranchName?: string;
+  attachments?: ImageAttachmentUpload[];
 };
 
 type NewSessionFormProps = {
@@ -33,7 +43,9 @@ export function NewSessionForm({
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
+  const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [executionMode, setExecutionMode] =
     useState<ExecutionMode>("managed_worktree");
   const [gitBaseRef, setGitBaseRef] = useState("HEAD");
@@ -48,6 +60,47 @@ export function NewSessionForm({
   const [agent, setAgent] = useState<AgentKind>(
     runner.capabilities[0]?.kind ?? "codex",
   );
+  const imageCapability = useMemo(
+    () => runner.capabilities.find((capability) => capability.kind === agent),
+    [agent, runner.capabilities],
+  );
+  const imageLimits = useMemo(
+    () => imageInputLimits(imageCapability),
+    [imageCapability],
+  );
+
+  useEffect(() => {
+    if (imageLimits.supported) {
+      return;
+    }
+    setDraftImages((current) => {
+      current.forEach(revokeDraftPreview);
+      return [];
+    });
+  }, [imageLimits.supported]);
+
+  const addFiles = (files: FileList | File[]) => {
+    const result = addDraftImages(
+      Array.from(files),
+      draftImages,
+      imageCapability,
+    );
+    if (result.attachments.length > 0) {
+      setDraftImages((current) => [...current, ...result.attachments]);
+    }
+    setError(result.error ?? "");
+  };
+
+  const removeDraftImage = (id: string) => {
+    setDraftImages((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed) {
+        revokeDraftPreview(removed);
+      }
+      return current.filter((attachment) => attachment.id !== id);
+    });
+    setError("");
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -70,7 +123,10 @@ export function NewSessionForm({
         ...(executionMode === "managed_worktree" && gitBranchName.trim()
           ? { gitBranchName: gitBranchName.trim() }
           : {}),
+        attachments: await draftImagesToUploads(draftImages),
       });
+      draftImages.forEach(revokeDraftPreview);
+      setDraftImages([]);
       setTitle("");
       setPrompt("");
       setError("");
@@ -141,7 +197,21 @@ export function NewSessionForm({
           </label>
         </>
       ) : null}
-      <label className="field">
+      <label
+        className="field"
+        onDragOver={(event) => {
+          if (imageLimits.supported) {
+            event.preventDefault();
+          }
+        }}
+        onDrop={(event) => {
+          if (!imageLimits.supported) {
+            return;
+          }
+          event.preventDefault();
+          addFiles(event.dataTransfer.files);
+        }}
+      >
         <span>Prompt</span>
         <textarea
           value={prompt}
@@ -150,16 +220,78 @@ export function NewSessionForm({
             setPrompt(event.target.value);
             setError("");
           }}
+          onPaste={(event) => {
+            const files = Array.from(event.clipboardData.files).filter((file) =>
+              file.type.startsWith("image/"),
+            );
+            if (files.length > 0) {
+              event.preventDefault();
+              addFiles(files);
+            }
+          }}
           rows={4}
           placeholder="Describe the work"
         />
       </label>
+      {draftImages.length > 0 ? (
+        <div className="draft-image-strip" aria-label="Attached images">
+          {draftImages.map((attachment) => (
+            <div className="draft-image-tile" key={attachment.id}>
+              {attachment.previewUrl ? (
+                <img src={attachment.previewUrl} alt="" />
+              ) : (
+                <div className="image-placeholder compact">Image preview</div>
+              )}
+              <div className="draft-image-meta">
+                <span>{attachment.file.name || "image"}</span>
+                <small>{formatBytes(attachment.file.size)}</small>
+              </div>
+              <button
+                className="draft-image-remove"
+                type="button"
+                aria-label={`Remove ${attachment.file.name || "image"}`}
+                title="Remove image"
+                onClick={() => removeDraftImage(attachment.id)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <input
+        ref={fileInputRef}
+        className="visually-hidden"
+        type="file"
+        accept={imageLimits.accept}
+        multiple
+        onChange={(event) => {
+          if (event.target.files) {
+            addFiles(event.target.files);
+          }
+          event.target.value = "";
+        }}
+      />
       {error ? (
         <p className="form-error" role="alert">
           {error}
         </p>
       ) : null}
       <div className="form-actions">
+        <button
+          className="small-button"
+          type="button"
+          title={
+            imageLimits.supported
+              ? "Attach images"
+              : "This agent does not accept image input"
+          }
+          disabled={!imageLimits.supported || submitting}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImagePlus size={15} />
+          <span>Images</span>
+        </button>
         <button
           className="primary-action-button"
           type="submit"

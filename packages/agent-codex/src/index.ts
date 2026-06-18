@@ -14,6 +14,9 @@ import type { RunnerCapability } from "@roamcli/shared/protocol";
 const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
+const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
+const MAX_IMAGES_PER_TURN = 5;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ARGS = [
   "exec",
   "--json",
@@ -34,6 +37,10 @@ export const codexAgent: AgentDefinition = {
       args: argsFor(KIND, context.env),
       parser: "codex-json",
       supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: SUPPORTED_IMAGE_MIME_TYPES,
+      maxImagesPerTurn: MAX_IMAGES_PER_TURN,
+      maxImageBytes: MAX_IMAGE_BYTES,
       pluginName: PLUGIN_NAME,
       pluginVersion: PLUGIN_VERSION,
     };
@@ -42,7 +49,12 @@ export const codexAgent: AgentDefinition = {
     const baseArgs = argsFor(KIND, context.env);
     return {
       command: commandFor(KIND, context.env),
-      args: codexJsonArgs(baseArgs, context.prompt, context.resumeThreadId),
+      args: codexJsonArgs(
+        baseArgs,
+        context.prompt,
+        context.resumeThreadId,
+        imagePaths(context),
+      ),
       preferPty: false,
       requirePty: false,
       promptDelivery: "argument",
@@ -75,14 +87,20 @@ export class CodexJsonParser implements AgentOutputParser {
     const lines = this.#completeLines();
     for (const line of lines) {
       const event = parseJsonObject(line);
-      if (event?.type === "thread.started" && typeof event.thread_id === "string") {
+      if (
+        event?.type === "thread.started" &&
+        typeof event.thread_id === "string"
+      ) {
         threadId = event.thread_id;
         continue;
       }
       if (event?.type !== "item.completed" || !isRecord(event.item)) {
         continue;
       }
-      if (event.item.type !== "agent_message" || typeof event.item.text !== "string") {
+      if (
+        event.item.type !== "agent_message" ||
+        typeof event.item.text !== "string"
+      ) {
         continue;
       }
       const directives = parseTextDirectives(event.item.text);
@@ -90,7 +108,13 @@ export class CodexJsonParser implements AgentOutputParser {
       artifacts.push(...directives.artifacts);
       messages.push(event.item.text);
     }
-    return { text: "", messages, approvals, artifacts, ...(threadId ? { threadId } : {}) };
+    return {
+      text: "",
+      messages,
+      approvals,
+      artifacts,
+      ...(threadId ? { threadId } : {}),
+    };
   }
 
   #completeLines(): string[] {
@@ -100,9 +124,15 @@ export class CodexJsonParser implements AgentOutputParser {
   }
 }
 
-export function codexJsonArgs(baseArgs: readonly string[], prompt: string, resumeThreadId: string | undefined): string[] {
+export function codexJsonArgs(
+  baseArgs: readonly string[],
+  prompt: string,
+  resumeThreadId: string | undefined,
+  images: readonly string[] = [],
+): string[] {
+  const imageArgs = images.flatMap((image) => ["--image", image]);
   if (resumeThreadId === undefined) {
-    return [...baseArgs, prompt];
+    return [...baseArgs, ...imageArgs, prompt];
   }
 
   const [subcommand, ...rest] = baseArgs;
@@ -110,9 +140,16 @@ export function codexJsonArgs(baseArgs: readonly string[], prompt: string, resum
     subcommand ?? "exec",
     "resume",
     ...withoutExecOnlyArgs(rest),
+    ...imageArgs,
     resumeThreadId,
     prompt,
   ];
+}
+
+function imagePaths(context: AgentLaunchContext): string[] {
+  return (context.attachments ?? [])
+    .filter((attachment) => attachment.kind === "image")
+    .map((attachment) => attachment.localPath);
 }
 
 function commandFor(kind: string, env: NodeJS.ProcessEnv): string {
@@ -158,7 +195,10 @@ export function parseArgs(value: string): string[] {
   }
   if (trimmed.startsWith("[")) {
     const parsed: unknown = JSON.parse(trimmed);
-    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => typeof item !== "string")
+    ) {
       throw new Error("Agent args override must be a JSON string array");
     }
     return parsed;
@@ -166,7 +206,7 @@ export function parseArgs(value: string): string[] {
 
   const args: string[] = [];
   let current = "";
-  let quote: "'" | "\"" | undefined;
+  let quote: "'" | '"' | undefined;
   let escaped = false;
   for (const char of trimmed) {
     if (escaped) {
@@ -186,7 +226,7 @@ export function parseArgs(value: string): string[] {
       }
       continue;
     }
-    if (char === "'" || char === "\"") {
+    if (char === "'" || char === '"') {
       quote = char;
       continue;
     }
@@ -220,7 +260,10 @@ function parseJsonObject(value: string): Record<string, unknown> | undefined {
   }
 }
 
-function parseTextDirectives(text: string): { approvals: ApprovalRequestDraft[]; artifacts: ArtifactDraft[] } {
+function parseTextDirectives(text: string): {
+  approvals: ApprovalRequestDraft[];
+  artifacts: ArtifactDraft[];
+} {
   const approvals: ApprovalRequestDraft[] = [];
   const artifacts: ArtifactDraft[] = [];
   for (const line of text.split(/\r?\n/)) {
@@ -298,7 +341,10 @@ function parseArtifactLine(line: string): ArtifactDraft | undefined {
   };
 }
 
-function parseTaggedJson(line: string, tag: string): Record<string, unknown> | undefined {
+function parseTaggedJson(
+  line: string,
+  tag: string,
+): Record<string, unknown> | undefined {
   if (line.startsWith(`${tag}:`)) {
     return parseJsonObject(line.slice(tag.length + 1).trim());
   }

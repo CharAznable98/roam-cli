@@ -1,19 +1,29 @@
-import type { Message, SessionStatus } from "@roamcli/shared/protocol";
+import type {
+  Message,
+  MessageAttachment,
+  SessionStatus,
+} from "@roamcli/shared/protocol";
 
 export type UiMessage = Message & {
   variant?: "message" | "thought" | "tool";
   toolName?: string;
+  attachments?: MessageAttachment[];
 };
 
 export type ConversationDisplayItem =
   | { type: "message"; id: string; message: UiMessage }
   | { type: "intermediateGroup"; id: string; messages: UiMessage[] };
 
-export function toUiMessage(message: Message): UiMessage {
+export function toUiMessage(
+  message: Message,
+  attachments: readonly MessageAttachment[] = [],
+): UiMessage {
   if (message.role === "tool") {
-    return { ...message, variant: "tool" };
+    return { ...message, variant: "tool", attachments: [...attachments] };
   }
-  return message;
+  return attachments.length > 0
+    ? { ...message, attachments: [...attachments] }
+    : message;
 }
 
 export function upsertMessage<T extends Message>(items: T[], next: T): T[] {

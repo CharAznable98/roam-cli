@@ -37,9 +37,9 @@ declare module "@roamcli/shared/protocol" {
 
   export interface ParserSchema<T> {
     parse(value: unknown): T;
-    safeParse(value: unknown):
-      | { success: true; data: T }
-      | { success: false; error: Error };
+    safeParse(
+      value: unknown,
+    ): { success: true; data: T } | { success: false; error: Error };
   }
 
   export const RunnerProfileSchema: ParserSchema<RunnerProfile>;
@@ -52,6 +52,10 @@ declare module "@roamcli/shared/protocol" {
     args: string[];
     parser: string;
     supportsResume: boolean;
+    supportsImages: boolean;
+    supportedImageMimeTypes: string[];
+    maxImagesPerTurn: number;
+    maxImageBytes: number;
     pluginName?: string;
     pluginVersion?: string;
   }
@@ -95,6 +99,61 @@ declare module "@roamcli/shared/protocol" {
     content: string;
     encrypted: boolean;
     createdAt: string;
+  }
+
+  export interface ImageAttachmentUpload {
+    name: string;
+    mimeType: string;
+    size: number;
+    contentBase64: string;
+  }
+
+  export interface MessageAttachment {
+    id: string;
+    sessionId: string;
+    messageId: string;
+    runnerId: string;
+    kind: "image";
+    name: string;
+    mimeType: string;
+    size: number;
+    sha256: string;
+    status: "available" | "deleted";
+    createdAt: string;
+    deletedAt?: string;
+  }
+
+  export interface RunnerAttachmentRef {
+    id: string;
+    kind: "image";
+    name: string;
+    mimeType: string;
+    size: number;
+    sha256: string;
+    runnerStoragePath: string;
+  }
+
+  export interface AttachmentWriteResult {
+    requestId: string;
+    sessionId: string;
+    attachments: RunnerAttachmentRef[];
+  }
+
+  export interface AttachmentContentResult {
+    requestId: string;
+    sessionId: string;
+    attachmentId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    contentBase64: string;
+  }
+
+  export interface AttachmentDeleteResult {
+    requestId: string;
+    sessionId: string;
+    deleted: string[];
+    failed: string[];
   }
 
   export interface Approval {
@@ -297,8 +356,29 @@ declare module "@roamcli/shared/protocol" {
         session: Session;
         prompt: string;
         resumeThreadId?: string;
+        attachments?: RunnerAttachmentRef[];
       }
     | { type: "deliverInput"; sessionId: string; content: string }
+    | {
+        type: "writeSessionAttachments";
+        requestId: string;
+        sessionId: string;
+        attachments: ImageAttachmentUpload[];
+      }
+    | {
+        type: "readSessionAttachment";
+        requestId: string;
+        sessionId: string;
+        attachmentId: string;
+        runnerStoragePath: string;
+        maxBytes: number;
+      }
+    | {
+        type: "deleteSessionAttachments";
+        requestId: string;
+        sessionId: string;
+        attachments: Array<{ id: string; runnerStoragePath: string }>;
+      }
     | {
         type: "readFileTree";
         requestId: string;
@@ -387,6 +467,9 @@ declare module "@roamcli/shared/protocol" {
     | { type: "fileTreeResult"; result: FileTreeResult }
     | { type: "fileContentResult"; result: FileContentResult }
     | { type: "fileWriteResult"; result: FileWriteResult }
+    | { type: "attachmentWriteResult"; result: AttachmentWriteResult }
+    | { type: "attachmentContentResult"; result: AttachmentContentResult }
+    | { type: "attachmentDeleteResult"; result: AttachmentDeleteResult }
     | { type: "patchApplyResult"; result: PatchApplyResult }
     | { type: "gitStatusResult"; result: GitStatus }
     | { type: "gitFileDiffResult"; result: GitFileDiff }

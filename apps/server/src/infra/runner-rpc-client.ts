@@ -1,4 +1,7 @@
 import type {
+  AttachmentContentResult,
+  AttachmentDeleteResult,
+  AttachmentWriteResult,
   FileContentResult,
   FileTreeResult,
   FileWriteResult,
@@ -14,6 +17,9 @@ import type {
 import type { ConnectionHub } from "./connection-hub.js";
 
 type RunnerRpcResult =
+  | AttachmentWriteResult
+  | AttachmentContentResult
+  | AttachmentDeleteResult
   | FileTreeResult
   | FileContentResult
   | FileWriteResult
@@ -32,6 +38,9 @@ export type RunnerRpcCommand = Extract<
       | "readFileTree"
       | "readFileContent"
       | "writeFileContent"
+      | "writeSessionAttachments"
+      | "readSessionAttachment"
+      | "deleteSessionAttachments"
       | "applyPatch"
       | "gitStatus"
       | "gitFileDiff"
