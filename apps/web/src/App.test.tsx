@@ -120,6 +120,12 @@ type Deferred<T> = {
   reject: (reason?: unknown) => void;
 };
 
+type MockGitChange = {
+  path: string;
+  status: string;
+  staged: boolean;
+};
+
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -128,6 +134,46 @@ function deferred<T>(): Deferred<T> {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function mockGitContextKey(context: {
+  kind?: string;
+  projectId?: string;
+  sessionId?: string;
+}) {
+  return context.kind === "session_worktree"
+    ? `session:${context.sessionId}`
+    : `project:${context.projectId}`;
+}
+
+function gitStatusPayload(
+  context: unknown,
+  clean: boolean,
+  changes: MockGitChange[],
+) {
+  return {
+    requestId: "git-status-1",
+    context,
+    branch: "main",
+    detached: false,
+    headSha: "abc123",
+    upstream: "origin/main",
+    ahead: 0,
+    behind: 0,
+    clean,
+    unborn: false,
+    groups: [
+      { id: "staged", changes: [] },
+      {
+        id: "changes",
+        changes: clean ? [] : changes,
+      },
+      { id: "conflicts", changes: [] },
+      { id: "untracked", changes: [] },
+      { id: "ignored", changes: [] },
+      { id: "submodules", changes: [] },
+    ],
+  };
 }
 
 function gitBlamePayload(context: unknown, path: string, summary: string) {
@@ -191,6 +237,7 @@ describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
   let deferredFileContent: Map<string, Deferred<Response>>;
+  let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
@@ -201,11 +248,8 @@ describe("App", () => {
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
   let gitStatusClean: boolean;
-  let gitStatusChanges: Array<{
-    path: string;
-    status: string;
-    staged: boolean;
-  }>;
+  let gitStatusChanges: MockGitChange[];
+  let failNextGitStatus: boolean;
   let failGitBlame: boolean;
   let sessionDetailMessages: Array<{
     id: string;
@@ -220,6 +264,7 @@ describe("App", () => {
     fetchRequests = [];
     fetchCalls = [];
     deferredFileContent = new Map();
+    deferredGitStatus = new Map();
     deferredGitBlame = new Map();
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -237,6 +282,7 @@ describe("App", () => {
         staged: false,
       },
     ];
+    failNextGitStatus = false;
     failGitBlame = false;
     sessionDetailMessages = [
       {
@@ -445,32 +491,18 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/status") {
           const context = JSON.parse(String(init?.body ?? "{}"));
+          const deferredResponse = deferredGitStatus.get(
+            mockGitContextKey(context),
+          );
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
+          if (failNextGitStatus) {
+            failNextGitStatus = false;
+            return jsonResponse({ error: "status_failed" }, 500);
+          }
           return jsonResponse({
-            result: {
-              requestId: "git-status-1",
-              context,
-              branch: "main",
-              detached: false,
-              headSha: "abc123",
-              upstream: "origin/main",
-              ahead: 0,
-              behind: 0,
-              clean: gitStatusClean,
-              unborn: false,
-              groups: [
-                { id: "staged", changes: [] },
-                {
-                  id: "changes",
-                  changes: gitStatusClean
-                    ? []
-                    : gitStatusChanges,
-                },
-                { id: "conflicts", changes: [] },
-                { id: "untracked", changes: [] },
-                { id: "ignored", changes: [] },
-                { id: "submodules", changes: [] },
-              ],
-            },
+            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges),
           });
         }
         if (requestUrl.pathname === "/v1/git/branches") {
@@ -698,6 +730,77 @@ describe("App", () => {
       ).toHaveTextContent("No file selected"),
     );
     expect(tools.queryByText("Blame for src/App.tsx")).not.toBeInTheDocument();
+  });
+
+  it("surfaces Git status reload failures after jobs", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) => new URL(call.url).pathname === "/v1/git/diff",
+        ),
+      ).toBe(true),
+    );
+
+    failNextGitStatus = true;
+    fireEvent.click(tools.getByRole("button", { name: "Stage" }));
+
+    expect(await tools.findByText("Git status failed")).toBeInTheDocument();
+    expect(await tools.findByText(/status_failed/)).toBeInTheDocument();
+  });
+
+  it("ignores stale Git status refresh responses after switching context", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+
+    const staleWorktreeStatus = deferred<Response>();
+    deferredGitStatus.set("session:session-1", staleWorktreeStatus);
+    fireEvent.click(tools.getByRole("button", { name: "Refresh Git" }));
+    fireEvent.change(tools.getByRole("combobox"), {
+      target: { value: "project:project-1" },
+    });
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/status") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return body.kind === "project" && body.projectId === "project-1";
+        }),
+      ).toBe(true),
+    );
+    expect(await tools.findByText("Working tree is clean.")).toBeInTheDocument();
+
+    await act(async () => {
+      staleWorktreeStatus.resolve(
+        jsonResponse({
+          result: gitStatusPayload(
+            { kind: "session_worktree", sessionId: "session-1" },
+            false,
+            [{ path: "src/Stale.tsx", status: "modified", staged: false }],
+          ),
+        }),
+      );
+    });
+
+    expect(tools.queryByText("src/Stale.tsx")).not.toBeInTheDocument();
+    expect(tools.getByText("Working tree is clean.")).toBeInTheDocument();
   });
 
   it("ignores stale Git blame responses after changing selected file", async () => {

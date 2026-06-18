@@ -97,6 +97,8 @@ export function GitPanel({
   const [jobError, setJobError] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [diffEditorMounted, setDiffEditorMounted] = useState(active);
+  const statusContextKeyRef = useRef("");
+  const statusRequestSequenceRef = useRef(0);
   const blameSelectionKeyRef = useRef("");
   const blameRequestSequenceRef = useRef(0);
   const compactDiff = useCompactDiff();
@@ -117,6 +119,9 @@ export function GitPanel({
   );
   const selectedContext =
     contextFromKey(selectedContextKey, contextOptions) ?? defaultContext;
+  const selectedContextIdentity = selectedContext
+    ? contextKey(selectedContext)
+    : "";
   const blameSelectionKey =
     selectedContext && selectedChange
       ? `${contextKey(selectedContext)}:${changeKey(selectedChange)}`
@@ -134,6 +139,11 @@ export function GitPanel({
     hasCurrentDiff && !diff.binary && !diff.tooLarge;
   const diffLanguage = showTextDiff ? (diff.language ?? "plaintext") : "plaintext";
   const canInit = Boolean(selectedContext && isNonGitError(statusError));
+
+  useLayoutEffect(() => {
+    statusContextKeyRef.current = selectedContextIdentity;
+    statusRequestSequenceRef.current += 1;
+  }, [selectedContextIdentity]);
 
   useLayoutEffect(() => {
     blameSelectionKeyRef.current = blameSelectionKey;
@@ -219,28 +229,48 @@ export function GitPanel({
     };
   }, [onFetchDiff, active, selectedChange, selectedContext, selectedMode]);
 
+  const applyReloadedStatus = (nextStatus: GitStatus) => {
+    setStatus(nextStatus);
+    setStatusState("ready");
+    setStatusError("");
+    setSelectedChange((current) =>
+      current && changeStillExists(nextStatus, current)
+        ? current
+        : firstChange(nextStatus),
+    );
+  };
+
+  const isCurrentStatusReload = (
+    requestSequence: number,
+    requestContextKey: string,
+  ) =>
+    statusRequestSequenceRef.current === requestSequence &&
+    statusContextKeyRef.current === requestContextKey;
+
+  const reloadStatus = async (context: ApiGitContext) => {
+    const requestContextKey = contextKey(context);
+    const requestSequence = statusRequestSequenceRef.current + 1;
+    statusRequestSequenceRef.current = requestSequence;
+    try {
+      const nextStatus = await onFetchStatus(context);
+      if (!isCurrentStatusReload(requestSequence, requestContextKey)) {
+        return;
+      }
+      applyReloadedStatus(nextStatus);
+    } catch (error: unknown) {
+      if (!isCurrentStatusReload(requestSequence, requestContextKey)) {
+        return;
+      }
+      setStatusState("error");
+      setStatusError(errorMessage(error));
+    }
+  };
+
   const refresh = () => {
     if (!selectedContext || !project) return;
     setSelectedContextKey(contextKey(selectedContext));
     setStatusState("loading");
-    void Promise.allSettled([
-      onFetchStatus(selectedContext).then((nextStatus) => {
-        setStatus(nextStatus);
-        setStatusState("ready");
-        setStatusError("");
-        setSelectedChange((current) =>
-          current && changeStillExists(nextStatus, current)
-            ? current
-            : firstChange(nextStatus),
-        );
-      }),
-    ]).then((results) => {
-      const failed = results.find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") {
-        setStatusState("error");
-        setStatusError(errorMessage(failed.reason));
-      }
-    });
+    void reloadStatus(selectedContext);
   };
 
   const runJob = async (
@@ -255,18 +285,7 @@ export function GitPanel({
       const job = await run();
       setJobState(job.status === "failed" ? "error" : "ready");
       setJobError(job.errorSummary ?? "");
-      await Promise.allSettled([
-        onFetchStatus(refreshTarget).then((nextStatus) => {
-          setStatus(nextStatus);
-          setStatusState("ready");
-          setStatusError("");
-          setSelectedChange((current) =>
-            current && changeStillExists(nextStatus, current)
-              ? current
-              : firstChange(nextStatus),
-          );
-        }),
-      ]);
+      await reloadStatus(refreshTarget);
       return job;
     } catch (error: unknown) {
       setJobState("error");
