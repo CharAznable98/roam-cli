@@ -56,6 +56,23 @@ describe("ChatPanel", () => {
     expect(composer).toHaveValue("");
   });
 
+  it("does not submit while IME composition is active", () => {
+    const onSend = vi.fn();
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "中文输入" } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: true,
+      isComposing: true,
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("中文输入");
+  });
+
   it("keeps plain Enter available for multiline drafts", () => {
     const onSend = vi.fn();
     render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
