@@ -88,7 +88,7 @@ export class SessionCommandService {
 
     if (!this.hub.isRunnerConnectionHealthy(session.runnerId)) {
       this.hub.markRunnerOffline(session.runnerId);
-      const stopped = this.stopActiveSession(session, nowIso());
+      const stopped = this.stopSessionIfStillActive(session.id, nowIso());
       if (!stopped) {
         return fail("session_not_found");
       }
@@ -106,7 +106,7 @@ export class SessionCommandService {
         this.runnerRpcTimeoutMs,
       );
       if (!result.active) {
-        const stopped = this.stopActiveSession(session, nowIso());
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
         if (!stopped) {
           return fail("session_not_found");
         }
@@ -115,7 +115,7 @@ export class SessionCommandService {
     } catch (error) {
       if (error instanceof RunnerRpcError && error.code === "runner_offline") {
         this.hub.markRunnerOffline(session.runnerId);
-        const stopped = this.stopActiveSession(session, nowIso());
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
         if (!stopped) {
           return fail("session_not_found");
         }
@@ -126,7 +126,7 @@ export class SessionCommandService {
         error.code === "runner_error" &&
         error.runnerCode === "SESSION_NOT_RUNNING"
       ) {
-        const stopped = this.stopActiveSession(session, nowIso());
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
         if (!stopped) {
           return fail("session_not_found");
         }
@@ -140,16 +140,7 @@ export class SessionCommandService {
       });
     }
 
-    return ok({ session });
-  }
-
-  handleRunnerReplaced(runnerId: string): void {
-    const stoppedAt = nowIso();
-    for (const session of this.store.listSessions()) {
-      if (session.runnerId === runnerId && hasActiveRunnerWork(session)) {
-        this.stopActiveSession(session, stoppedAt);
-      }
-    }
+    return ok({ session: this.store.getSession(session.id) ?? session });
   }
 
   deleteSession(sessionId: string): ServiceResult<void> {
@@ -493,23 +484,52 @@ export class SessionCommandService {
     prompt: string,
     attachments: readonly RunnerAttachmentRef[],
   ): void {
+    const restartedAt = nowIso();
     const pending = this.store.updateSessionStatus(
       session.id,
       "pending",
-      nowIso(),
+      restartedAt,
     );
+    const restarted =
+      pending?.worktreeDeletedAt
+        ? this.store.clearSessionWorktreeDeleted(session.id, restartedAt)
+        : pending;
     if (pending) {
-      this.hub.broadcast({ type: "session:updated", session: pending });
+      this.hub.broadcast({
+        type: "session:updated",
+        session: restarted ?? pending,
+      });
     }
     this.hub.sendToRunner(session.runnerId, {
       type: "startSession",
-      session: pending ?? { ...session, status: "pending" },
+      session:
+        restarted ??
+        pending ?? {
+          ...session,
+          status: "pending",
+          updatedAt: restartedAt,
+          worktreeDeletedAt: undefined,
+        },
       prompt,
       attachments: [...attachments],
       ...(session.agentThreadId
         ? { resumeThreadId: session.agentThreadId }
         : {}),
     });
+  }
+
+  private stopSessionIfStillActive(
+    sessionId: string,
+    stoppedAt: string,
+  ): Session | undefined {
+    const latest = this.store.getSession(sessionId);
+    if (!latest) {
+      return undefined;
+    }
+    if (!hasActiveRunnerWork(latest)) {
+      return latest;
+    }
+    return this.stopActiveSession(latest, stoppedAt);
   }
 
   private stopActiveSession(

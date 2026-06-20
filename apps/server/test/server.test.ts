@@ -424,7 +424,7 @@ describe("server", () => {
     runner.close();
   });
 
-  it("marks active sessions stopped when a runner reconnects with the same id", async () => {
+  it("keeps active sessions across runner socket reconnects", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
     const stream = await openSocket(`${baseUrl}/v1/stream`, token);
@@ -458,9 +458,45 @@ describe("server", () => {
     const secondRunner = await openSocket(`${baseUrl}/v1/runner`, token);
     secondRunner.send(JSON.stringify(runnerRegistration()));
 
-    await waitUntil(
-      () => app.roam.store.getSession(sessionId)?.status === "stopped",
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(app.roam.store.getSession(sessionId)?.status).toBe("pending");
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: sessionId,
+          status: "stopped",
+        }),
+      }),
     );
+
+    const checked = app.inject({
+      method: "POST",
+      url: `/v1/sessions/${sessionId}/status/check`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const checkCommand = await nextJson(secondRunner);
+    expect(checkCommand).toMatchObject({
+      type: "checkSessionStatus",
+      sessionId,
+    });
+    secondRunner.send(
+      JSON.stringify({
+        type: "sessionStatusCheckResult",
+        result: {
+          requestId: checkCommand.requestId,
+          sessionId,
+          active: false,
+        },
+      }),
+    );
+    const checkResponse = await checked;
+    expect(checkResponse.statusCode).toBe(200);
+    expect(checkResponse.json().session).toMatchObject({
+      id: sessionId,
+      status: "stopped",
+    });
     await waitUntil(() =>
       streamEvents.some(
         (event) =>

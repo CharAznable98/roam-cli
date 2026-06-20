@@ -26,14 +26,12 @@ export async function createServer(
   const store = new ServerStore(config.dataDir);
   const artifacts = new ArtifactStorage(config.dataDir);
   let rpc: RunnerRpcClient;
-  let sessionService: SessionCommandService | undefined;
   const hub = new ConnectionHub(store, {
     onRunnerReplaced: (runnerId) => {
       rpc.rejectPendingForRunner(
         runnerId,
         new RunnerRpcError("runner reconnected", "runner_offline"),
       );
-      sessionService?.handleRunnerReplaced(runnerId);
     },
     onRunnerDisconnected: (runnerId) => {
       rpc.rejectPendingForRunner(
@@ -46,7 +44,7 @@ export async function createServer(
   const signatures = new ApprovalSignatureVerifier(config.approvalSecret);
   const approvalService = new ApprovalService(store, hub, signatures);
   const artifactService = new ArtifactService(store, artifacts, hub);
-  sessionService = new SessionCommandService(
+  const sessionService = new SessionCommandService(
     store,
     hub,
     approvalService,

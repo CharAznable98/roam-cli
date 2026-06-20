@@ -606,6 +606,40 @@ describe("SessionManager", () => {
     manager.control("s1", "stop");
   });
 
+  it("reports sessions being started as active", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-starting-status-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [longRunningCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    const started = manager.start(makeSession(workspace), "wait");
+    await manager.handle({
+      type: "checkSessionStatus",
+      requestId: "check-starting",
+      sessionId: "s1",
+    });
+
+    expect(events).toContainEqual({
+      type: "sessionStatusCheckResult",
+      result: {
+        requestId: "check-starting",
+        sessionId: "s1",
+        active: true,
+      },
+    });
+
+    await started;
+    manager.control("s1", "stop");
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-patch-"),

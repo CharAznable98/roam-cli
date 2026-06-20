@@ -39,6 +39,7 @@ export class SessionManager {
   readonly #output: SessionOutputHandler;
   readonly #workspaceCommands: WorkspaceCommandHandler;
   readonly #sessions = new Map<string, RunningSession>();
+  readonly #startingSessionIds = new Set<string>();
   readonly #sessionCwds = new Map<string, string>();
 
   public constructor(options: SessionManagerOptions) {
@@ -90,7 +91,9 @@ export class SessionManager {
           result: {
             requestId: command.requestId,
             sessionId: command.sessionId,
-            active: this.#sessions.has(command.sessionId),
+            active:
+              this.#sessions.has(command.sessionId) ||
+              this.#startingSessionIds.has(command.sessionId),
           },
         });
         return;
@@ -218,7 +221,10 @@ export class SessionManager {
     resumeThreadId?: string,
     attachments: readonly RunnerAttachmentRef[] = [],
   ): Promise<void> {
-    if (this.#sessions.has(session.id)) {
+    if (
+      this.#sessions.has(session.id) ||
+      this.#startingSessionIds.has(session.id)
+    ) {
       await this.#emit({
         type: "error",
         sessionId: session.id,
@@ -239,6 +245,7 @@ export class SessionManager {
       return;
     }
 
+    this.#startingSessionIds.add(session.id);
     let cwd: string;
     try {
       cwd = await this.#prepareExecutionFolder(session);
@@ -250,6 +257,7 @@ export class SessionManager {
         message,
         code: "INVALID_CWD",
       });
+      this.#startingSessionIds.delete(session.id);
       return;
     }
 
@@ -325,6 +333,8 @@ export class SessionManager {
         status: "failed",
       });
       return;
+    } finally {
+      this.#startingSessionIds.delete(session.id);
     }
   }
 

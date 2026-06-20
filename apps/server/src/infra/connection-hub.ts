@@ -80,6 +80,7 @@ export class ConnectionHub {
       this.runners.delete(runnerId);
       connection.socket.close(1000, "runner marked offline");
     }
+    this.lifecycle.onRunnerDisconnected?.(runnerId);
     this.store.markRunnerOffline(runnerId, nowIso());
     this.broadcast({ type: "runner:offline", runnerId });
   }

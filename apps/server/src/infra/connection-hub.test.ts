@@ -57,7 +57,10 @@ describe("ConnectionHub", () => {
 
   it("marks unhealthy runner connections offline and broadcasts removal", () => {
     const store = createFakeStore([runner]);
-    const hub = new ConnectionHub(store);
+    const disconnected: string[] = [];
+    const hub = new ConnectionHub(store, {
+      onRunnerDisconnected: (runnerId) => disconnected.push(runnerId),
+    });
     const stream = new FakeSocket();
     const runnerSocket = new FakeSocket();
     hub.addStream(stream as unknown as WebSocket);
@@ -65,6 +68,7 @@ describe("ConnectionHub", () => {
 
     hub.markRunnerOffline("runner-1");
 
+    expect(disconnected).toEqual(["runner-1"]);
     expect(runnerSocket.readyState).toBe(runnerSocket.CLOSED);
     expect(store.listOnlineRunners()).toEqual([]);
     expect(hub.listOnlineRunners()).toEqual([]);

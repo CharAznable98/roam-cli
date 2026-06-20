@@ -129,6 +129,38 @@ describe("RunnerRpcClient", () => {
     });
     await expect(pending).rejects.toMatchObject({ code: "runner_timeout" });
   });
+
+  it("rejects pending runner requests when the hub marks a runner offline", async () => {
+    let rpc: RunnerRpcClient;
+    const hub = new ConnectionHub(store, {
+      onRunnerDisconnected: (runnerId) => {
+        rpc.rejectPendingForRunner(
+          runnerId,
+          new RunnerRpcError("runner disconnected", "runner_offline"),
+        );
+      },
+    });
+    rpc = new RunnerRpcClient(hub);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = rpc.requestRunner(
+      "runner-1",
+      {
+        type: "readFileTree",
+        requestId: "request-pending",
+        sessionId: "session-1",
+        path: ".",
+        depth: 1,
+      },
+      1000,
+    );
+    expect(runnerMessages).toHaveLength(1);
+
+    hub.markRunnerOffline("runner-1");
+
+    await expect(pending).rejects.toMatchObject({ code: "runner_offline" });
+  });
 });
 
 describe("SessionCommandService", () => {
@@ -439,6 +471,107 @@ describe("SessionCommandService", () => {
     );
   });
 
+  it("returns the latest stored session after a live status check", async () => {
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "pending" });
+
+    const checked = service.checkSessionStatus("session-1");
+
+    await vi.waitFor(() => {
+      expect(runnerMessages).toHaveLength(1);
+    });
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("session status check was not sent");
+    }
+    const running = store.updateSessionStatus(
+      "session-1",
+      "running",
+      new Date().toISOString(),
+    );
+    expect(running?.status).toBe("running");
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+    });
+
+    await expect(checked).resolves.toMatchObject({
+      ok: true,
+      value: { session: { id: "session-1", status: "running" } },
+    });
+  });
+
+  it("preserves terminal statuses when a status check finishes late", async () => {
+    const streamEvents: ServerEvent[] = [];
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(
+      store,
+      hub,
+      new ApprovalSignatureVerifier(undefined),
+    );
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+
+    const checked = service.checkSessionStatus("session-1");
+
+    await vi.waitFor(() => {
+      expect(runnerMessages).toHaveLength(1);
+    });
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("session status check was not sent");
+    }
+    store.updateSessionStatus("session-1", "completed", new Date().toISOString());
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+    });
+
+    await expect(checked).resolves.toMatchObject({
+      ok: true,
+      value: { session: { id: "session-1", status: "completed" } },
+    });
+    expect(store.getSession("session-1")?.status).toBe("completed");
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: "session-1",
+          status: "stopped",
+        }),
+      }),
+    );
+  });
+
   it("marks unconfirmed managed worktrees unavailable when status check stops them", async () => {
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
@@ -492,10 +625,12 @@ describe("SessionCommandService", () => {
     );
   });
 
-  it("marks active runner sessions stopped when the runner reconnects", () => {
+  it("clears managed worktree unavailable markers before resuming", async () => {
     const streamEvents: ServerEvent[] = [];
+    const runnerMessages: RunnerCommand[] = [];
     const hub = new ConnectionHub(store);
     hub.addStream(fakeSocket(streamEvents));
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const approvals = new ApprovalService(
       store,
       hub,
@@ -509,37 +644,57 @@ describe("SessionCommandService", () => {
       100,
     );
     store.createProject(projectRecord());
-    store.createSession({ ...sessionRecord(), status: "pending" });
     store.createSession({
       ...sessionRecord(),
-      id: "session-2",
-      status: "waiting_approval",
-    });
-    store.createSession({
-      ...sessionRecord(),
-      id: "session-3",
-      status: "completed",
-    });
-    store.createSession({
-      ...sessionRecord(),
-      id: "session-4",
-      runnerId: "runner-2",
-      status: "running",
+      status: "stopped",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      gitBranchName: "session-1",
+      worktreeDeletedAt: new Date().toISOString(),
     });
 
-    service.handleRunnerReplaced("runner-1");
+    await service.handleClientCommand({
+      type: "controlSignal",
+      requestId: "resume-1",
+      sessionId: "session-1",
+      signal: "resume",
+    });
 
-    expect(store.getSession("session-1")?.status).toBe("stopped");
-    expect(store.getSession("session-2")?.status).toBe("stopped");
-    expect(store.getSession("session-3")?.status).toBe("completed");
-    expect(store.getSession("session-4")?.status).toBe("running");
+    const session = store.getSession("session-1");
+    expect(session).toMatchObject({
+      id: "session-1",
+      status: "pending",
+    });
+    expect(session?.worktreeDeletedAt).toBeUndefined();
+    const updateEvent = streamEvents.find(
+      (event) =>
+        event.type === "session:updated" && event.session.id === "session-1",
+    );
+    expect(updateEvent).toMatchObject({
+      type: "session:updated",
+      session: {
+        id: "session-1",
+        status: "pending",
+      },
+    });
     expect(
-      streamEvents.filter(
-        (event) =>
-          event.type === "session:updated" &&
-          event.session.status === "stopped",
-      ),
-    ).toHaveLength(2);
+      updateEvent?.type === "session:updated"
+        ? updateEvent.session.worktreeDeletedAt
+        : undefined,
+    ).toBeUndefined();
+    const startCommand = runnerMessages.at(-1);
+    expect(startCommand).toMatchObject({
+      type: "startSession",
+      session: expect.objectContaining({
+        id: "session-1",
+        status: "pending",
+      }),
+    });
+    expect(
+      startCommand?.type === "startSession"
+        ? startCommand.session.worktreeDeletedAt
+        : undefined,
+    ).toBeUndefined();
   });
 
   it("creates managed worktree sessions under the owning project directory", async () => {
