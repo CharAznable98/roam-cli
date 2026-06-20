@@ -65,9 +65,7 @@ describe("ChatPanel", () => {
 
   it("submits the composer with Command+Enter", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
-    render(
-      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
-    );
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
 
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     expect(composer).toHaveAttribute(
@@ -81,17 +79,13 @@ describe("ChatPanel", () => {
       metaKey: true,
     });
 
-    await waitFor(() =>
-      expect(onSend).toHaveBeenCalledWith("run tests", []),
-    );
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("run tests", []));
     expect(composer).toHaveValue("");
   });
 
   it("submits the composer with Ctrl+Enter", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
-    render(
-      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
-    );
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
 
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     fireEvent.change(composer, { target: { value: "  run lint  " } });
@@ -107,9 +101,7 @@ describe("ChatPanel", () => {
 
   it("does not submit while IME composition is active", () => {
     const onSend = vi.fn();
-    render(
-      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
-    );
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
 
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     fireEvent.change(composer, { target: { value: "中文输入" } });
@@ -126,9 +118,7 @@ describe("ChatPanel", () => {
 
   it("keeps plain Enter available for multiline drafts", () => {
     const onSend = vi.fn();
-    render(
-      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
-    );
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
 
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     fireEvent.change(composer, { target: { value: "first line" } });
@@ -255,6 +245,62 @@ describe("ChatPanel", () => {
       ),
     );
     expect(screen.getByText("Image unavailable")).toBeInTheDocument();
+  });
+
+  it("opens assistant markdown file links through the session file handler", () => {
+    const onOpenFileLink = vi.fn();
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "Open [App](/workspace/src/App.tsx:12).",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[message]}
+        onSend={vi.fn()}
+        onOpenFileLink={onOpenFileLink}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "App" }));
+
+    expect(onOpenFileLink).toHaveBeenCalledWith({
+      path: "src/App.tsx",
+      line: 12,
+    });
+  });
+
+  it("does not render unresolved runner-local file paths as browser links", () => {
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content:
+        "Open [outside](/runner-only/src/App.tsx:12) or [external](https://example.test).",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[message]}
+        onSend={vi.fn()}
+        onOpenFileLink={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "outside" })).toBeNull();
+    expect(screen.getByText("outside")).toHaveClass("is-unresolved");
+    expect(screen.getByRole("link", { name: "external" })).toHaveAttribute(
+      "href",
+      "https://example.test",
+    );
   });
 });
 

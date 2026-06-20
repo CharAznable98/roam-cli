@@ -25,7 +25,10 @@ import {
   sendStreamCommand,
   type RoamApiClient,
 } from "../api";
-import { buildPatchFromHunks } from "../features/approvals/model";
+import {
+  appliedPatchApprovalIds,
+  buildPatchFromHunks,
+} from "../features/approvals/model";
 import { toUiMessage } from "../features/conversation/model";
 import {
   getRunnerSessions,
@@ -479,11 +482,16 @@ export function useRoamController() {
   };
 
   const applyAcceptedPatch = () => {
-    if (!selectedSession || !apiRef.current) return;
+    const api = apiRef.current;
+    if (!selectedSession || !api) return;
     const sessionId = selectedSession.id;
     const openPath = state.selectedFilePath;
     const patch = buildPatchFromHunks(
       sessionHunks.filter((hunk) => hunk.status === "accepted"),
+    );
+    const approvalIdsToResolve = appliedPatchApprovalIds(
+      sessionHunks,
+      sessionId,
     );
     if (!patch) {
       dispatch({
@@ -494,7 +502,7 @@ export function useRoamController() {
     }
 
     dispatch({ type: "patchApplyStarted" });
-    void apiRef.current
+    void api
       .applyPatch(sessionId, patch)
       .then((result) => {
         dispatch({
@@ -503,6 +511,22 @@ export function useRoamController() {
           applied: result.applied,
           message: result.message,
         });
+        if (result.applied) {
+          for (const approvalId of approvalIdsToResolve) {
+            void api
+              .resolveApproval(approvalId, true)
+              .then((approval) =>
+                dispatch({ type: "approvalUpserted", approval }),
+              )
+              .catch((approvalError: unknown) =>
+                dispatch({
+                  type: "errorChanged",
+                  title: "Patch approval sync failed",
+                  message: errorMessage(approvalError),
+                }),
+              );
+          }
+        }
         if (openPath) {
           loadFileContent(sessionId, openPath);
         }

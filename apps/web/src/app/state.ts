@@ -15,6 +15,7 @@ import {
   upsertMessage,
 } from "../features/conversation/model";
 import {
+  appliedPatchApprovalIds,
   extractPatchHunks,
   mergePatchHunks,
   type SessionPatchHunk,
@@ -281,10 +282,20 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case "patchApplyStarted":
       return { ...state, patchApplyState: "loading" };
-    case "patchApplySucceeded":
+    case "patchApplySucceeded": {
+      const appliedApprovalIds = action.applied
+        ? new Set(appliedPatchApprovalIds(state.hunks, action.sessionId))
+        : new Set<string>();
       return {
         ...state,
         patchApplyState: action.applied ? "ready" : "error",
+        approvals: state.approvals.map((approval) =>
+          appliedApprovalIds.has(approval.id) &&
+          approval.kind === "applyPatch" &&
+          approval.status === "pending"
+            ? { ...approval, status: "approved" }
+            : approval,
+        ),
         notifications: action.applied
           ? state.notifications
           : nextNotifications(
@@ -298,6 +309,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             : hunk,
         ),
       };
+    }
     case "patchApplyFailed":
       return pushNotification(
         { ...state, patchApplyState: "error" },

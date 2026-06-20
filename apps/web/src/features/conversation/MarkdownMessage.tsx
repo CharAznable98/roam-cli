@@ -1,60 +1,125 @@
 import { Check, Copy } from "lucide-react";
-import { cloneElement, isValidElement, useEffect, useId, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useId,
+  useState,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { codeToHtml } from "shiki";
+import {
+  isLocalFileLinkHref,
+  resolveMarkdownFileLink,
+  type MarkdownFileLinkContext,
+  type MarkdownFileLinkTarget,
+} from "./file-links";
 import "katex/dist/katex.min.css";
 
-const markdownComponents: Components = {
-  a({ href, children }) {
-    return (
-      <a href={href} target="_blank" rel="noreferrer noopener">
-        {children}
-      </a>
-    );
-  },
-  img({ alt, src }) {
-    return <img alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" src={src} />;
-  },
-  blockquote({ children }) {
-    const alert = githubAlert(children);
-    if (alert) {
-      return (
-        <aside className={`markdown-alert ${alert.kind.toLowerCase()}`}>
-          <div className="markdown-alert-title">{alert.kind}</div>
-          {alert.children}
-        </aside>
-      );
-    }
-    return <blockquote>{children}</blockquote>;
-  },
-  code({ children, className }) {
-    const code = String(children).replace(/\n$/, "");
-    const language = /language-([\w-]+)/.exec(className ?? "")?.[1];
-    if (!language) {
-      return <code>{children}</code>;
-    }
-    if (language === "mermaid") {
-      return <MermaidBlock chart={code} />;
-    }
-    return <CodeBlock code={code} language={language} />;
-  },
+type MarkdownMessageProps = {
+  content: string;
+  fileLinkContext?: MarkdownFileLinkContext | undefined;
+  onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
 };
 
-export function MarkdownMessage({ content }: { content: string }) {
+export function MarkdownMessage({
+  content,
+  fileLinkContext,
+  onOpenFileLink,
+}: MarkdownMessageProps) {
   return (
     <div className="markdown-message">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
-        components={markdownComponents}
+        components={createMarkdownComponents({
+          fileLinkContext,
+          onOpenFileLink,
+        })}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
+}
+
+function createMarkdownComponents(options: {
+  fileLinkContext: MarkdownFileLinkContext | undefined;
+  onOpenFileLink: ((target: MarkdownFileLinkTarget) => void) | undefined;
+}): Components {
+  return {
+    a({ href, children }) {
+      const fileTarget =
+        options.fileLinkContext && options.onOpenFileLink
+          ? resolveMarkdownFileLink(href, options.fileLinkContext)
+          : undefined;
+      if (fileTarget) {
+        const title = `Open ${fileTarget.path}${fileTarget.line ? `:${fileTarget.line}` : ""}`;
+        return (
+          <button
+            type="button"
+            className="markdown-file-link"
+            title={title}
+            onClick={() => options.onOpenFileLink?.(fileTarget)}
+          >
+            {children}
+          </button>
+        );
+      }
+      if (isLocalFileLinkHref(href)) {
+        return (
+          <span
+            className="markdown-file-link is-unresolved"
+            title="Runner file path is outside the current session."
+          >
+            {children}
+          </span>
+        );
+      }
+      return (
+        <a href={href} target="_blank" rel="noreferrer noopener">
+          {children}
+        </a>
+      );
+    },
+    img({ alt, src }) {
+      return (
+        <img
+          alt={alt ?? ""}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          src={src}
+        />
+      );
+    },
+    blockquote({ children }) {
+      const alert = githubAlert(children);
+      if (alert) {
+        return (
+          <aside className={`markdown-alert ${alert.kind.toLowerCase()}`}>
+            <div className="markdown-alert-title">{alert.kind}</div>
+            {alert.children}
+          </aside>
+        );
+      }
+      return <blockquote>{children}</blockquote>;
+    },
+    code({ children, className }) {
+      const code = String(children).replace(/\n$/, "");
+      const language = /language-([\w-]+)/.exec(className ?? "")?.[1];
+      if (!language) {
+        return <code>{children}</code>;
+      }
+      if (language === "mermaid") {
+        return <MermaidBlock chart={code} />;
+      }
+      return <CodeBlock code={code} language={language} />;
+    },
+  };
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
@@ -96,7 +161,13 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
     <div className="markdown-code-block">
       <div className="markdown-code-header">
         <span>{language}</span>
-        <button type="button" className="small-icon-button" onClick={copy} aria-label={`Copy ${language} code`} title="Copy code">
+        <button
+          type="button"
+          className="small-icon-button"
+          onClick={copy}
+          aria-label={`Copy ${language} code`}
+          title="Copy code"
+        >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
       </div>
@@ -105,7 +176,10 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
           <code>{code}</code>
         </pre>
       ) : html.length > 0 ? (
-        <div className="shiki-code" dangerouslySetInnerHTML={{ __html: html }} />
+        <div
+          className="shiki-code"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       ) : (
         <pre>
           <code>{code}</code>
@@ -124,7 +198,11 @@ function MermaidBlock({ chart }: { chart: string }) {
     setSvg(undefined);
     void import("mermaid")
       .then(async ({ default: mermaid }) => {
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "default",
+        });
         const result = await mermaid.render(`roamcli-mermaid-${id}`, chart);
         if (!cancelled) {
           setSvg(result.svg);
@@ -154,23 +232,32 @@ function MermaidBlock({ chart }: { chart: string }) {
       </pre>
     );
   }
-  return <div className="mermaid-block" dangerouslySetInnerHTML={{ __html: svg }} />;
+  return (
+    <div className="mermaid-block" dangerouslySetInnerHTML={{ __html: svg }} />
+  );
 }
 
-function githubAlert(children: ReactNode): { kind: string; children: ReactNode } | undefined {
+function githubAlert(
+  children: ReactNode,
+): { kind: string; children: ReactNode } | undefined {
   const items = Array.isArray(children) ? children : [children];
   const first = items[0];
   if (!isValidElement<{ children?: ReactNode }>(first)) {
     return undefined;
   }
-  const nested = Array.isArray(first.props.children) ? first.props.children : [first.props.children];
+  const nested = Array.isArray(first.props.children)
+    ? first.props.children
+    : [first.props.children];
   const marker = typeof nested[0] === "string" ? nested[0].trim() : "";
   const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/.exec(marker);
   if (!match) {
     return undefined;
   }
   const nextNested = [...nested];
-  nextNested[0] = String(nextNested[0]).replace(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/, "");
+  nextNested[0] = String(nextNested[0]).replace(
+    /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/,
+    "",
+  );
   const nextFirst = cloneElement(first, undefined, nextNested);
   return { kind: match[1] ?? "NOTE", children: [nextFirst, ...items.slice(1)] };
 }

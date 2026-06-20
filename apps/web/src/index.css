@@ -809,10 +809,26 @@
     margin-top: 0.2em;
   }
 
-  .markdown-message a {
+  .markdown-message a,
+  .markdown-file-link {
     color: #0d7490;
     text-decoration: underline;
     text-underline-offset: 2px;
+  }
+
+  .markdown-file-link {
+    display: inline;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .markdown-file-link.is-unresolved {
+    color: #64748b;
+    cursor: not-allowed;
+    text-decoration-style: dotted;
   }
 
   .markdown-message code {
@@ -1449,27 +1465,17 @@
     flex: 1;
     margin: 0;
     padding: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
-  .code-editor {
+  .monaco-file-editor {
     min-width: 0;
-    min-height: 150px;
+    min-height: 360px;
     flex: 1;
-    resize: vertical;
-    overflow: auto;
+    overflow: hidden;
     border: 1px solid #d9e1ea;
-    border-radius: 6px;
-    background: #101826;
-    color: #f8fafc;
-    font-family:
-      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-      monospace;
-    font-size: 12px;
-    line-height: 1.55;
-    outline: none;
-    padding: 12px;
-    tab-size: 2;
-    white-space: pre;
+    border-radius: 8px;
   }
 
   .git-panel {
@@ -1713,16 +1719,6 @@
     gap: 8px;
     color: #465568;
     font-size: 12px;
-  }
-
-  .code-editor:focus {
-    border-color: #138fbd;
-    box-shadow: 0 0 0 3px rgba(19, 143, 189, 0.12);
-  }
-
-  .code-editor:disabled {
-    cursor: not-allowed;
-    opacity: 0.72;
   }
 
   .hunk code {
@@ -2083,7 +2079,7 @@
   }
 
   .editor-placeholder,
-  .code-editor {
+  .monaco-file-editor {
     min-height: 260px;
   }
 

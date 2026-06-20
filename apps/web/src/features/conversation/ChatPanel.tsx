@@ -29,6 +29,10 @@ import {
 import { getConversationDisplayItems, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
+import type {
+  MarkdownFileLinkContext,
+  MarkdownFileLinkTarget,
+} from "./file-links";
 import {
   addDraftImages,
   draftImagesToUploads,
@@ -53,6 +57,7 @@ type ChatPanelProps = {
   canSend?: boolean;
   canControl?: boolean;
   onOpenSessionSwitcher?: () => void;
+  onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
   imageCapability?: RunnerCapability | undefined;
   onFetchAttachmentContent?:
     | ((sessionId: string, attachmentId: string) => Promise<Blob>)
@@ -69,6 +74,7 @@ export function ChatPanel({
   canSend = true,
   canControl = true,
   onOpenSessionSwitcher,
+  onOpenFileLink,
   imageCapability,
   onFetchAttachmentContent,
 }: ChatPanelProps) {
@@ -91,6 +97,13 @@ export function ChatPanel({
   const displayItems = useMemo(
     () => getConversationDisplayItems(messages, session.status),
     [messages, session.status],
+  );
+  const fileLinkContext = useMemo<MarkdownFileLinkContext>(
+    () => ({
+      cwd: session.cwd,
+      executionFolder: session.executionFolder,
+    }),
+    [session.cwd, session.executionFolder],
   );
   const imageLimits = useMemo(
     () => imageInputLimits(imageCapability),
@@ -192,9 +205,7 @@ export function ChatPanel({
     void submitDraft();
   };
 
-  const handleComposerKeyDown = (
-    event: KeyboardEvent<HTMLTextAreaElement>,
-  ) => {
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const isSubmitShortcut = event.metaKey || event.ctrlKey;
     if (
       event.key !== "Enter" ||
@@ -405,11 +416,18 @@ export function ChatPanel({
         ) : (
           displayItems.map((item) =>
             item.type === "intermediateGroup" ? (
-              <IntermediateOutputGroup key={item.id} messages={item.messages} />
+              <IntermediateOutputGroup
+                key={item.id}
+                messages={item.messages}
+                fileLinkContext={fileLinkContext}
+                onOpenFileLink={onOpenFileLink}
+              />
             ) : (
               <MessageBubble
                 key={item.id}
                 message={item.message}
+                fileLinkContext={fileLinkContext}
+                onOpenFileLink={onOpenFileLink}
                 onFetchAttachmentContent={onFetchAttachmentContent}
               />
             ),
@@ -560,7 +578,15 @@ function DraftImageStrip({
   );
 }
 
-function IntermediateOutputGroup({ messages }: { messages: UiMessage[] }) {
+function IntermediateOutputGroup({
+  messages,
+  fileLinkContext,
+  onOpenFileLink,
+}: {
+  messages: UiMessage[];
+  fileLinkContext: MarkdownFileLinkContext;
+  onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
+}) {
   return (
     <details className="collapsible-message intermediate-group">
       <summary>
@@ -569,14 +595,27 @@ function IntermediateOutputGroup({ messages }: { messages: UiMessage[] }) {
       </summary>
       <div className="intermediate-group-list">
         {messages.map((message) => (
-          <IntermediateMessage key={message.id} message={message} />
+          <IntermediateMessage
+            key={message.id}
+            message={message}
+            fileLinkContext={fileLinkContext}
+            onOpenFileLink={onOpenFileLink}
+          />
         ))}
       </div>
     </details>
   );
 }
 
-function IntermediateMessage({ message }: { message: UiMessage }) {
+function IntermediateMessage({
+  message,
+  fileLinkContext,
+  onOpenFileLink,
+}: {
+  message: UiMessage;
+  fileLinkContext: MarkdownFileLinkContext;
+  onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
+}) {
   const label = message.variant === "tool" ? "tool" : message.role;
   return (
     <div className={`intermediate-message ${message.role}`}>
@@ -593,7 +632,11 @@ function IntermediateMessage({ message }: { message: UiMessage }) {
         ) : message.role === "user" ? (
           <p>{message.content}</p>
         ) : (
-          <MarkdownMessage content={message.content} />
+          <MarkdownMessage
+            content={message.content}
+            fileLinkContext={fileLinkContext}
+            onOpenFileLink={onOpenFileLink}
+          />
         )}
       </div>
     </div>
@@ -602,9 +645,13 @@ function IntermediateMessage({ message }: { message: UiMessage }) {
 
 function MessageBubble({
   message,
+  fileLinkContext,
+  onOpenFileLink,
   onFetchAttachmentContent,
 }: {
   message: UiMessage;
+  fileLinkContext: MarkdownFileLinkContext;
+  onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
   onFetchAttachmentContent?:
     | ((sessionId: string, attachmentId: string) => Promise<Blob>)
     | undefined;
@@ -644,7 +691,11 @@ function MessageBubble({
         {isUser ? (
           <p>{message.content}</p>
         ) : (
-          <MarkdownMessage content={message.content} />
+          <MarkdownMessage
+            content={message.content}
+            fileLinkContext={fileLinkContext}
+            onOpenFileLink={onOpenFileLink}
+          />
         )}
         <MessageAttachmentGallery
           attachments={message.attachments ?? []}

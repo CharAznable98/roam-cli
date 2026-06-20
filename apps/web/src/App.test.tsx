@@ -13,6 +13,38 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
+vi.mock("@monaco-editor/react", () => {
+  function Editor({
+    value = "",
+    onChange,
+    className,
+    wrapperProps,
+    options,
+  }: {
+    value?: string;
+    onChange?: (value: string | undefined, event: unknown) => void;
+    className?: string;
+    wrapperProps?: { "aria-label"?: string };
+    options?: { readOnly?: boolean };
+  }) {
+    return (
+      <textarea
+        aria-label={wrapperProps?.["aria-label"] ?? "Monaco editor"}
+        className={className}
+        readOnly={options?.readOnly}
+        value={value}
+        onChange={(event) => onChange?.(event.currentTarget.value, event)}
+      />
+    );
+  }
+
+  function DiffEditor({ className }: { className?: string }) {
+    return <div className={className} data-testid="monaco-diff-editor" />;
+  }
+
+  return { default: Editor, Editor, DiffEditor };
+});
+
 const runner = {
   runnerId: "real-runner",
   displayName: "Real Runner",
@@ -1776,6 +1808,7 @@ describe("App", () => {
     expect(editor).toHaveValue(
       "export function RealContent() { return null; }",
     );
+    expect(editor).toHaveClass("monaco-file-editor");
     expect(screen.getByText("Editable")).toBeInTheDocument();
     expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled();
@@ -1783,6 +1816,47 @@ describe("App", () => {
       url.includes("/v1/sessions/session-1/files/content"),
     );
     expect(contentUrl).toBeDefined();
+    expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
+      "src/App.tsx",
+    );
+  });
+
+  it("opens runner-local markdown file links in the file panel", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-runner-local-link",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "Open [App](/workspace/src/App.tsx:7).",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    fireEvent.click(
+      await within(conversation).findByRole("button", { name: "App" }),
+    );
+
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/App.tsx",
+    });
+    expect(editor).toHaveValue(
+      "export function RealContent() { return null; }",
+    );
+    const contentUrl = fetchRequests.find((url) =>
+      url.includes("/v1/sessions/session-1/files/content"),
+    );
     expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
       "src/App.tsx",
     );
@@ -1870,6 +1944,10 @@ describe("App", () => {
       screen.queryByRole("button", { name: "Apply" }),
     ).not.toBeInTheDocument();
 
+    const approvalCard = screen
+      .getByText("Apply generated patch")
+      .closest("article");
+    expect(approvalCard).not.toBeNull();
     const patchCard = screen.getByText("src/App.tsx").closest("article");
     expect(patchCard).not.toBeNull();
     fireEvent.click(
@@ -1910,6 +1988,20 @@ describe("App", () => {
     expect(body.patch).toContain("@@ -1 +1 @@");
     expect(body.signedAt).toMatch(/2026|20/);
     expect(body.signature.length).toBeGreaterThan(16);
+    await waitFor(() =>
+      expect(
+        within(approvalCard as HTMLElement).getByText("approved"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(approvalCard as HTMLElement).queryByRole("button", {
+        name: "Approve",
+      }),
+    ).not.toBeInTheDocument();
+    const approvalCall = fetchCalls.find((call) =>
+      call.url.includes("/v1/approvals/approval-1"),
+    );
+    expect(approvalCall?.init?.method).toBe("POST");
   });
 
   it("hides resolved approval actions after approve or reject", async () => {

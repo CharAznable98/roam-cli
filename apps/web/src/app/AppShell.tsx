@@ -1,6 +1,7 @@
 import { ApprovalCenter } from "../features/approvals/ApprovalCenter";
 import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
+import type { MarkdownFileLinkTarget } from "../features/conversation/file-links";
 import { FilePanel } from "../features/files/FilePanel";
 import { GitPanel } from "../features/git/GitPanel";
 import { PushSettings } from "../features/pwa/PushSettings";
@@ -80,10 +81,19 @@ export function AppShell({ controller }: AppShellProps) {
     removeGitWorktree,
   } = controller;
 
-  const setActiveTab = (tab: WorkspaceTab) =>
-    dispatch({ type: "activeTabChanged", tab });
+  const setActiveTab = useCallback(
+    (tab: WorkspaceTab) => dispatch({ type: "activeTabChanged", tab }),
+    [dispatch],
+  );
   const setSelectedSessionId = (sessionId: string) =>
     dispatch({ type: "sessionSelected", sessionId });
+  const openMarkdownFileLink = useCallback(
+    (target: MarkdownFileLinkTarget) => {
+      setActiveTab("files");
+      selectFile(target.path);
+    },
+    [selectFile, setActiveTab],
+  );
   const dismissNotification = useCallback(
     (id: string) => dispatch({ type: "notificationDismissed", id }),
     [dispatch],
@@ -217,6 +227,7 @@ export function AppShell({ controller }: AppShellProps) {
                 canSend={canUseStream}
                 canControl={canUseStream}
                 onOpenSessionSwitcher={() => setMobileSessionSwitcherOpen(true)}
+                onOpenFileLink={openMarkdownFileLink}
                 imageCapability={selectedRunner?.capabilities.find(
                   (capability) => capability.kind === selectedSession.agent,
                 )}

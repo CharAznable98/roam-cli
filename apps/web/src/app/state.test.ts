@@ -1,10 +1,12 @@
 import type {
+  Approval,
   Project,
   RunnerRegistration,
   ServerEvent,
   Session,
 } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
+import type { SessionPatchHunk } from "../features/approvals/model";
 import { appReducer, initialAppState, type AppState } from "./state";
 
 describe("app reducer", () => {
@@ -152,6 +154,51 @@ describe("app reducer", () => {
     expect(clearedErrorField.notifications).toEqual(
       withNotification.notifications,
     );
+  });
+
+  it("marks fully applied patch approvals as approved", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        approvals: [makePatchApproval()],
+        hunks: [makePatchHunk("hunk-1", "accepted")],
+      },
+      {
+        type: "patchApplySucceeded",
+        sessionId: "session-1",
+        applied: true,
+        message: "ok",
+      },
+    );
+
+    expect(next.patchApplyState).toBe("ready");
+    expect(next.approvals[0]?.status).toBe("approved");
+    expect(next.hunks[0]?.status).toBe("edited");
+  });
+
+  it("keeps patch approvals pending when unapplied hunks remain pending", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        approvals: [makePatchApproval()],
+        hunks: [
+          makePatchHunk("hunk-1", "accepted"),
+          makePatchHunk("hunk-2", "pending"),
+        ],
+      },
+      {
+        type: "patchApplySucceeded",
+        sessionId: "session-1",
+        applied: true,
+        message: "ok",
+      },
+    );
+
+    expect(next.approvals[0]?.status).toBe("pending");
+    expect(next.hunks.map((hunk) => hunk.status)).toEqual([
+      "edited",
+      "pending",
+    ]);
   });
 
   it("clears the current selection when the selected project is archived", () => {
@@ -414,5 +461,33 @@ function makeSession(
     cwd: `/workspace/${projectId}`,
     createdAt: "2026-06-05T00:00:00.000Z",
     updatedAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function makePatchApproval(): Approval {
+  return {
+    id: "approval-1",
+    sessionId: "session-1",
+    runnerId: "runner-1",
+    kind: "applyPatch",
+    summary: "Apply patch",
+    payload: { hunks: [] },
+    status: "pending",
+    requestedAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function makePatchHunk(
+  id: string,
+  status: SessionPatchHunk["status"],
+): SessionPatchHunk {
+  return {
+    id,
+    approvalId: "approval-1",
+    sessionId: "session-1",
+    filePath: "src/App.tsx",
+    header: "@@ -1 +1 @@",
+    lines: ["-before", "+after"],
+    status,
   };
 }
