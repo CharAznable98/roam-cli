@@ -112,6 +112,27 @@ describe("approval patch model", () => {
     expect(mergePatchHunks(current, next)[0]?.status).toBe("accepted");
   });
 
+  it("preserves edited hunks when stale pending approvals replay", () => {
+    const current = [
+      {
+        ...hunk,
+        status: "edited" as const,
+        approvalId: "approval-1",
+        sessionId: "session-1",
+      },
+    ];
+    const next = [
+      {
+        ...hunk,
+        status: "pending" as const,
+        approvalId: "approval-1",
+        sessionId: "session-1",
+      },
+    ];
+
+    expect(mergePatchHunks(current, next)[0]?.status).toBe("edited");
+  });
+
   it("appends newly streamed hunks in payload order", () => {
     const first = {
       ...hunk,

@@ -472,7 +472,7 @@ function reconcileStreamMessage(
   }
 
   const placeholderIndex = messages.findIndex((item) =>
-    isClientStreamPlaceholder(item, message.sessionId),
+    isMatchingStreamPlaceholder(messages, item, message),
   );
   const placeholder = messages[placeholderIndex];
   if (!placeholder) {
@@ -486,6 +486,42 @@ function reconcileStreamMessage(
         ? { ...message, content: placeholder.content }
         : message,
   };
+}
+
+function isMatchingStreamPlaceholder(
+  messages: UiMessage[],
+  placeholder: UiMessage,
+  persistedMessage: Message,
+): boolean {
+  if (!isClientStreamPlaceholder(placeholder, persistedMessage.sessionId)) {
+    return false;
+  }
+
+  const persistedTime = Date.parse(persistedMessage.createdAt);
+  const placeholderTime = Date.parse(placeholder.createdAt);
+  if (!Number.isFinite(persistedTime) || !Number.isFinite(placeholderTime)) {
+    return false;
+  }
+  if (placeholderTime < persistedTime) {
+    return false;
+  }
+
+  return !messages.some((message) => {
+    if (
+      message.id === placeholder.id ||
+      message.sessionId !== persistedMessage.sessionId ||
+      isClientStreamPlaceholder(message, persistedMessage.sessionId)
+    ) {
+      return false;
+    }
+
+    const messageTime = Date.parse(message.createdAt);
+    return (
+      Number.isFinite(messageTime) &&
+      persistedTime < messageTime &&
+      messageTime < placeholderTime
+    );
+  });
 }
 
 function preserveLongerStreamContent(

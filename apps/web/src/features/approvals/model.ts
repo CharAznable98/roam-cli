@@ -27,13 +27,14 @@ function preserveLocalPendingChoice(
   current: SessionPatchHunk,
   next: SessionPatchHunk,
 ): SessionPatchHunk {
-  if (
-    next.status === "pending" &&
-    (current.status === "accepted" || current.status === "rejected")
-  ) {
+  if (next.status === "pending" && isLocallyResolvedStatus(current.status)) {
     return { ...next, status: current.status };
   }
   return next;
+}
+
+function isLocallyResolvedStatus(status: PatchHunk["status"]): boolean {
+  return status === "accepted" || status === "rejected" || status === "edited";
 }
 
 export function extractPatchHunks(approvals: Approval[]): SessionPatchHunk[] {

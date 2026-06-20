@@ -135,6 +135,85 @@ describe("app reducer", () => {
     expect(next.messages[0]?.content).toBe("partial answer with newer token");
   });
 
+  it("does not reconcile a current stream placeholder into an older turn", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "first prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+          {
+            id: "user-2",
+            sessionId: "session-1",
+            role: "user",
+            content: "second prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:02.000Z",
+          },
+          {
+            id: "stream-session-1-300-2",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "second answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:03.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "first answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+            {
+              id: "stream_session-1_300",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "second answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:03.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "stream_session-1_100",
+      "user-2",
+      "stream_session-1_300",
+    ]);
+    expect(
+      next.messages.find((message) => message.id === "stream_session-1_100")
+        ?.content,
+    ).toBe("first answer");
+    expect(
+      next.messages.find((message) => message.id === "stream_session-1_300")
+        ?.content,
+    ).toBe("second answer with newer token");
+  });
+
   it("keeps newer local stream content when later session details are shorter", () => {
     const next = appReducer(
       {
