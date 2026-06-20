@@ -334,44 +334,47 @@ describe("SessionCommandService", () => {
     expect(store.listSessions()).toEqual([]);
   });
 
-  it("marks only the checked active session stopped when its runner is offline", () => {
-    const streamEvents: ServerEvent[] = [];
-    const hub = new ConnectionHub(store);
-    hub.addStream(fakeSocket(streamEvents));
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      new RunnerRpcClient(hub),
-      100,
-    );
-    store.createProject(projectRecord());
-    store.createSession(sessionRecord());
-    store.createSession({ ...sessionRecord(), id: "session-2" });
+  it.each(["pending", "running", "waiting_approval"] as const)(
+    "marks only the checked %s session stopped when its runner is offline",
+    (status) => {
+      const streamEvents: ServerEvent[] = [];
+      const hub = new ConnectionHub(store);
+      hub.addStream(fakeSocket(streamEvents));
+      const approvals = new ApprovalService(
+        store,
+        hub,
+        new ApprovalSignatureVerifier(undefined),
+      );
+      const service = new SessionCommandService(
+        store,
+        hub,
+        approvals,
+        new RunnerRpcClient(hub),
+        100,
+      );
+      store.createProject(projectRecord());
+      store.createSession({ ...sessionRecord(), status });
+      store.createSession({ ...sessionRecord(), id: "session-2" });
 
-    const result = service.checkSessionStatus("session-1");
+      const result = service.checkSessionStatus("session-1");
 
-    expect(result).toMatchObject({
-      ok: true,
-      value: { session: { id: "session-1", status: "stopped" } },
-    });
-    expect(store.getSession("session-1")?.status).toBe("stopped");
-    expect(store.getSession("session-2")?.status).toBe("running");
-    expect(streamEvents).toContainEqual(
-      expect.objectContaining({
-        type: "session:updated",
-        session: expect.objectContaining({
-          id: "session-1",
-          status: "stopped",
+      expect(result).toMatchObject({
+        ok: true,
+        value: { session: { id: "session-1", status: "stopped" } },
+      });
+      expect(store.getSession("session-1")?.status).toBe("stopped");
+      expect(store.getSession("session-2")?.status).toBe("running");
+      expect(streamEvents).toContainEqual(
+        expect.objectContaining({
+          type: "session:updated",
+          session: expect.objectContaining({
+            id: "session-1",
+            status: "stopped",
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("creates managed worktree sessions under the owning project directory", async () => {
     const hub = new ConnectionHub(store);

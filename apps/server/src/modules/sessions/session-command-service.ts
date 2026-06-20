@@ -79,7 +79,9 @@ export class SessionCommandService {
     }
 
     const hasActiveRunnerWork =
-      session.status === "running" || session.status === "waiting_approval";
+      session.status === "pending" ||
+      session.status === "running" ||
+      session.status === "waiting_approval";
     if (
       hasActiveRunnerWork &&
       !this.hub.isRunnerConnectionHealthy(session.runnerId)
