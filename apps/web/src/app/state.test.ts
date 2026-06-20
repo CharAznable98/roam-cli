@@ -91,6 +91,273 @@ describe("app reducer", () => {
     expect(withMessage.messages).toHaveLength(1);
   });
 
+  it("reconciles client stream placeholders when merging persisted session details", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "stream-session-1-100-0",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "partial answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:01.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "partial answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.id).toBe("stream_session-1_100");
+    expect(next.messages[0]?.content).toBe("partial answer with newer token");
+  });
+
+  it("reconciles stream placeholders when local timestamps trail persisted timestamps", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:10.000Z",
+          },
+          {
+            id: "stream-session-1-100-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:10.001Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:11.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "stream_session-1_100",
+    ]);
+    expect(next.messages[1]?.content).toBe("answer with newer token");
+  });
+
+  it("does not reconcile a current stream placeholder into an older turn", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "first prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+          {
+            id: "user-2",
+            sessionId: "session-1",
+            role: "user",
+            content: "second prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:02.000Z",
+          },
+          {
+            id: "stream-session-1-300-2",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "second answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:03.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "first answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+            {
+              id: "stream_session-1_300",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "second answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:03.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "stream_session-1_100",
+      "user-2",
+      "stream_session-1_300",
+    ]);
+    expect(
+      next.messages.find((message) => message.id === "stream_session-1_100")
+        ?.content,
+    ).toBe("first answer");
+    expect(
+      next.messages.find((message) => message.id === "stream_session-1_300")
+        ?.content,
+    ).toBe("second answer with newer token");
+  });
+
+  it("keeps newer local stream content when later session details are shorter", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "stream_session-1_100",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "partial answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:01.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "partial answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.content).toBe("partial answer with newer token");
+  });
+
+  it("does not let stale session details regress fresher session or approval state", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        sessions: [
+          {
+            ...makeSession("session-1", "project-1"),
+            status: "completed",
+            updatedAt: "2026-06-05T00:00:02.000Z",
+          },
+        ],
+        approvals: [
+          {
+            ...makePatchApproval(),
+            status: "approved",
+            resolvedAt: "2026-06-05T00:00:02.000Z",
+          },
+        ],
+        hunks: [makePatchHunk("hunk-1", "edited")],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+            updatedAt: "2026-06-05T00:00:01.000Z",
+          },
+          messages: [],
+          attachments: [],
+          approvals: [
+            {
+              ...makePatchApproval(),
+              payload: { hunks: [makePatchHunk("hunk-1", "pending")] },
+              status: "pending",
+            },
+          ],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.sessions[0]?.status).toBe("completed");
+    expect(next.approvals[0]?.status).toBe("approved");
+    expect(next.hunks[0]?.status).toBe("edited");
+  });
+
   it("cleans session-owned state when a session is deleted", () => {
     const state: AppState = {
       ...initialAppState,

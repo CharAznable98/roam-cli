@@ -46,6 +46,7 @@ export function NewSessionForm({
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const draftImageStripRef = useRef<HTMLDivElement>(null);
   const [executionMode, setExecutionMode] =
     useState<ExecutionMode>("managed_worktree");
   const [gitBaseRef, setGitBaseRef] = useState("HEAD");
@@ -78,6 +79,24 @@ export function NewSessionForm({
       return [];
     });
   }, [imageLimits.supported]);
+
+  useEffect(() => {
+    const strip = draftImageStripRef.current;
+    if (
+      draftImages.length === 0 ||
+      typeof strip?.scrollIntoView !== "function"
+    ) {
+      return;
+    }
+    const scrollIntoView = () => {
+      strip.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(scrollIntoView);
+    } else {
+      scrollIntoView();
+    }
+  }, [draftImages.length]);
 
   const addFiles = (files: FileList | File[]) => {
     const result = addDraftImages(
@@ -234,7 +253,11 @@ export function NewSessionForm({
         />
       </label>
       {draftImages.length > 0 ? (
-        <div className="draft-image-strip" aria-label="Attached images">
+        <div
+          className="draft-image-strip"
+          aria-label="Attached images"
+          ref={draftImageStripRef}
+        >
           {draftImages.map((attachment) => (
             <div className="draft-image-tile" key={attachment.id}>
               {attachment.previewUrl ? (
@@ -265,6 +288,7 @@ export function NewSessionForm({
         type="file"
         accept={imageLimits.accept}
         multiple
+        tabIndex={-1}
         onChange={(event) => {
           if (event.target.files) {
             addFiles(event.target.files);

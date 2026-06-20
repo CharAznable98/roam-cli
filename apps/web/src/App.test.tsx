@@ -11,6 +11,12 @@ import {
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  Approval,
+  Artifact,
+  Message,
+  MessageAttachment,
+} from "@roamcli/shared/protocol";
 import { App } from "./App";
 
 vi.mock("@monaco-editor/react", () => {
@@ -30,9 +36,7 @@ vi.mock("@monaco-editor/react", () => {
     return (
       <textarea
         aria-label={
-          options?.ariaLabel ??
-          wrapperProps?.["aria-label"] ??
-          "Monaco editor"
+          options?.ariaLabel ?? wrapperProps?.["aria-label"] ?? "Monaco editor"
         }
         className={className}
         readOnly={options?.readOnly}
@@ -119,7 +123,7 @@ const patchArtifact = {
   sha256: "0123456789abcdef0123456789abcdef",
   storagePath: "artifacts/session-1/changes.patch",
   createdAt: "2026-06-05T00:00:00.000Z",
-};
+} satisfies Artifact;
 
 const patchHunk = {
   id: "hunk-1",
@@ -286,6 +290,7 @@ describe("App", () => {
   let runnerOnline: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
+  let statusCheckResultStatus: string;
   let remoteSessionExecutionMode: "direct" | "managed_worktree";
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
@@ -293,14 +298,10 @@ describe("App", () => {
   let gitStatusChanges: MockGitChange[];
   let failNextGitStatus: boolean;
   let failGitBlame: boolean;
-  let sessionDetailMessages: Array<{
-    id: string;
-    sessionId: string;
-    role: string;
-    content: string;
-    encrypted: boolean;
-    createdAt: string;
-  }>;
+  let sessionDetailMessages: Message[];
+  let sessionDetailAttachments: MessageAttachment[];
+  let sessionDetailApprovals: Approval[];
+  let sessionDetailArtifacts: Artifact[];
 
   beforeEach(() => {
     fetchRequests = [];
@@ -314,6 +315,7 @@ describe("App", () => {
     runnerOnline = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
+    statusCheckResultStatus = "stopped";
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
@@ -337,6 +339,9 @@ describe("App", () => {
         createdAt: "2026-06-05T00:00:00.000Z",
       },
     ];
+    sessionDetailAttachments = [];
+    sessionDetailApprovals = [patchApproval];
+    sessionDetailArtifacts = [patchArtifact];
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -449,15 +454,16 @@ describe("App", () => {
                 : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
             },
             messages: sessionDetailMessages,
-            approvals: [patchApproval],
-            artifacts: [patchArtifact],
+            attachments: sessionDetailAttachments,
+            approvals: sessionDetailApprovals,
+            artifacts: sessionDetailArtifacts,
           });
         }
         if (
           requestUrl.pathname === "/v1/sessions/session-1/status/check" &&
           init?.method === "POST"
         ) {
-          remoteSessionStatus = "stopped";
+          remoteSessionStatus = statusCheckResultStatus;
           return jsonResponse({
             session: {
               ...session,
@@ -479,7 +485,7 @@ describe("App", () => {
           const body = JSON.parse(String(init.body ?? "{}")) as {
             content?: string;
           };
-          const message = {
+          const message: Message = {
             id: "message-sent",
             sessionId: "session-1",
             role: "user",
@@ -735,6 +741,156 @@ describe("App", () => {
     );
     expect(await screen.findByText("已停止")).toBeInTheDocument();
     expect(screen.getByText("1 runners online")).toBeInTheDocument();
+  });
+
+  it("automatically repairs stale active session status from persisted session state", async () => {
+    remoteSessionStatus = "pending";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(screen.getByText("待执行")).toBeInTheDocument();
+
+    const countSessionDetailReads = () =>
+      fetchCalls.filter((call) => {
+        const requestUrl = new URL(call.url);
+        return (
+          requestUrl.pathname === "/v1/sessions/session-1" &&
+          (call.init?.method ?? "GET") === "GET"
+        );
+      }).length;
+    const initialSessionDetailReads = countSessionDetailReads();
+    remoteSessionStatus = "completed";
+
+    await waitFor(
+      () =>
+        expect(countSessionDetailReads()).toBeGreaterThan(
+          initialSessionDetailReads,
+        ),
+      { timeout: 2500 },
+    );
+    expect(
+      fetchCalls.some(
+        (call) =>
+          call.url.endsWith("/v1/sessions/session-1/status/check") &&
+          call.init?.method === "POST",
+      ),
+    ).toBe(false);
+    expect(await screen.findByText("已结束")).toBeInTheDocument();
+  });
+
+  it("merges missed session detail payloads during passive status repair", async () => {
+    remoteSessionStatus = "running";
+    sessionDetailApprovals = [];
+    sessionDetailArtifacts = [];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(screen.queryByText("Late patch approval")).not.toBeInTheDocument();
+
+    const countSessionDetailReads = () =>
+      fetchCalls.filter((call) => {
+        const requestUrl = new URL(call.url);
+        return (
+          requestUrl.pathname === "/v1/sessions/session-1" &&
+          (call.init?.method ?? "GET") === "GET"
+        );
+      }).length;
+    const initialSessionDetailReads = countSessionDetailReads();
+    remoteSessionStatus = "waiting_approval";
+    sessionDetailMessages = [
+      ...sessionDetailMessages,
+      {
+        id: "message-late",
+        sessionId: "session-1",
+        role: "assistant",
+        content: "Approval required",
+        encrypted: false,
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+    ];
+    sessionDetailApprovals = [
+      {
+        ...patchApproval,
+        id: "approval-late",
+        summary: "Late patch approval",
+        payload: {
+          hunks: [{ ...patchHunk, id: "hunk-late" }],
+        },
+      },
+    ];
+    sessionDetailArtifacts = [
+      {
+        ...patchArtifact,
+        id: "artifact-late",
+        name: "late.patch",
+        storagePath: "artifacts/session-1/late.patch",
+      },
+    ];
+
+    await waitFor(
+      () =>
+        expect(countSessionDetailReads()).toBeGreaterThan(
+          initialSessionDetailReads,
+        ),
+      { timeout: 2500 },
+    );
+
+    expect(await screen.findByText("Late patch approval")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", {
+        name: "Accept patch hunk hunk-late",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Approval required")).toBeInTheDocument();
+    expect(
+      screen.getByText(/artifacts\/session-1\/late.patch/),
+    ).toBeInTheDocument();
+    expect(
+      fetchCalls.some(
+        (call) =>
+          call.url.endsWith("/v1/sessions/session-1/status/check") &&
+          call.init?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("backs off passive session detail polling after a successful sync", async () => {
+    remoteSessionStatus = "running";
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+
+      const countSessionDetailReads = () =>
+        fetchCalls.filter((call) => {
+          const requestUrl = new URL(call.url);
+          return (
+            requestUrl.pathname === "/v1/sessions/session-1" &&
+            (call.init?.method ?? "GET") === "GET"
+          );
+        }).length;
+      const initialSessionDetailReads = countSessionDetailReads();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500);
+      });
+      const firstRepairReadCount = countSessionDetailReads();
+      expect(firstRepairReadCount).toBeGreaterThan(initialSessionDetailReads);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_999);
+      });
+      expect(countSessionDetailReads()).toBe(firstRepairReadCount);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(countSessionDetailReads()).toBeGreaterThan(firstRepairReadCount);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps existing sessions reachable when their runner is offline", async () => {
