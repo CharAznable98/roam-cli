@@ -7,13 +7,15 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   DirectoryCreateResult,
   FileContentResult,
   FileNode,
   FileTreeResult,
   FileWriteResult,
+  PathSearchEntry,
+  PathSearchResult,
 } from "@roamcli/shared/protocol";
 import {
   type FileRequestScope,
@@ -26,6 +28,8 @@ import {
 export type { FileRequestScope } from "./scope.js";
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
+const DEFAULT_PATH_SEARCH_MAX_CANDIDATES = 1000;
+const DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES = 5000;
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
   ".hg",
@@ -71,6 +75,16 @@ export interface CreateDirectoryOptions extends FileRequestScope {
   name: string;
 }
 
+export interface SearchWorkspacePathsOptions {
+  workspace: string;
+  requestId: string;
+  basePath: string;
+  query?: string;
+  limit?: number;
+  maxCandidateEntries?: number;
+  maxVisitedEntries?: number;
+}
+
 export async function readFileTree(
   options: ReadFileTreeOptions,
 ): Promise<FileTreeResult> {
@@ -93,6 +107,37 @@ export async function readFileTree(
       visited: new Set([root.realPath]),
       includeFiles: options.includeFiles ?? true,
     }),
+  };
+}
+
+export async function searchWorkspacePaths(
+  options: SearchWorkspacePathsOptions,
+): Promise<PathSearchResult> {
+  const base = await resolveSearchBase(options.workspace, options.basePath);
+  if (!base) {
+    return emptyPathSearch(options);
+  }
+
+  const query = options.query ?? "";
+  const limit = clampSearchLimit(options.limit);
+  const entries =
+    query.trim().length === 0
+      ? await readTopLevelPathEntries(base.path, base.realPath, limit)
+      : await searchPathEntries(base.path, base.realPath, query, limit, {
+          maxCandidateEntries: clampSearchCandidateEntries(
+            options.maxCandidateEntries,
+            limit,
+          ),
+          maxVisitedEntries: clampSearchVisitedEntries(
+            options.maxVisitedEntries,
+            limit,
+          ),
+        });
+  return {
+    requestId: options.requestId,
+    basePath: options.basePath,
+    query,
+    entries,
   };
 }
 
@@ -212,6 +257,230 @@ export async function createDirectory(
   };
 }
 
+async function resolveSearchBase(
+  workspace: string,
+  basePath: string,
+): Promise<{ path: string; realPath: string } | undefined> {
+  try {
+    const workspacePath = resolve(workspace);
+    const candidate = isAbsolute(basePath)
+      ? resolve(basePath)
+      : resolve(workspacePath, basePath);
+    const [realWorkspace, realCandidate] = await Promise.all([
+      realpath(workspacePath),
+      realpath(candidate),
+    ]);
+    const candidateStat = await stat(realCandidate);
+    if (
+      !candidateStat.isDirectory() ||
+      !isInside(realWorkspace, realCandidate)
+    ) {
+      return undefined;
+    }
+    return { path: candidate, realPath: realCandidate };
+  } catch {
+    return undefined;
+  }
+}
+
+function emptyPathSearch(
+  options: SearchWorkspacePathsOptions,
+): PathSearchResult {
+  return {
+    requestId: options.requestId,
+    basePath: options.basePath,
+    query: options.query ?? "",
+    entries: [],
+  };
+}
+
+async function readTopLevelPathEntries(
+  basePath: string,
+  realBasePath: string,
+  limit: number,
+): Promise<PathSearchEntry[]> {
+  let entries;
+  try {
+    entries = await readdir(basePath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const result: PathSearchEntry[] = [];
+  for (const entry of entries.sort(compareDirents)) {
+    if (result.length >= limit) {
+      break;
+    }
+    const item = await pathSearchEntry(
+      basePath,
+      realBasePath,
+      entry.name,
+      entry,
+    );
+    if (item) {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+async function searchPathEntries(
+  basePath: string,
+  realBasePath: string,
+  rawQuery: string,
+  limit: number,
+  caps: { maxCandidateEntries: number; maxVisitedEntries: number },
+): Promise<PathSearchEntry[]> {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) {
+    return readTopLevelPathEntries(basePath, realBasePath, limit);
+  }
+
+  const candidates: Array<{ entry: PathSearchEntry; score: number }> = [];
+  await walkSearchBase(
+    basePath,
+    realBasePath,
+    caps.maxVisitedEntries,
+    async (entry) => {
+      const score = pathMatchScore(entry, query);
+      if (score !== undefined) {
+        candidates.push({ entry, score });
+        if (candidates.length >= caps.maxCandidateEntries) {
+          return "stop";
+        }
+      }
+      return undefined;
+    },
+  );
+
+  return candidates
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return left.score - right.score;
+      }
+      if (left.entry.type !== right.entry.type) {
+        return left.entry.type === "directory" ? -1 : 1;
+      }
+      return left.entry.path.localeCompare(right.entry.path);
+    })
+    .slice(0, limit)
+    .map((candidate) => candidate.entry);
+}
+
+async function walkSearchBase(
+  basePath: string,
+  realBasePath: string,
+  maxVisitedEntries: number,
+  visit: (
+    entry: PathSearchEntry,
+  ) => "stop" | undefined | Promise<"stop" | undefined>,
+): Promise<void> {
+  const visited = new Set<string>([realBasePath]);
+  let visitedEntries = 0;
+  const stack = [basePath];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries.sort(compareDirents).reverse()) {
+      if (visitedEntries >= maxVisitedEntries) {
+        return;
+      }
+      visitedEntries += 1;
+      const child = await pathSearchEntry(
+        basePath,
+        realBasePath,
+        relative(basePath, resolve(current, entry.name)),
+        entry,
+        visited,
+      );
+      if (!child) {
+        continue;
+      }
+      if ((await visit(child)) === "stop") {
+        return;
+      }
+      if (child.type === "directory") {
+        stack.push(resolve(basePath, child.path));
+      }
+    }
+  }
+}
+
+async function pathSearchEntry(
+  basePath: string,
+  realBasePath: string,
+  relativePath: string,
+  entry: { name: string; isDirectory(): boolean; isFile(): boolean },
+  visited?: Set<string>,
+): Promise<PathSearchEntry | undefined> {
+  if (entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)) {
+    return undefined;
+  }
+  if (!entry.isDirectory() && !entry.isFile()) {
+    return undefined;
+  }
+  const childPath = resolve(basePath, relativePath);
+  try {
+    const childRealPath = await realpath(childPath);
+    if (!isInside(realBasePath, childRealPath)) {
+      return undefined;
+    }
+    if (visited?.has(childRealPath)) {
+      return undefined;
+    }
+    visited?.add(childRealPath);
+    return {
+      path: relativePath.split(sep).join("/"),
+      name: entry.name,
+      type: entry.isDirectory() ? "directory" : "file",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function pathMatchScore(
+  entry: PathSearchEntry,
+  query: string,
+): number | undefined {
+  const name = entry.name.toLowerCase();
+  const path = entry.path.toLowerCase();
+  if (name.startsWith(query)) {
+    return 0;
+  }
+  if (path.startsWith(query)) {
+    return 1;
+  }
+  if (name.includes(query)) {
+    return 2;
+  }
+  if (path.includes(query) || fuzzyIncludes(path, query)) {
+    return 3;
+  }
+  return undefined;
+}
+
+function fuzzyIncludes(value: string, query: string): boolean {
+  let index = 0;
+  for (const char of value) {
+    if (char === query[index]) {
+      index += 1;
+      if (index === query.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 interface BuildNodeOptions {
   sessionCwd: string;
   realSessionCwd: string;
@@ -306,6 +575,36 @@ function clampDepth(depth: number | undefined): number {
 
 function clampMaxBytes(maxBytes: number | undefined): number {
   return Math.max(1, Math.min(maxBytes ?? DEFAULT_MAX_BYTES, 1024 * 1024));
+}
+
+function clampSearchLimit(limit: number | undefined): number {
+  return Math.max(1, Math.min(limit ?? 50, 200));
+}
+
+function clampSearchCandidateEntries(
+  maxCandidateEntries: number | undefined,
+  limit: number,
+): number {
+  return Math.max(
+    limit,
+    Math.min(
+      maxCandidateEntries ?? DEFAULT_PATH_SEARCH_MAX_CANDIDATES,
+      DEFAULT_PATH_SEARCH_MAX_CANDIDATES,
+    ),
+  );
+}
+
+function clampSearchVisitedEntries(
+  maxVisitedEntries: number | undefined,
+  limit: number,
+): number {
+  return Math.max(
+    limit,
+    Math.min(
+      maxVisitedEntries ?? DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES,
+      DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES,
+    ),
+  );
 }
 
 function imageMimeTypeForPath(path: string): string | undefined {

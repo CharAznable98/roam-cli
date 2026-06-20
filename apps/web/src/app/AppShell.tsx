@@ -76,6 +76,8 @@ export function AppShell({ controller }: AppShellProps) {
     fetchMessageAttachmentContent,
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
+    listAgentSkills,
+    searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,
@@ -248,6 +250,8 @@ export function AppShell({ controller }: AppShellProps) {
               onCreateRunnerDirectory={createRunnerDirectory}
               onArchiveProject={archiveProject}
               onCreateSession={createSession}
+              onListAgentSkills={listAgentSkills}
+              onSearchWorkspacePaths={searchWorkspacePaths}
             />
             {selectedSession ? (
               <ChatPanel
@@ -267,6 +271,8 @@ export function AppShell({ controller }: AppShellProps) {
                   (capability) => capability.kind === selectedSession.agent,
                 )}
                 onFetchAttachmentContent={fetchMessageAttachmentContent}
+                onListAgentSkills={listAgentSkills}
+                onSearchWorkspacePaths={searchWorkspacePaths}
               />
             ) : (
               <section className="chat-column" aria-label="Conversation">
@@ -444,6 +450,8 @@ export function AppShell({ controller }: AppShellProps) {
                 <NewSessionForm
                   project={selectedProject}
                   runner={selectedRunner}
+                  onListAgentSkills={listAgentSkills}
+                  onSearchWorkspacePaths={searchWorkspacePaths}
                   onCreate={(values) =>
                     createSession(selectedProject.id, values)
                   }

@@ -25,6 +25,10 @@ import {
   type ReactNode,
 } from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
+import type {
+  AgentSkillFetcher,
+  PathSearchFetcher,
+} from "../conversation/prompt-resources";
 import {
   composeProjectDirectory,
   projectDirectoryName,
@@ -63,6 +67,8 @@ type RunnerSidebarProps = {
     projectId: string,
     values: NewSessionValues,
   ) => void | Promise<void>;
+  onListAgentSkills: AgentSkillFetcher;
+  onSearchWorkspacePaths: PathSearchFetcher;
 };
 
 export function RunnerSidebar({
@@ -78,6 +84,8 @@ export function RunnerSidebar({
   onCreateRunnerDirectory,
   onArchiveProject,
   onCreateSession,
+  onListAgentSkills,
+  onSearchWorkspacePaths,
 }: RunnerSidebarProps) {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [sessionProjectId, setSessionProjectId] = useState<
@@ -270,6 +278,8 @@ export function RunnerSidebar({
             <NewSessionForm
               project={sessionProject}
               runner={sessionRunner}
+              onListAgentSkills={onListAgentSkills}
+              onSearchWorkspacePaths={onSearchWorkspacePaths}
               onCreate={async (values) => {
                 await onCreateSession(sessionProject.id, values);
                 setExpandedProjectIds((current) => {

@@ -418,6 +418,41 @@ export interface FileNode {
   children?: FileNode[] | undefined;
 }
 
+export const AgentSkillSourceTypeSchema = z.enum(["project", "global"]);
+export type AgentSkillSourceType = z.infer<typeof AgentSkillSourceTypeSchema>;
+
+export const AgentSkillSummarySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  sourceType: AgentSkillSourceTypeSchema,
+  sourcePath: z.string().min(1),
+});
+export type AgentSkillSummary = z.infer<typeof AgentSkillSummarySchema>;
+
+export const AgentSkillListResultSchema = z.object({
+  requestId: z.string().min(1),
+  agent: AgentKindSchema,
+  basePath: z.string().min(1),
+  queriedAt: z.string().datetime(),
+  skills: z.array(AgentSkillSummarySchema),
+});
+export type AgentSkillListResult = z.infer<typeof AgentSkillListResultSchema>;
+
+export const PathSearchEntrySchema = z.object({
+  path: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(["file", "directory"]),
+});
+export type PathSearchEntry = z.infer<typeof PathSearchEntrySchema>;
+
+export const PathSearchResultSchema = z.object({
+  requestId: z.string().min(1),
+  basePath: z.string().min(1),
+  query: z.string(),
+  entries: z.array(PathSearchEntrySchema),
+});
+export type PathSearchResult = z.infer<typeof PathSearchResultSchema>;
+
 export const FileTreeRequestSchema = z.object({
   requestId: z.string().min(1),
   sessionId: z.string().min(1),
@@ -587,6 +622,19 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("checkSessionStatus"),
     requestId: z.string().min(1),
     sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("listAgentSkills"),
+    requestId: z.string().min(1),
+    agent: AgentKindSchema,
+    basePath: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("searchWorkspacePaths"),
+    requestId: z.string().min(1),
+    basePath: z.string().min(1),
+    query: z.string().default(""),
+    limit: z.number().int().positive().max(200).default(50),
   }),
   z.object({
     type: z.literal("writeSessionAttachments"),
@@ -851,6 +899,14 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     result: SessionStatusCheckResultSchema,
   }),
   z.object({
+    type: z.literal("agentSkillListResult"),
+    result: AgentSkillListResultSchema,
+  }),
+  z.object({
+    type: z.literal("pathSearchResult"),
+    result: PathSearchResultSchema,
+  }),
+  z.object({
     type: z.literal("assistantMessage"),
     sessionId: z.string().min(1),
     content: z.string(),
@@ -972,6 +1028,21 @@ export const ApiWriteFileSchema = z.object({
   encoding: z.literal("utf8").default("utf8"),
 });
 export type ApiWriteFile = z.infer<typeof ApiWriteFileSchema>;
+
+export const ApiAgentSkillListSchema = z.object({
+  runnerId: z.string().min(1),
+  agent: AgentKindSchema,
+  basePath: z.string().min(1),
+});
+export type ApiAgentSkillList = z.infer<typeof ApiAgentSkillListSchema>;
+
+export const ApiPathSearchSchema = z.object({
+  runnerId: z.string().min(1),
+  basePath: z.string().min(1),
+  query: z.string().default(""),
+  limit: z.number().int().positive().max(200).default(50),
+});
+export type ApiPathSearch = z.infer<typeof ApiPathSearchSchema>;
 
 export const ApiGitContextSchema = GitContextRefSchema;
 export type ApiGitContext = z.infer<typeof ApiGitContextSchema>;

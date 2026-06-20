@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   ApiApplyPatchSchema,
+  ApiAgentSkillListSchema,
   ApiApprovalResponseSchema,
   ApiCreateMessageSchema,
   ApiCreateProjectSchema,
+  ApiPathSearchSchema,
   ApiCreateSessionSchema,
   ApiGitBlameQuerySchema,
   ApiGitCommitSchema,
@@ -425,6 +427,46 @@ function registerWorkspaceRoutes(
   app: FastifyInstance,
   context: AppContext,
 ): void {
+  app.post("/v1/agent/skills", async (request, reply) => {
+    const parsed = ApiAgentSkillListSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+
+    try {
+      const result = await context.services.workspace.listAgentSkills(
+        parsed.data,
+      );
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/workspace/path-search", async (request, reply) => {
+    const parsed = ApiPathSearchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+
+    try {
+      const result = await context.services.workspace.searchPaths(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
   app.get("/v1/sessions/:id/files", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
     const parsed = FileTreeQuerySchema.safeParse(request.query);

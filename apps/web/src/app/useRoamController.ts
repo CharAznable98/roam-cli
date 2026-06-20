@@ -1,5 +1,6 @@
 import type {
   AgentKind,
+  ApiAgentSkillList,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitContext,
@@ -9,8 +10,10 @@ import type {
   ApiGitPaths,
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
+  ApiPathSearch,
   ExecutionMode,
   ImageAttachmentUpload,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
   useCallback,
@@ -46,6 +49,8 @@ import { appReducer, initialAppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS = 1_500;
+const ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS = 10_000;
 let fileTreeRequestSequence = 0;
 
 export type StreamReconnectInfo = {
@@ -240,6 +245,56 @@ export function useRoamController() {
       ),
     [projectSessions, state.selectedSessionId, state.sessions],
   );
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    const status = selectedSession?.status;
+    if (!sessionId || !status || !isActiveSessionStatus(status)) {
+      return;
+    }
+
+    let cancelled = false;
+    let syncTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+    const scheduleNextSync = (delayMs: number) => {
+      if (cancelled) {
+        return;
+      }
+      syncTimer = globalThis.setTimeout(syncStatus, delayMs);
+    };
+
+    const syncStatus = () => {
+      const api = apiRef.current;
+      if (!api) {
+        scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
+        return;
+      }
+      let nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS;
+      void api
+        .fetchSessionDetail(sessionId)
+        .then((detail) => {
+          nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS;
+          if (!cancelled) {
+            dispatch({ type: "sessionDetailMerged", detail });
+          }
+        })
+        .catch(() => {
+          // Manual status checks surface errors; this background sync only repairs missed events.
+        })
+        .finally(() => {
+          scheduleNextSync(nextDelayMs);
+        });
+    };
+
+    scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
+    return () => {
+      cancelled = true;
+      if (syncTimer) {
+        globalThis.clearTimeout(syncTimer);
+      }
+    };
+  }, [selectedSession?.id, selectedSession?.status]);
+
   const selectedGitContext = useMemo<ApiGitContext | undefined>(() => {
     if (
       selectedSession?.executionMode === "managed_worktree" &&
@@ -765,6 +820,20 @@ export function useRoamController() {
     [requireApiClient],
   );
 
+  const listAgentSkills = useCallback(
+    async (input: ApiAgentSkillList) => {
+      return requireApiClient().listAgentSkills(input);
+    },
+    [requireApiClient],
+  );
+
+  const searchWorkspacePaths = useCallback(
+    async (input: ApiPathSearch) => {
+      return requireApiClient().searchWorkspacePaths(input);
+    },
+    [requireApiClient],
+  );
+
   const fetchGitStatus = useCallback(
     async (context: ApiGitContext) => {
       const api = requireApiClient();
@@ -986,6 +1055,8 @@ export function useRoamController() {
     fetchMessageAttachmentContent,
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
+    listAgentSkills,
+    searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,
@@ -1009,4 +1080,12 @@ function errorMessage(error: unknown): string {
 function nextFileTreeRequestId(): string {
   fileTreeRequestSequence += 1;
   return `file-tree-${Date.now()}-${fileTreeRequestSequence}`;
+}
+
+function isActiveSessionStatus(status: SessionStatus): boolean {
+  return (
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_approval"
+  );
 }

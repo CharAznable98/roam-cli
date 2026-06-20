@@ -4,6 +4,7 @@ import type {
   FileContentResult,
   FileNode,
   FileTreeResult,
+  Message,
   MessageAttachment,
   Project,
   RunnerRegistration,
@@ -23,7 +24,10 @@ import {
 } from "../features/approvals/model";
 import { omitKey, upsertBy } from "../shared/lib/collections";
 import type { AsyncState } from "../shared/types/async";
-import type { InitialRemoteState } from "../api/contracts";
+import type {
+  InitialRemoteState,
+  SessionDetailPayload,
+} from "../api/contracts";
 import type { WorkspaceTab } from "./navigation";
 import { replaceTreeChildren } from "../features/files/tree-model";
 
@@ -166,6 +170,7 @@ export type AppAction =
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
+  | { type: "sessionDetailMerged"; detail: SessionDetailPayload }
   | { type: "errorChanged"; title?: string; message: string | undefined }
   | { type: "notificationDismissed"; id: string };
 
@@ -506,6 +511,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       );
     case "serverEventReceived":
       return applyServerEvent(state, action.event);
+    case "sessionDetailMerged":
+      return mergeSessionDetailState(state, action.detail);
     case "errorChanged":
       if (action.message === undefined) {
         return state;
@@ -523,6 +530,234 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
   }
+}
+
+function mergeSessionDetailState(
+  state: AppState,
+  detail: SessionDetailPayload,
+): AppState {
+  const attachments = detail.attachments ?? [];
+  const approvals = detail.approvals ?? [];
+  const artifacts = detail.artifacts ?? [];
+  const mergedApprovals = approvals.reduce(
+    (items, approval) => upsertFreshApproval(items, approval),
+    state.approvals,
+  );
+  const detailApprovalIds = new Set(approvals.map((approval) => approval.id));
+  const freshDetailApprovals = mergedApprovals.filter((approval) =>
+    detailApprovalIds.has(approval.id),
+  );
+  return {
+    ...state,
+    sessions: upsertFreshSession(state.sessions, detail.session),
+    messages: mergeDetailMessages(state.messages, detail.messages),
+    messageAttachments: attachments.reduce(
+      (items, attachment) => upsertBy(items, attachment, (item) => item.id),
+      state.messageAttachments,
+    ),
+    approvals: mergedApprovals,
+    artifacts: artifacts.reduce(
+      (items, artifact) => upsertBy(items, artifact, (item) => item.id),
+      state.artifacts,
+    ),
+    hunks: mergePatchHunks(
+      state.hunks,
+      extractPatchHunks(freshDetailApprovals),
+    ),
+    selectedProjectId: state.selectedProjectId || detail.session.projectId,
+    selectedSessionId: state.selectedSessionId || detail.session.id,
+  };
+}
+
+function upsertFreshSession(items: Session[], next: Session): Session[] {
+  const exists = items.some((item) => item.id === next.id);
+  return exists
+    ? items.map((item) =>
+        item.id === next.id ? freshSession(item, next) : item,
+      )
+    : [next, ...items];
+}
+
+function freshSession(current: Session, next: Session): Session {
+  return Date.parse(next.updatedAt) < Date.parse(current.updatedAt)
+    ? current
+    : next;
+}
+
+function upsertFreshApproval(items: Approval[], next: Approval): Approval[] {
+  const exists = items.some((item) => item.id === next.id);
+  return exists
+    ? items.map((item) =>
+        item.id === next.id ? freshApproval(item, next) : item,
+      )
+    : [next, ...items];
+}
+
+function freshApproval(current: Approval, next: Approval): Approval {
+  if (current.status !== "pending" && next.status === "pending") {
+    return current;
+  }
+
+  const currentResolvedAt = current.resolvedAt
+    ? Date.parse(current.resolvedAt)
+    : undefined;
+  const nextResolvedAt = next.resolvedAt
+    ? Date.parse(next.resolvedAt)
+    : undefined;
+  if (currentResolvedAt !== undefined || nextResolvedAt !== undefined) {
+    if (nextResolvedAt === undefined) {
+      return current;
+    }
+    if (currentResolvedAt === undefined) {
+      return next;
+    }
+    return nextResolvedAt < currentResolvedAt ? current : next;
+  }
+
+  return next;
+}
+
+function mergeDetailMessages(
+  currentMessages: UiMessage[],
+  detailMessages: Message[],
+): UiMessage[] {
+  return detailMessages.reduce((messages, message) => {
+    const { messages: reconciledMessages, message: reconciledMessage } =
+      reconcileStreamMessage(messages, message);
+    return upsertMessage(
+      reconciledMessages,
+      preserveLongerStreamContent(reconciledMessages, reconciledMessage),
+    );
+  }, currentMessages);
+}
+
+function reconcileStreamMessage(
+  messages: UiMessage[],
+  message: Message,
+): { messages: UiMessage[]; message: Message } {
+  if (!isPersistedStreamMessage(message)) {
+    return { messages, message };
+  }
+
+  const placeholderIndex = findMatchingStreamPlaceholderIndex(
+    messages,
+    message,
+  );
+  const placeholder = messages[placeholderIndex];
+  if (!placeholder) {
+    return { messages, message };
+  }
+
+  return {
+    messages: messages.filter((_, index) => index !== placeholderIndex),
+    message:
+      placeholder.content.length > message.content.length
+        ? { ...message, content: placeholder.content }
+        : message,
+  };
+}
+
+function findMatchingStreamPlaceholderIndex(
+  messages: UiMessage[],
+  persistedMessage: Message,
+): number {
+  const persistedBoundaryId = latestStreamBoundaryIdBeforeMessage(
+    messages,
+    persistedMessage,
+  );
+  return messages.findIndex(
+    (message, index) =>
+      isClientStreamPlaceholder(message, persistedMessage.sessionId) &&
+      latestStreamBoundaryIdBeforeIndex(
+        messages,
+        index,
+        persistedMessage.sessionId,
+      ) === persistedBoundaryId,
+  );
+}
+
+function latestStreamBoundaryIdBeforeMessage(
+  messages: UiMessage[],
+  message: Message,
+): string | undefined {
+  const messageTime = Date.parse(message.createdAt);
+  if (!Number.isFinite(messageTime)) {
+    return undefined;
+  }
+
+  return messages.reduce<UiMessage | undefined>((latest, candidate) => {
+    if (!isStreamSegmentBoundary(candidate, message.sessionId)) {
+      return latest;
+    }
+    const candidateTime = Date.parse(candidate.createdAt);
+    if (!Number.isFinite(candidateTime) || candidateTime > messageTime) {
+      return latest;
+    }
+    if (!latest || Date.parse(latest.createdAt) <= candidateTime) {
+      return candidate;
+    }
+    return latest;
+  }, undefined)?.id;
+}
+
+function latestStreamBoundaryIdBeforeIndex(
+  messages: UiMessage[],
+  index: number,
+  sessionId: string,
+): string | undefined {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const message = messages[cursor];
+    if (message && isStreamSegmentBoundary(message, sessionId)) {
+      return message.id;
+    }
+  }
+  return undefined;
+}
+
+function isStreamSegmentBoundary(
+  message: UiMessage,
+  sessionId: string,
+): boolean {
+  return (
+    message.sessionId === sessionId &&
+    !isClientStreamPlaceholder(message, sessionId) &&
+    !isPersistedStreamMessage(message)
+  );
+}
+
+function preserveLongerStreamContent(
+  messages: UiMessage[],
+  message: Message,
+): Message {
+  if (!isPersistedStreamMessage(message)) {
+    return message;
+  }
+
+  const existingMessage = messages.find((item) => item.id === message.id);
+  if (
+    existingMessage &&
+    existingMessage.content.length > message.content.length
+  ) {
+    return { ...message, content: existingMessage.content };
+  }
+  return message;
+}
+
+function isPersistedStreamMessage(message: Message): boolean {
+  return (
+    message.role === "assistant" &&
+    message.id.startsWith(`stream_${message.sessionId}_`)
+  );
+}
+
+function isClientStreamPlaceholder(
+  message: UiMessage,
+  sessionId: string,
+): boolean {
+  return (
+    message.role === "assistant" &&
+    message.id.startsWith(`stream-${sessionId}-`)
+  );
 }
 
 function applyServerEvent(state: AppState, event: ServerEvent): AppState {
@@ -558,7 +793,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "session:created" || event.type === "session:updated") {
     return {
       ...state,
-      sessions: upsertBy(state.sessions, event.session, (item) => item.id),
+      sessions: upsertFreshSession(state.sessions, event.session),
       selectedProjectId: state.selectedProjectId || event.session.projectId,
       selectedSessionId: state.selectedSessionId || event.session.id,
     };
@@ -911,10 +1146,14 @@ function descendantPathEntryValues<T>(
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {
+  const approvals = upsertFreshApproval(state.approvals, approval);
+  const freshApproval = approvals.find((item) => item.id === approval.id);
   return {
     ...state,
-    approvals: upsertBy(state.approvals, approval, (item) => item.id),
-    hunks: mergePatchHunks(state.hunks, extractPatchHunks([approval])),
+    approvals,
+    hunks: freshApproval
+      ? mergePatchHunks(state.hunks, extractPatchHunks([freshApproval]))
+      : state.hunks,
   };
 }
 

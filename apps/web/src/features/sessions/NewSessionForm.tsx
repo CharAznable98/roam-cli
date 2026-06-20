@@ -16,6 +16,11 @@ import {
   revokeDraftPreview,
   type DraftImageAttachment,
 } from "../conversation/attachments";
+import { PromptComposer } from "../conversation/PromptComposer";
+import type {
+  AgentSkillFetcher,
+  PathSearchFetcher,
+} from "../conversation/prompt-resources";
 
 export type NewSessionValues = {
   title: string;
@@ -32,6 +37,8 @@ type NewSessionFormProps = {
   runner: RunnerRegistration;
   onCreate: (values: NewSessionValues) => void | Promise<void>;
   onCreated?: () => void;
+  onListAgentSkills?: AgentSkillFetcher | undefined;
+  onSearchWorkspacePaths?: PathSearchFetcher | undefined;
 };
 
 export function NewSessionForm({
@@ -39,6 +46,8 @@ export function NewSessionForm({
   runner,
   onCreate,
   onCreated,
+  onListAgentSkills = emptyAgentSkillList,
+  onSearchWorkspacePaths = emptyPathSearch,
 }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -46,6 +55,7 @@ export function NewSessionForm({
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const draftImageStripRef = useRef<HTMLDivElement>(null);
   const [executionMode, setExecutionMode] =
     useState<ExecutionMode>("managed_worktree");
   const [gitBaseRef, setGitBaseRef] = useState("HEAD");
@@ -78,6 +88,24 @@ export function NewSessionForm({
       return [];
     });
   }, [imageLimits.supported]);
+
+  useEffect(() => {
+    const strip = draftImageStripRef.current;
+    if (
+      draftImages.length === 0 ||
+      typeof strip?.scrollIntoView !== "function"
+    ) {
+      return;
+    }
+    const scrollIntoView = () => {
+      strip.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(scrollIntoView);
+    } else {
+      scrollIntoView();
+    }
+  }, [draftImages.length]);
 
   const addFiles = (files: FileList | File[]) => {
     const result = addDraftImages(
@@ -213,11 +241,17 @@ export function NewSessionForm({
         }}
       >
         <span>Prompt</span>
-        <textarea
+        <PromptComposer
           value={prompt}
-          aria-invalid={error ? true : undefined}
-          onChange={(event) => {
-            setPrompt(event.target.value);
+          ariaLabel="Prompt"
+          ariaInvalid={Boolean(error)}
+          runnerId={runner.runnerId}
+          agent={agent}
+          basePath={project.directory}
+          onListAgentSkills={onListAgentSkills}
+          onSearchWorkspacePaths={onSearchWorkspacePaths}
+          onChange={(nextPrompt) => {
+            setPrompt(nextPrompt);
             setError("");
           }}
           onPaste={(event) => {
@@ -231,10 +265,15 @@ export function NewSessionForm({
           }}
           rows={4}
           placeholder="Describe the work"
+          suggestionPlacement="below"
         />
       </label>
       {draftImages.length > 0 ? (
-        <div className="draft-image-strip" aria-label="Attached images">
+        <div
+          className="draft-image-strip"
+          aria-label="Attached images"
+          ref={draftImageStripRef}
+        >
           {draftImages.map((attachment) => (
             <div className="draft-image-tile" key={attachment.id}>
               {attachment.previewUrl ? (
@@ -265,6 +304,7 @@ export function NewSessionForm({
         type="file"
         accept={imageLimits.accept}
         multiple
+        tabIndex={-1}
         onChange={(event) => {
           if (event.target.files) {
             addFiles(event.target.files);
@@ -308,4 +348,27 @@ export function NewSessionForm({
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+async function emptyAgentSkillList(
+  input: Parameters<AgentSkillFetcher>[0],
+): Promise<Awaited<ReturnType<AgentSkillFetcher>>> {
+  return {
+    requestId: "empty-agent-skills",
+    agent: input.agent,
+    basePath: input.basePath,
+    queriedAt: new Date().toISOString(),
+    skills: [],
+  };
+}
+
+async function emptyPathSearch(
+  input: Parameters<PathSearchFetcher>[0],
+): Promise<Awaited<ReturnType<PathSearchFetcher>>> {
+  return {
+    requestId: "empty-path-search",
+    basePath: input.basePath,
+    query: input.query,
+    entries: [],
+  };
 }

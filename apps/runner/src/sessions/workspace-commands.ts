@@ -4,6 +4,7 @@ import {
   createDirectory,
   readFileContent,
   readFileTree,
+  searchWorkspacePaths,
   writeFileContent,
 } from "../workspace/files.js";
 import {
@@ -189,6 +190,29 @@ export class WorkspaceCommandHandler {
         requestId: command.requestId,
         message,
         code: "DIRECTORY_CREATE_ERROR",
+      });
+    }
+  }
+
+  public async searchWorkspacePaths(
+    command: Extract<RunnerCommand, { type: "searchWorkspacePaths" }>,
+  ): Promise<void> {
+    try {
+      const result = await searchWorkspacePaths({
+        workspace: this.#workspace,
+        requestId: command.requestId,
+        basePath: command.basePath,
+        query: command.query,
+        limit: command.limit,
+      });
+      await this.#emit({ type: "pathSearchResult", result });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({
+        type: "error",
+        requestId: command.requestId,
+        message,
+        code: "PATH_SEARCH_ERROR",
       });
     }
   }
