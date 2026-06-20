@@ -57,8 +57,12 @@ describe("runner file reads", () => {
     const sessionCwd = join(workspace, "project");
     await mkdir(join(sessionCwd, "src", "components"), { recursive: true });
     await mkdir(join(sessionCwd, "docs"), { recursive: true });
+    await mkdir(join(sessionCwd, "dist", "packages"), { recursive: true });
+    await mkdir(join(sessionCwd, "node_modules", "pkg"), { recursive: true });
     await writeFile(join(sessionCwd, "README.md"), "readme");
     await writeFile(join(sessionCwd, "docs", "guide.md"), "guide");
+    await writeFile(join(sessionCwd, "dist", "bundle.js"), "bundle");
+    await writeFile(join(sessionCwd, "node_modules", "pkg.js"), "pkg");
     await writeFile(join(sessionCwd, "src", "main.ts"), "export {};");
     await writeFile(join(sessionCwd, "src", "components", "App.tsx"), "app");
 
@@ -73,15 +77,39 @@ describe("runner file reads", () => {
     });
 
     expect(result.root.children?.map((node) => node.name)).toEqual([
+      "dist",
       "docs",
+      "node_modules",
       "src",
     ]);
     expect(result.root.children?.[0]).toMatchObject({
+      path: "dist",
+      type: "directory",
+      children: [
+        {
+          path: "dist/packages",
+          type: "directory",
+          children: [],
+        },
+      ],
+    });
+    expect(result.root.children?.[1]).toMatchObject({
       path: "docs",
       type: "directory",
       children: [],
     });
-    expect(result.root.children?.[1]).toMatchObject({
+    expect(result.root.children?.[2]).toMatchObject({
+      path: "node_modules",
+      type: "directory",
+      children: [
+        {
+          path: "node_modules/pkg",
+          type: "directory",
+          children: [],
+        },
+      ],
+    });
+    expect(result.root.children?.[3]).toMatchObject({
       path: "src",
       type: "directory",
       children: [

@@ -1232,6 +1232,72 @@ describe("app reducer", () => {
     expect(next.filesBySession).toEqual({});
     expect(next.fileTreeState["session-2"]).toBe("idle");
   });
+
+  it("marks cleared file tree requests stale when a workspace becomes unavailable", () => {
+    const unavailable = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-2": [
+            {
+              path: "src",
+              name: "src",
+              type: "directory",
+              children: [],
+            },
+          ],
+        },
+        fileTreeRequestIds: {
+          "session-2": {
+            ".": "root-tree-old",
+            src: "src-tree-old",
+          },
+        },
+        fileTreePathState: {
+          "session-2": {
+            ".": "loading",
+            src: "loading",
+          },
+        },
+      },
+      {
+        type: "sessionWorkspaceUnavailable",
+        sessionId: "session-2",
+        resetSelection: true,
+      },
+    );
+
+    expect(unavailable.staleFileTreeRequestIds["root-tree-old"]).toBe(true);
+    expect(unavailable.staleFileTreeRequestIds["src-tree-old"]).toBe(true);
+
+    const late = appReducer(unavailable, {
+      type: "serverEventReceived",
+      event: {
+        type: "file:tree",
+        result: {
+          requestId: "server-root-tree-old",
+          clientRequestId: "root-tree-old",
+          sessionId: "session-2",
+          root: {
+            path: ".",
+            name: "project",
+            type: "directory",
+            children: [
+              {
+                path: "src",
+                name: "src",
+                type: "directory",
+                children: [],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(late).toBe(unavailable);
+    expect(late.filesBySession["session-2"]).toBeUndefined();
+  });
 });
 
 const runner: RunnerRegistration = {

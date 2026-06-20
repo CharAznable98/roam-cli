@@ -106,6 +106,7 @@ export async function readFileTree(
       depth: clampDepth(options.depth),
       visited: new Set([root.realPath]),
       includeFiles: options.includeFiles ?? true,
+      ignoreGeneratedDirectories: options.includeFiles !== false,
     }),
   };
 }
@@ -253,6 +254,7 @@ export async function createDirectory(
       depth: 1,
       visited: new Set([parent.realPath, targetRealPath]),
       includeFiles: true,
+      ignoreGeneratedDirectories: true,
     }),
   };
 }
@@ -487,6 +489,7 @@ interface BuildNodeOptions {
   depth: number;
   visited: Set<string>;
   includeFiles: boolean;
+  ignoreGeneratedDirectories: boolean;
 }
 
 async function buildNode(
@@ -521,7 +524,11 @@ async function buildNode(
     if (!options.includeFiles && !entryMayBeDirectory) {
       continue;
     }
-    if (entryMayBeDirectory && IGNORED_DIRECTORY_NAMES.has(entry.name)) {
+    if (
+      options.ignoreGeneratedDirectories &&
+      entryMayBeDirectory &&
+      IGNORED_DIRECTORY_NAMES.has(entry.name)
+    ) {
       continue;
     }
 

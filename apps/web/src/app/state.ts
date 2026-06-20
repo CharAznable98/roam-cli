@@ -286,7 +286,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileContentState: "idle",
         fileSaveState: "idle",
       };
-    case "sessionWorkspaceUnavailable":
+    case "sessionWorkspaceUnavailable": {
+      const removedRequestIds = action.resetSelection
+        ? Object.values(state.fileTreeRequestIds[action.sessionId] ?? {})
+        : [];
       return {
         ...state,
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
@@ -309,7 +312,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileTreeRequestIds: action.resetSelection
           ? omitKey(state.fileTreeRequestIds, action.sessionId)
           : state.fileTreeRequestIds,
+        staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+          state.staleFileTreeRequestIds,
+          removedRequestIds,
+        ),
       };
+    }
     case "approvalUpserted":
       return upsertApprovalState(state, action.approval);
     case "hunkResolved":
