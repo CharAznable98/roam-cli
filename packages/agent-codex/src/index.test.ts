@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
 import {
@@ -5,8 +10,11 @@ import {
   agentPlugin,
   codexAgent,
   codexJsonArgs,
+  listCodexSkills,
   parseArgs,
 } from "./index.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("codex agent plugin", () => {
   it("builds the default codex capability", () => {
@@ -162,4 +170,124 @@ describe("codex agent plugin", () => {
       "danger full",
     ]);
   });
+
+  it("lists codex skills from nearest project roots before global roots", async () => {
+    const workspace = await mkdirTemp("roam-codex-skills-");
+    const home = await mkdirTemp("roam-codex-home-");
+    const repo = join(workspace, "repo");
+    const sessionCwd = join(repo, "packages", "app");
+    await mkdir(sessionCwd, { recursive: true });
+    await execFileAsync("git", ["init"], { cwd: repo });
+    await writeSkill(
+      join(sessionCwd, ".codex", "skills", "local-plan"),
+      "plan",
+      "Local plan",
+    );
+    await writeSkill(
+      join(repo, ".agents", "skills", "repo-review"),
+      "review",
+      "Repo review",
+    );
+    await writeSkill(
+      join(home, ".agents", "skills", "global-plan"),
+      "plan",
+      "Global plan",
+    );
+    await writeSkill(
+      join(home, ".codex", "skills", "global-docs"),
+      "docs",
+      "Global docs",
+    );
+    const localSkillPath = await realpath(
+      join(sessionCwd, ".codex", "skills", "local-plan"),
+    );
+
+    const skills = await listCodexSkills(workspace, sessionCwd, {
+      HOME: home,
+    });
+
+    expect(skills.map((skill) => skill.name)).toEqual([
+      "plan",
+      "review",
+      "docs",
+    ]);
+    expect(skills[0]).toMatchObject({
+      name: "plan",
+      description: "Local plan",
+      sourceType: "project",
+      sourcePath: localSkillPath,
+    });
+    expect(skills[2]).toMatchObject({
+      name: "docs",
+      sourceType: "global",
+    });
+  });
+
+  it("lists CODEX_HOME skills before home fallback roots", async () => {
+    const workspace = await mkdirTemp("roam-codex-skills-");
+    const home = await mkdirTemp("roam-codex-home-");
+    const codexHome = await mkdirTemp("roam-codex-custom-home-");
+    const sessionCwd = join(workspace, "repo");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeSkill(
+      join(codexHome, "skills", "custom-docs"),
+      "docs",
+      "Custom Codex docs",
+    );
+    await writeSkill(
+      join(home, ".agents", "skills", "global-review"),
+      "review",
+      "Global review",
+    );
+    await writeSkill(
+      join(home, ".codex", "skills", "home-docs"),
+      "docs",
+      "Home Codex docs",
+    );
+
+    const skills = await listCodexSkills(workspace, sessionCwd, {
+      CODEX_HOME: codexHome,
+      HOME: home,
+    });
+
+    expect(skills.map((skill) => skill.name)).toEqual(["docs", "review"]);
+    expect(skills[0]).toMatchObject({
+      name: "docs",
+      description: "Custom Codex docs",
+      sourceType: "global",
+    });
+  });
+
+  it("returns no skills when the configured base path escapes the workspace", async () => {
+    const workspace = await mkdirTemp("roam-codex-skills-workspace-");
+    const outside = await mkdirTemp("roam-codex-skills-outside-");
+
+    await writeSkill(
+      join(outside, ".codex", "skills", "outside"),
+      "outside",
+      "Outside",
+    );
+
+    await expect(
+      listCodexSkills(workspace, outside, { HOME: outside }),
+    ).resolves.toEqual([]);
+  });
 });
+
+async function mkdirTemp(prefix: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+async function writeSkill(
+  directory: string,
+  name: string,
+  description: string,
+): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "SKILL.md"),
+    ["---", `name: ${name}`, `description: ${description}`, "---", ""].join(
+      "\n",
+    ),
+  );
+}

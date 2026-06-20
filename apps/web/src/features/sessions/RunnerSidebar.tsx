@@ -1,4 +1,8 @@
-import type { Project, RunnerRegistration, Session } from "@roamcli/shared/protocol";
+import type {
+  Project,
+  RunnerRegistration,
+  Session,
+} from "@roamcli/shared/protocol";
 import {
   ChevronDown,
   ChevronRight,
@@ -12,6 +16,10 @@ import {
 } from "lucide-react";
 import { FormEvent, useId, useMemo, useState, type ReactNode } from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
+import type {
+  AgentSkillFetcher,
+  PathSearchFetcher,
+} from "../conversation/prompt-resources";
 import {
   composeProjectDirectory,
   projectDirectoryName,
@@ -36,6 +44,8 @@ type RunnerSidebarProps = {
     projectId: string,
     values: NewSessionValues,
   ) => void | Promise<void>;
+  onListAgentSkills: AgentSkillFetcher;
+  onSearchWorkspacePaths: PathSearchFetcher;
 };
 
 export function RunnerSidebar({
@@ -49,6 +59,8 @@ export function RunnerSidebar({
   onCreateProject,
   onArchiveProject,
   onCreateSession,
+  onListAgentSkills,
+  onSearchWorkspacePaths,
 }: RunnerSidebarProps) {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [sessionProjectId, setSessionProjectId] = useState<
@@ -239,6 +251,8 @@ export function RunnerSidebar({
             <NewSessionForm
               project={sessionProject}
               runner={sessionRunner}
+              onListAgentSkills={onListAgentSkills}
+              onSearchWorkspacePaths={onSearchWorkspacePaths}
               onCreate={async (values) => {
                 await onCreateSession(sessionProject.id, values);
                 setExpandedProjectIds((current) => {
@@ -345,9 +359,7 @@ export function ProjectForm({
     setSubmitting(true);
     try {
       await onCreate({
-        name:
-          name.trim() ||
-          projectDirectoryName(cleanDirectory),
+        name: name.trim() || projectDirectoryName(cleanDirectory),
         runnerId: cleanRunnerId,
         directory: cleanDirectory,
       });

@@ -97,6 +97,12 @@ export class SessionManager {
           },
         });
         return;
+      case "listAgentSkills":
+        await this.#listAgentSkills(command);
+        return;
+      case "searchWorkspacePaths":
+        await this.#workspaceCommands.searchWorkspacePaths(command);
+        return;
       case "writeSessionAttachments":
         try {
           await this.#emit({
@@ -335,6 +341,52 @@ export class SessionManager {
       return;
     } finally {
       this.#startingSessionIds.delete(session.id);
+    }
+  }
+
+  async #listAgentSkills(
+    command: Extract<RunnerCommand, { type: "listAgentSkills" }>,
+  ): Promise<void> {
+    const agent = this.#agents.get(command.agent);
+    if (!agent?.definition.listSkills) {
+      await this.#emit({
+        type: "agentSkillListResult",
+        result: {
+          requestId: command.requestId,
+          agent: command.agent,
+          basePath: command.basePath,
+          queriedAt: new Date().toISOString(),
+          skills: [],
+        },
+      });
+      return;
+    }
+
+    try {
+      const skills = await agent.definition.listSkills({
+        profile: this.#profile,
+        env: process.env,
+        workspace: this.#workspace,
+        basePath: command.basePath,
+      });
+      await this.#emit({
+        type: "agentSkillListResult",
+        result: {
+          requestId: command.requestId,
+          agent: command.agent,
+          basePath: command.basePath,
+          queriedAt: new Date().toISOString(),
+          skills: [...skills],
+        },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({
+        type: "error",
+        requestId: command.requestId,
+        message,
+        code: "SKILL_LIST_ERROR",
+      });
     }
   }
 

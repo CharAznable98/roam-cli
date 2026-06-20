@@ -1,5 +1,6 @@
 import type {
   AgentKind,
+  ApiAgentSkillList,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitContext,
@@ -9,6 +10,7 @@ import type {
   ApiGitPaths,
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
+  ApiPathSearch,
   ExecutionMode,
   ImageAttachmentUpload,
   SessionStatus,
@@ -710,6 +712,20 @@ export function useRoamController() {
     [requireApiClient],
   );
 
+  const listAgentSkills = useCallback(
+    async (input: ApiAgentSkillList) => {
+      return requireApiClient().listAgentSkills(input);
+    },
+    [requireApiClient],
+  );
+
+  const searchWorkspacePaths = useCallback(
+    async (input: ApiPathSearch) => {
+      return requireApiClient().searchWorkspacePaths(input);
+    },
+    [requireApiClient],
+  );
+
   const fetchGitStatus = useCallback(
     async (context: ApiGitContext) => {
       const api = requireApiClient();
@@ -923,6 +939,8 @@ export function useRoamController() {
     selectFile,
     saveSelectedFile,
     fetchMessageAttachmentContent,
+    listAgentSkills,
+    searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,

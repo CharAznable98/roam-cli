@@ -1,5 +1,7 @@
 import type {
+  AgentSkillListResult,
   AgentKind,
+  ApiAgentSkillList,
   ApiCreateProject,
   ApiCreateSession,
   ApiGitBlameQuery,
@@ -11,6 +13,7 @@ import type {
   ApiGitPaths,
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
+  ApiPathSearch,
   ApiUpdateProject,
   ApiUpdateSession,
   Approval,
@@ -29,6 +32,7 @@ import type {
   Message,
   MessageAttachment,
   PatchApplyResult,
+  PathSearchResult,
   Project,
   RunnerRegistration,
   ServerEvent,
@@ -87,6 +91,8 @@ export interface RoamApiClient {
     content: string,
   ): Promise<FileWriteResult>;
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
+  listAgentSkills(input: ApiAgentSkillList): Promise<AgentSkillListResult>;
+  searchWorkspacePaths(input: ApiPathSearch): Promise<PathSearchResult>;
   fetchGitStatus(context: ApiGitContext): Promise<GitStatus>;
   fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
   fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
@@ -159,6 +165,14 @@ interface FileWriteResponse {
 
 interface PatchApplyResponse {
   result: PatchApplyResult;
+}
+
+interface AgentSkillListResponse {
+  result: AgentSkillListResult;
+}
+
+interface PathSearchResponse {
+  result: PathSearchResult;
 }
 
 interface GitStatusResponse {
@@ -436,6 +450,28 @@ export function createRoamApiClient(
         {
           method: "POST",
           body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
+        },
+      );
+      return result;
+    },
+
+    async listAgentSkills(input) {
+      const { result } = await request<AgentSkillListResponse>(
+        "/v1/agent/skills",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
+    },
+
+    async searchWorkspacePaths(input) {
+      const { result } = await request<PathSearchResponse>(
+        "/v1/workspace/path-search",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
         },
       );
       return result;
