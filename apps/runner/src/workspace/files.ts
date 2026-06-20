@@ -127,7 +127,7 @@ export async function readFileContent(
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const truncated = bytesRead > maxBytes || targetStat.size > maxBytes;
     const contentBytes = buffer.subarray(0, Math.min(bytesRead, maxBytes));
-    if (isLikelyBinaryBuffer(contentBytes)) {
+    if (contentBytes.length > 0 && isLikelyBinaryBuffer(contentBytes)) {
       return {
         requestId: options.requestId,
         sessionId: options.sessionId,

@@ -1032,6 +1032,10 @@ describe("server", () => {
       (event) =>
         event.type === "runner:online" && event.runner.runnerId === "runner-1",
     );
+    const streamEvents: Array<Record<string, any>> = [];
+    stream.on("message", (data) => {
+      streamEvents.push(JSON.parse(String(data)) as Record<string, any>);
+    });
 
     const listPromise = app.inject({
       method: "GET",
@@ -1045,6 +1049,7 @@ describe("server", () => {
       path: ".",
       depth: 1,
     });
+    expect(String(listCommand.sessionId)).toMatch(/^runner-directory-/);
     runner.send(
       JSON.stringify({
         type: "fileTreeResult",
@@ -1068,6 +1073,10 @@ describe("server", () => {
     expect(listResponse.json().result.root.children).toEqual([
       { path: "api", name: "api", type: "directory", children: [] },
     ]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(streamEvents.some((event) => event.type === "file:tree")).toBe(
+      false,
+    );
 
     const createPromise = app.inject({
       method: "POST",

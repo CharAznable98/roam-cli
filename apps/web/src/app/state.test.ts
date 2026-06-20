@@ -1,5 +1,6 @@
 import type {
   Approval,
+  FileNode,
   Project,
   RunnerRegistration,
   ServerEvent,
@@ -305,6 +306,141 @@ describe("app reducer", () => {
     expect(next.fileContent).toBeUndefined();
     expect(next.editorContent).toBe("");
     expect(next.fileContentState).toBe("loading");
+  });
+
+  it("ignores stale file tree path loads after a root reset", () => {
+    const files: FileNode[] = [
+      {
+        path: "src",
+        name: "src",
+        type: "directory",
+      },
+    ];
+    const next = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: { "session-1": files },
+        fileTreePathState: { "session-1": { ".": "loading" } },
+      },
+      {
+        type: "fileTreeLoaded",
+        sessionId: "session-1",
+        path: "src",
+        files: [
+          {
+            path: "src/App.tsx",
+            name: "App.tsx",
+            type: "file",
+            size: 42,
+          },
+        ],
+      },
+    );
+
+    expect(next.filesBySession["session-1"]).toEqual(files);
+    expect(next.fileTreePathState["session-1"]).toEqual({ ".": "loading" });
+  });
+
+  it("ignores stale streamed file tree results after a root reset", () => {
+    const files: FileNode[] = [
+      {
+        path: "src",
+        name: "src",
+        type: "directory",
+      },
+    ];
+    const event: ServerEvent = {
+      type: "file:tree",
+      result: {
+        requestId: "file-tree-1",
+        sessionId: "session-1",
+        root: {
+          path: "src",
+          name: "src",
+          type: "directory",
+          children: [
+            {
+              path: "src/App.tsx",
+              name: "App.tsx",
+              type: "file",
+              size: 42,
+            },
+          ],
+        },
+      },
+    };
+    const next = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: { "session-1": files },
+        fileTreePathState: { "session-1": { ".": "loading" } },
+      },
+      { type: "serverEventReceived", event },
+    );
+
+    expect(next.filesBySession["session-1"]).toEqual(files);
+    expect(next.fileTreePathState["session-1"]).toEqual({ ".": "loading" });
+  });
+
+  it("clears descendant path states when replacing a loaded parent directory", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-1": [
+            {
+              path: "src",
+              name: "src",
+              type: "directory",
+              children: [
+                {
+                  path: "src/components",
+                  name: "components",
+                  type: "directory",
+                  children: [
+                    {
+                      path: "src/components/Button.tsx",
+                      name: "Button.tsx",
+                      type: "file",
+                      size: 24,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        fileTreePathState: {
+          "session-1": {
+            ".": "ready",
+            src: "loading",
+            "src/components": "ready",
+          },
+        },
+      },
+      {
+        type: "fileTreeLoaded",
+        sessionId: "session-1",
+        path: "src",
+        files: [
+          {
+            path: "src/App.tsx",
+            name: "App.tsx",
+            type: "file",
+            size: 42,
+          },
+        ],
+      },
+    );
+
+    expect(next.filesBySession["session-1"]?.[0]).toMatchObject({
+      path: "src",
+      children: [{ path: "src/App.tsx" }],
+    });
+    expect(next.fileTreePathState["session-1"]).toEqual({
+      ".": "ready",
+      src: "ready",
+    });
   });
 
   it("keeps open file edits when refreshing the current session workspace", () => {

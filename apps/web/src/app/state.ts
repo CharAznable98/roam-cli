@@ -381,28 +381,15 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
       };
     case "fileTreeLoaded":
-      return {
-        ...state,
-        filesBySession: {
-          ...state.filesBySession,
-          [action.sessionId]: replaceTreeChildren(
-            state.filesBySession[action.sessionId] ?? [],
-            action.path,
-            action.files,
-          ),
-        },
-        fileTreeState: {
-          ...state.fileTreeState,
-          [action.sessionId]: "ready",
-        },
-        fileTreePathState: {
-          ...state.fileTreePathState,
-          [action.sessionId]: {
-            ...state.fileTreePathState[action.sessionId],
-            [action.path]: "ready",
-          },
-        },
-      };
+      if (!isFileTreePathLoading(state, action.sessionId, action.path)) {
+        return state;
+      }
+      return applyLoadedFileTree(
+        state,
+        action.sessionId,
+        action.path,
+        action.files,
+      );
     case "fileTreeFailed":
       return pushNotification(
         {
@@ -567,28 +554,15 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   }
   if (event.type === "file:tree") {
     const path = event.result.root.path;
-    return {
-      ...state,
-      filesBySession: {
-        ...state.filesBySession,
-        [event.result.sessionId]: replaceTreeChildren(
-          state.filesBySession[event.result.sessionId] ?? [],
-          path,
-          event.result.root.children ?? [event.result.root],
-        ),
-      },
-      fileTreeState: {
-        ...state.fileTreeState,
-        [event.result.sessionId]: "ready",
-      },
-      fileTreePathState: {
-        ...state.fileTreePathState,
-        [event.result.sessionId]: {
-          ...state.fileTreePathState[event.result.sessionId],
-          [path]: "ready",
-        },
-      },
-    };
+    if (!isFileTreePathLoading(state, event.result.sessionId, path)) {
+      return state;
+    }
+    return applyLoadedFileTree(
+      state,
+      event.result.sessionId,
+      path,
+      event.result.root.children ?? [event.result.root],
+    );
   }
   if (
     event.type === "file:content" &&
@@ -671,6 +645,62 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     fileTreeState: omitKey(state.fileTreeState, sessionId),
     fileTreePathState: omitKey(state.fileTreePathState, sessionId),
   };
+}
+
+function isFileTreePathLoading(
+  state: AppState,
+  sessionId: string,
+  path: string,
+): boolean {
+  return state.fileTreePathState[sessionId]?.[path] === "loading";
+}
+
+function applyLoadedFileTree(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  files: FileNode[],
+): AppState {
+  return {
+    ...state,
+    filesBySession: {
+      ...state.filesBySession,
+      [sessionId]: replaceTreeChildren(
+        state.filesBySession[sessionId] ?? [],
+        path,
+        files,
+      ),
+    },
+    fileTreeState: {
+      ...state.fileTreeState,
+      [sessionId]: "ready",
+    },
+    fileTreePathState: {
+      ...state.fileTreePathState,
+      [sessionId]: {
+        ...pruneDescendantPathStates(
+          state.fileTreePathState[sessionId] ?? {},
+          path,
+        ),
+        [path]: "ready",
+      },
+    },
+  };
+}
+
+function pruneDescendantPathStates(
+  pathStates: Record<string, AsyncState>,
+  path: string,
+): Record<string, AsyncState> {
+  if (path === ".") {
+    return {};
+  }
+  const prefix = `${path}/`;
+  return Object.fromEntries(
+    Object.entries(pathStates).filter(([candidate]) => {
+      return candidate !== path && !candidate.startsWith(prefix);
+    }),
+  );
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {

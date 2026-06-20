@@ -84,6 +84,9 @@ export class RunnerEventService {
 
     if (event.type === "fileTreeResult") {
       this.rpc.resolveRunnerResponse(event.result);
+      if (isRunnerDirectoryResult(event.result.sessionId)) {
+        return;
+      }
       this.hub.broadcast({ type: "file:tree", result: event.result });
       return;
     }
@@ -235,6 +238,10 @@ export class RunnerEventService {
       }
     }
   }
+}
+
+function isRunnerDirectoryResult(sessionId: string): boolean {
+  return sessionId.startsWith("runner-directory-");
 }
 
 function isInternalRunnerError(

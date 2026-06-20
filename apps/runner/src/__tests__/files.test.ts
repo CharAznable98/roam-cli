@@ -73,6 +73,31 @@ describe("runner file reads", () => {
     });
   });
 
+  it("returns empty non-image files as editable text", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-empty-"));
+    const sessionCwd = join(workspace, "project");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeFile(join(sessionCwd, "README.md"), "");
+
+    const result = await readFileContent({
+      workspace,
+      sessionCwd,
+      requestId: "empty-1",
+      sessionId: "s1",
+      path: "README.md",
+    });
+
+    expect(result).toEqual({
+      requestId: "empty-1",
+      sessionId: "s1",
+      path: "README.md",
+      kind: "text",
+      content: "",
+      truncated: false,
+      encoding: "utf8",
+    });
+  });
+
   it("returns image content as base64 and marks other binary files as binary", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-image-"));
     const sessionCwd = join(workspace, "project");
