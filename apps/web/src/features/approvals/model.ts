@@ -34,6 +34,12 @@ export function extractPatchHunks(approvals: Approval[]): SessionPatchHunk[] {
     }
     return payload.hunks.filter(isPatchHunk).map((hunk) => ({
       ...hunk,
+      status:
+        approval.status === "pending"
+          ? hunk.status
+          : approval.status === "approved"
+            ? "edited"
+            : "rejected",
       approvalId: approval.id,
       sessionId: approval.sessionId,
     }));
@@ -57,6 +63,32 @@ export function buildPatchFromHunks(hunks: PatchHunk[]): string {
     ])
     .join("\n")
     .concat("\n");
+}
+
+export function appliedPatchApprovalIds(
+  hunks: SessionPatchHunk[],
+  sessionId: string,
+): string[] {
+  const acceptedApprovalIds = new Set(
+    hunks
+      .filter(
+        (hunk) => hunk.sessionId === sessionId && hunk.status === "accepted",
+      )
+      .map((hunk) => hunk.approvalId),
+  );
+  return [...acceptedApprovalIds].filter((approvalId) =>
+    hunks
+      .filter(
+        (hunk) =>
+          hunk.sessionId === sessionId && hunk.approvalId === approvalId,
+      )
+      .every(
+        (hunk) =>
+          hunk.status === "accepted" ||
+          hunk.status === "rejected" ||
+          hunk.status === "edited",
+      ),
+  );
 }
 
 export function isPatchHunk(value: unknown): value is PatchHunk {

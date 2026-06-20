@@ -1,17 +1,20 @@
+import { Editor, type OnMount } from "@monaco-editor/react";
 import type { FileNode } from "@roamcli/shared/protocol";
 import { ChevronRight, FileCode2, Folder, Pencil, Save } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type FilePanelProps = {
   files: FileNode[];
   treeState: "idle" | "loading" | "ready" | "error";
   selectedPath: string;
-  fileContent: {
-    path: string;
-    content: string;
-    truncated: boolean;
-    encoding: string;
-  } | undefined;
+  fileContent:
+    | {
+        path: string;
+        content: string;
+        truncated: boolean;
+        encoding: string;
+      }
+    | undefined;
   editorContent: string;
   contentState: "idle" | "loading" | "ready" | "error";
   saveState: "idle" | "loading" | "ready" | "error";
@@ -30,20 +33,28 @@ export function FilePanel({
   saveState,
   onSelectFile,
   onChangeContent,
-  onSaveFile
+  onSaveFile,
 }: FilePanelProps) {
-  const visibleContent = fileContent?.path === selectedPath ? fileContent : undefined;
-  const isDirty = visibleContent !== undefined && editorContent !== visibleContent.content;
+  const visibleContent =
+    fileContent?.path === selectedPath ? fileContent : undefined;
+  const isDirty =
+    visibleContent !== undefined && editorContent !== visibleContent.content;
   const canEdit = visibleContent !== undefined && !visibleContent.truncated;
   const canSave = canEdit && isDirty && saveState !== "loading";
+  const canSaveRef = useRef(canSave);
+  const onSaveFileRef = useRef(onSaveFile);
 
-  const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      if (canSave) {
-        onSaveFile();
+  useEffect(() => {
+    canSaveRef.current = canSave;
+    onSaveFileRef.current = onSaveFile;
+  }, [canSave, onSaveFile]);
+
+  const handleEditorMount: OnMount = (editor, monaco) => {
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      if (canSaveRef.current) {
+        onSaveFileRef.current();
       }
-    }
+    });
   };
 
   return (
@@ -54,10 +65,27 @@ export function FilePanel({
       </div>
       <div className="file-grid">
         <div className="file-tree" role="tree">
-          {treeState === "loading" ? <div className="empty-state compact">Loading file tree...</div> : null}
-          {treeState === "error" ? <div className="empty-state compact">File tree could not be loaded.</div> : null}
-          {treeState === "ready" && files.length === 0 ? <div className="empty-state compact">No files returned for this session.</div> : null}
-          {files.map((node) => <TreeNode key={node.path} node={node} selectedPath={selectedPath} onSelect={onSelectFile} />)}
+          {treeState === "loading" ? (
+            <div className="empty-state compact">Loading file tree...</div>
+          ) : null}
+          {treeState === "error" ? (
+            <div className="empty-state compact">
+              File tree could not be loaded.
+            </div>
+          ) : null}
+          {treeState === "ready" && files.length === 0 ? (
+            <div className="empty-state compact">
+              No files returned for this session.
+            </div>
+          ) : null}
+          {files.map((node) => (
+            <TreeNode
+              key={node.path}
+              node={node}
+              selectedPath={selectedPath}
+              onSelect={onSelectFile}
+            />
+          ))}
         </div>
         <div className="editor-placeholder">
           <div>
@@ -67,15 +95,40 @@ export function FilePanel({
                 <h3>{selectedPath || "No file selected"}</h3>
               </div>
               <div className="editor-status" aria-label="File save status">
-                <span className={`editor-state-badge ${canEdit ? "editable" : "readonly"}`}>
+                <span
+                  className={`editor-state-badge ${
+                    canEdit ? "editable" : "readonly"
+                  }`}
+                >
                   <Pencil size={13} />
                   {canEdit ? "Editable" : "Read-only"}
                 </span>
-                <span className={`editor-state-badge ${saveState === "error" ? "error" : isDirty ? "dirty" : "saved"}`}>
+                <span
+                  className={`editor-state-badge ${
+                    saveState === "error"
+                      ? "error"
+                      : isDirty
+                        ? "dirty"
+                        : "saved"
+                  }`}
+                >
                   <Save size={13} />
-                  {saveState === "loading" ? "Saving" : saveState === "error" ? "Error" : isDirty ? "Unsaved" : "Saved"}
+                  {saveState === "loading"
+                    ? "Saving"
+                    : saveState === "error"
+                      ? "Error"
+                      : isDirty
+                        ? "Unsaved"
+                        : "Saved"}
                 </span>
-                <button className="icon-button" type="button" aria-label="Save file" title="Save file" disabled={!canSave} onClick={onSaveFile}>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Save file"
+                  title="Save file"
+                  disabled={!canSave}
+                  onClick={onSaveFile}
+                >
                   <Save size={15} />
                 </button>
               </div>
@@ -86,14 +139,24 @@ export function FilePanel({
                   {visibleContent.encoding}
                   {visibleContent.truncated ? " · truncated" : ""}
                 </p>
-                <textarea
-                  className="code-editor"
+                <Editor
+                  className="monaco-file-editor"
+                  height="100%"
+                  language={languageForPath(visibleContent.path)}
+                  path={editorModelPath(visibleContent.path)}
                   value={editorContent}
-                  onChange={(event) => onChangeContent(event.target.value)}
-                  onKeyDown={keyDown}
-                  spellCheck={false}
-                  disabled={!canEdit || saveState === "loading"}
-                  aria-label={`Edit ${visibleContent.path}`}
+                  onChange={(value) => onChangeContent(value ?? "")}
+                  onMount={handleEditorMount}
+                  wrapperProps={{
+                    "aria-label": `Edit ${visibleContent.path}`,
+                  }}
+                  options={{
+                    readOnly: !canEdit || saveState === "loading",
+                    minimap: { enabled: false },
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    tabSize: 2,
+                  }}
                 />
               </>
             ) : (
@@ -106,18 +169,51 @@ export function FilePanel({
   );
 }
 
-function contentMessage(selectedPath: string, contentState: FilePanelProps["contentState"]) {
+function contentMessage(
+  selectedPath: string,
+  contentState: FilePanelProps["contentState"],
+) {
   if (!selectedPath) return "Select a file from the tree to load its contents.";
   if (contentState === "loading") return "Loading file content...";
   if (contentState === "error") return "File content could not be loaded.";
   return "Select a file from the tree to load its contents.";
 }
 
+function languageForPath(path: string): string {
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  const languages: Record<string, string> = {
+    css: "css",
+    go: "go",
+    html: "html",
+    java: "java",
+    js: "javascript",
+    json: "json",
+    jsx: "javascript",
+    kt: "kotlin",
+    md: "markdown",
+    py: "python",
+    rs: "rust",
+    scss: "scss",
+    sh: "shell",
+    sql: "sql",
+    ts: "typescript",
+    tsx: "typescript",
+    xml: "xml",
+    yaml: "yaml",
+    yml: "yaml",
+  };
+  return languages[extension] ?? "plaintext";
+}
+
+function editorModelPath(path: string): string {
+  return `roam-file:///${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 function TreeNode({
   node,
   selectedPath,
   onSelect,
-  depth = 0
+  depth = 0,
 }: {
   node: FileNode;
   selectedPath: string;
@@ -144,13 +240,25 @@ function TreeNode({
           }
         }}
       >
-        {isDirectory ? <ChevronRight className={isOpen ? "rotate-90" : ""} size={15} /> : <FileCode2 size={15} />}
+        {isDirectory ? (
+          <ChevronRight className={isOpen ? "rotate-90" : ""} size={15} />
+        ) : (
+          <FileCode2 size={15} />
+        )}
         {isDirectory ? <Folder size={15} /> : null}
         <span className="truncate">{node.name}</span>
       </button>
-      {isDirectory && isOpen && node.children?.map((child) => (
-        <TreeNode key={child.path} node={child} selectedPath={selectedPath} onSelect={onSelect} depth={depth + 1} />
-      ))}
+      {isDirectory &&
+        isOpen &&
+        node.children?.map((child) => (
+          <TreeNode
+            key={child.path}
+            node={child}
+            selectedPath={selectedPath}
+            onSelect={onSelect}
+            depth={depth + 1}
+          />
+        ))}
     </div>
   );
 }
