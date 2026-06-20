@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   ApiApplyPatchSchema,
   ApiApprovalResponseSchema,
+  ApiCreateMessageSchema,
   ApiCreateProjectSchema,
   ApiCreateSessionSchema,
   ApiGitBlameQuerySchema,
@@ -66,10 +67,13 @@ function registerSessionRoutes(
         .send({ error: "invalid_request", issues: parsed.error.issues });
     }
 
-    const result = context.services.sessions.createSession(parsed.data);
+    const result = await context.services.sessions.createSession(parsed.data);
     if (!result.ok) {
       if (result.error === "runner_offline") {
         return reply.code(409).send({ error: "runner_offline" });
+      }
+      if (result.error === "runner_timeout") {
+        return reply.code(504).send({ error: "runner_timeout" });
       }
       if (result.error === "unsupported_agent") {
         return reply.code(400).send({ error: "unsupported_agent" });
@@ -118,10 +122,64 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
       artifacts: context.store.listArtifacts(session.id),
     };
   });
+
+  app.post("/v1/sessions/:id/messages", async (request, reply) => {
+    const params = SessionParamsSchema.parse(request.params);
+    const parsed = ApiCreateMessageSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+
+    const result = await context.services.sessions.createUserMessage(
+      params.id,
+      parsed.data,
+    );
+    if (!result.ok) {
+      if (result.error === "session_not_found") {
+        return reply.code(404).send({ error: "session_not_found" });
+      }
+      if (
+        result.error === "runner_offline" ||
+        result.error === "session_not_running" ||
+        result.error === "attachments_require_idle"
+      ) {
+        return reply.code(409).send({ error: result.error });
+      }
+      if (result.error === "runner_timeout") {
+        return reply.code(504).send({ error: "runner_timeout" });
+      }
+      return reply.code(400).send({ error: result.error });
+    }
+    return reply.code(201).send(result.value);
+  });
+
+  app.get(
+    "/v1/sessions/:id/attachments/:attachmentId/content",
+    async (request, reply) => {
+      const params = SessionParamsSchema.extend({
+        attachmentId: SessionParamsSchema.shape.id,
+      }).parse(request.params);
+      const result = await context.services.sessions.readAttachmentContent(
+        params.id,
+        params.attachmentId,
+      );
+      if (!result.ok) {
+        return reply.code(404).send({ error: "attachment_unavailable" });
+      }
+      return reply
+        .header("cache-control", "no-store")
+        .header("content-length", String(result.value.content.byteLength))
+        .type(result.value.attachment.mimeType)
+        .send(result.value.content);
+    },
+  );
 
   app.delete("/v1/sessions/:id", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
@@ -232,7 +290,9 @@ function registerProjectRoutes(
 
   app.post("/v1/projects/:id/archive", async (request, reply) => {
     const params = ProjectParamsSchema.parse(request.params);
-    const project = context.store.archiveProject(params.id, nowIso());
+    const archivedAt = nowIso();
+    context.services.sessions.handleProjectArchived(params.id, archivedAt);
+    const project = context.store.archiveProject(params.id, archivedAt);
     if (!project) {
       return reply.code(404).send({ error: "project_not_found" });
     }

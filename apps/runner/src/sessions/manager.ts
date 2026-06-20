@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { mkdir, realpath, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type {
   AgentKind,
+  RunnerAttachmentRef,
   RunnerCommand,
   RunnerProfile,
   Session,
@@ -12,6 +13,7 @@ import { spawnAgentProcess, type AgentProcess } from "../agents/process.js";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";
 import { resolveWorkspaceChild } from "../workspace/scope.js";
+import { SessionAttachmentStore } from "./attachments.js";
 import { SessionOutputHandler } from "./output.js";
 import type { RunnerEventSink, RunningSession } from "./types.js";
 import { WorkspaceCommandHandler } from "./workspace-commands.js";
@@ -20,6 +22,7 @@ const execFileAsync = promisify(execFile);
 
 export interface SessionManagerOptions {
   workspace: string;
+  stateDir?: string;
   profile: RunnerProfile;
   agents: readonly LoadedAgent[];
   approvalSecret?: string;
@@ -28,6 +31,7 @@ export interface SessionManagerOptions {
 
 export class SessionManager {
   readonly #workspace: string;
+  readonly #attachments: SessionAttachmentStore;
   readonly #profile: RunnerProfile;
   readonly #agents: Map<AgentKind, LoadedAgent>;
   readonly #emit: RunnerEventSink;
@@ -39,6 +43,9 @@ export class SessionManager {
 
   public constructor(options: SessionManagerOptions) {
     this.#workspace = options.workspace;
+    this.#attachments = new SessionAttachmentStore(
+      options.stateDir ?? join(this.#workspace, ".roam-runner"),
+    );
     this.#profile = options.profile;
     this.#agents = new Map(
       options.agents.map((agent) => [agent.capability.kind, agent]),
@@ -71,10 +78,67 @@ export class SessionManager {
           command.session,
           command.prompt,
           command.resumeThreadId,
+          command.attachments,
         );
         return;
       case "deliverInput":
         this.deliverInput(command.sessionId, command.content);
+        return;
+      case "writeSessionAttachments":
+        try {
+          await this.#emit({
+            type: "attachmentWriteResult",
+            result: await this.#attachments.writeSessionAttachments(
+              command.requestId,
+              command.sessionId,
+              command.attachments,
+            ),
+          });
+        } catch (error: unknown) {
+          await this.#emitCommandError(
+            command.requestId,
+            command.sessionId,
+            error,
+          );
+        }
+        return;
+      case "readSessionAttachment":
+        try {
+          await this.#emit({
+            type: "attachmentContentResult",
+            result: await this.#attachments.readSessionAttachment(
+              command.requestId,
+              command.sessionId,
+              command.attachmentId,
+              command.runnerStoragePath,
+              command.maxBytes,
+            ),
+          });
+        } catch (error: unknown) {
+          await this.#emitCommandError(
+            command.requestId,
+            command.sessionId,
+            error,
+          );
+        }
+        return;
+      case "deleteSessionAttachments":
+        try {
+          await this.#emit({
+            type: "attachmentDeleteResult",
+            result: await this.#attachments.deleteSessionAttachments(
+              command.requestId,
+              command.sessionId,
+              command.attachments,
+            ),
+          });
+        } catch (error: unknown) {
+          await this.#emitCommandError(
+            command.requestId,
+            command.sessionId,
+            error,
+          );
+        }
         return;
       case "readFileTree":
         await this.#workspaceCommands.readFileTree(command);
@@ -142,6 +206,7 @@ export class SessionManager {
     session: Session,
     prompt: string,
     resumeThreadId?: string,
+    attachments: readonly RunnerAttachmentRef[] = [],
   ): Promise<void> {
     if (this.#sessions.has(session.id)) {
       await this.#emit({
@@ -184,6 +249,14 @@ export class SessionManager {
         profile: this.#profile,
         env: process.env,
         prompt,
+        attachments: attachments.map((attachment) => ({
+          kind: attachment.kind,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          localPath: this.#attachments.localPathFor(
+            attachment.runnerStoragePath,
+          ),
+        })),
         ...(resumeThreadId ? { resumeThreadId } : {}),
       });
       child = await spawnAgentProcess(launch.command, launch.args, {
@@ -356,6 +429,20 @@ export class SessionManager {
         `${JSON.stringify({ type: "controlSignal", signal: "resume" })}\n`,
       );
     }
+  }
+
+  async #emitCommandError(
+    requestId: string,
+    sessionId: string,
+    error: unknown,
+  ): Promise<void> {
+    await this.#emit({
+      type: "error",
+      requestId,
+      sessionId,
+      message: error instanceof Error ? error.message : String(error),
+      code: "ATTACHMENT_ERROR",
+    });
   }
 
   #trackOutput(running: RunningSession, chunk: string | Buffer): void {

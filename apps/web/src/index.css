@@ -1028,21 +1028,183 @@
 
   .composer {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 40px;
+    grid-template-columns: minmax(0, 1fr) 40px 40px;
     gap: 8px;
+    align-items: end;
     border-top: 1px solid #d9e1ea;
     background: #f8fafc;
     padding: 8px 10px;
   }
 
+  .composer-input-surface {
+    display: grid;
+    min-width: 0;
+    gap: 8px;
+  }
+
   .composer textarea {
     min-height: 42px;
     max-height: 140px;
+    width: 100%;
+    min-width: 0;
     resize: vertical;
     border: 1px solid #d9e1ea;
     border-radius: 8px;
     padding: 9px 10px;
     outline: none;
+  }
+
+  .composer-error {
+    margin: -2px 0 0;
+  }
+
+  .composer-attach-button {
+    background: #ffffff;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    height: 1px;
+    width: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  .draft-image-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+    gap: 8px;
+  }
+
+  .draft-image-tile {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 8px;
+    overflow: hidden;
+    border: 1px solid #cdd7e4;
+    border-radius: 7px;
+    background: #ffffff;
+    padding: 6px 28px 6px 6px;
+  }
+
+  .draft-image-tile img,
+  .image-placeholder.compact {
+    height: 44px;
+    width: 44px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+
+  .image-placeholder.compact {
+    display: grid;
+    place-items: center;
+    background: #eef2f6;
+    color: #586a80;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  .draft-image-meta {
+    display: grid;
+    min-width: 0;
+    align-content: center;
+    gap: 2px;
+  }
+
+  .draft-image-meta span,
+  .draft-image-meta small,
+  .message-image-frame figcaption {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .draft-image-meta span {
+    color: #1f2937;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .draft-image-meta small {
+    color: #586a80;
+    font-size: 11px;
+  }
+
+  .draft-image-remove {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    display: inline-flex;
+    height: 22px;
+    width: 22px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(88, 106, 128, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.94);
+    color: #465568;
+  }
+
+  .draft-image-remove:hover {
+    border-color: rgba(208, 68, 68, 0.34);
+    color: #d04444;
+  }
+
+  .message-attachment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 220px));
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .message-image-frame,
+  .message-image-placeholder {
+    overflow: hidden;
+    border: 1px solid #d9e1ea;
+    border-radius: 7px;
+    background: #ffffff;
+  }
+
+  .message-image-frame {
+    display: grid;
+    margin: 0;
+  }
+
+  .message-image-frame img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+  }
+
+  .message-image-frame figcaption {
+    border-top: 1px solid #edf1f5;
+    color: #586a80;
+    font-size: 11px;
+    padding: 5px 7px;
+  }
+
+  .message-image-placeholder {
+    display: grid;
+    min-height: 104px;
+    place-items: center;
+    gap: 6px;
+    color: #586a80;
+    font-size: 12px;
+  }
+
+  .primary-icon-button svg.animate-spin,
+  .primary-icon-button .lucide-loader-circle {
+    animation: roam-spin 0.9s linear infinite;
+  }
+
+  @keyframes roam-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .icon-button,

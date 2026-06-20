@@ -41,6 +41,7 @@ export async function createRunner(
   let connection: RunnerConnection;
   const sessionOptions: Omit<SessionManagerOptions, "approvalSecret"> = {
     workspace: cli.workspace,
+    stateDir,
     profile: cli.profile,
     agents: registry.agents,
     emit: (event) => connection.send(event),

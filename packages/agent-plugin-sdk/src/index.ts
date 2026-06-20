@@ -10,6 +10,14 @@ export interface AgentPluginContext {
 export interface AgentLaunchContext extends AgentPluginContext {
   prompt: string;
   resumeThreadId?: string;
+  attachments?: readonly AgentLaunchAttachment[];
+}
+
+export interface AgentLaunchAttachment {
+  kind: "image";
+  name: string;
+  mimeType: string;
+  localPath: string;
 }
 
 export interface AgentLaunch {

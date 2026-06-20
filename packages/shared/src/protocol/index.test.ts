@@ -5,10 +5,12 @@ import {
   FileContentResultSchema,
   FileTreeResultSchema,
   FileWriteResultSchema,
+  ImageAttachmentUploadSchema,
   PatchApplyResultSchema,
   ApiCreateSessionSchema,
   RunnerCommandSchema,
   RunnerRegistrationSchema,
+  RunnerEventSchema,
   ServerEventSchema,
   nowIso,
 } from "./index.js";
@@ -36,8 +38,87 @@ describe("protocol schemas", () => {
     });
 
     expect(runner.capabilities[0]?.supportsResume).toBe(false);
+    expect(runner.capabilities[0]?.supportsImages).toBe(false);
+    expect(runner.capabilities[0]?.supportedImageMimeTypes).toEqual([]);
+    expect(runner.capabilities[0]?.maxImagesPerTurn).toBe(0);
     expect(runner.capabilities[0]?.kind).toBe("vendor.custom-agent");
     expect(runner.capabilities[0]?.pluginName).toBe("@vendor/custom-agent");
+  });
+
+  it("validates image attachment uploads, runner refs, and public events", () => {
+    const uploaded = ImageAttachmentUploadSchema.parse({
+      name: "screen.png",
+      mimeType: "image/png",
+      size: 5,
+      contentBase64: "aGVsbG8=",
+    });
+    expect(uploaded.size).toBe(5);
+    expect(() =>
+      ImageAttachmentUploadSchema.parse({
+        ...uploaded,
+        contentBase64: "not base64!",
+      }),
+    ).toThrow();
+
+    const writeCommand = RunnerCommandSchema.parse({
+      type: "writeSessionAttachments",
+      requestId: "attachment-write-1",
+      sessionId: "session-1",
+      attachments: [uploaded],
+    });
+    expect(writeCommand.type).toBe("writeSessionAttachments");
+
+    const runnerRef = {
+      id: "attachment-1",
+      kind: "image",
+      name: "screen.png",
+      mimeType: "image/png",
+      size: 5,
+      sha256: "0123456789abcdef0123456789abcdef",
+      runnerStoragePath: "attachments/session-1/attachment-1/screen.png",
+    } as const;
+    const startCommand = RunnerCommandSchema.parse({
+      type: "startSession",
+      session: sessionRecord(),
+      prompt: "describe",
+      attachments: [runnerRef],
+    });
+    expect(startCommand.type).toBe("startSession");
+    if (startCommand.type === "startSession") {
+      expect(startCommand.attachments).toEqual([runnerRef]);
+    }
+
+    expect(
+      RunnerEventSchema.parse({
+        type: "attachmentWriteResult",
+        result: {
+          requestId: "attachment-write-1",
+          sessionId: "session-1",
+          attachments: [runnerRef],
+        },
+      }).type,
+    ).toBe("attachmentWriteResult");
+
+    const event = ServerEventSchema.parse({
+      type: "message_attachment:created",
+      attachment: {
+        id: runnerRef.id,
+        sessionId: "session-1",
+        messageId: "message-1",
+        runnerId: "runner-1",
+        kind: "image",
+        name: runnerRef.name,
+        mimeType: runnerRef.mimeType,
+        size: runnerRef.size,
+        sha256: runnerRef.sha256,
+        status: "available",
+        createdAt: nowIso(),
+      },
+    });
+    expect(event.type).toBe("message_attachment:created");
+    if (event.type === "message_attachment:created") {
+      expect(event.attachment).not.toHaveProperty("runnerStoragePath");
+    }
   });
 
   it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {
@@ -169,3 +250,20 @@ describe("protocol schemas", () => {
     ).toEqual([]);
   });
 });
+
+function sessionRecord() {
+  const now = nowIso();
+  return {
+    id: "session-1",
+    title: "Session",
+    projectId: "project-1",
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "running",
+    executionMode: "direct",
+    executionFolder: "/workspace",
+    cwd: "/workspace",
+    createdAt: now,
+    updatedAt: now,
+  };
+}

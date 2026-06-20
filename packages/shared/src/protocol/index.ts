@@ -13,6 +13,14 @@ export const RunnerCapabilitySchema = z.object({
   args: z.array(z.string()).default([]),
   parser: z.string().min(1),
   supportsResume: z.boolean().default(false),
+  supportsImages: z.boolean().default(false),
+  supportedImageMimeTypes: z.array(z.string().min(1)).default([]),
+  maxImagesPerTurn: z.number().int().nonnegative().default(0),
+  maxImageBytes: z
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
   pluginName: z.string().min(1).optional(),
   pluginVersion: z.string().min(1).optional(),
 });
@@ -267,6 +275,83 @@ export const MessageSchema = z.object({
 });
 export type Message = z.infer<typeof MessageSchema>;
 
+const Base64PayloadSchema = z
+  .string()
+  .min(1)
+  .refine((value) => isBase64Payload(value), {
+    message: "Expected base64-encoded content",
+  });
+
+export const ImageAttachmentUploadSchema = z.object({
+  name: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(128),
+  size: z.number().int().positive(),
+  contentBase64: Base64PayloadSchema,
+});
+export type ImageAttachmentUpload = z.infer<typeof ImageAttachmentUploadSchema>;
+
+export const MessageAttachmentStatusSchema = z.enum(["available", "deleted"]);
+export type MessageAttachmentStatus = z.infer<
+  typeof MessageAttachmentStatusSchema
+>;
+
+export const MessageAttachmentSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  messageId: z.string().min(1),
+  runnerId: z.string().min(1),
+  kind: z.literal("image"),
+  name: z.string().min(1),
+  mimeType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().min(16),
+  status: MessageAttachmentStatusSchema,
+  createdAt: z.string().datetime(),
+  deletedAt: z.string().datetime().optional(),
+});
+export type MessageAttachment = z.infer<typeof MessageAttachmentSchema>;
+
+export const RunnerAttachmentRefSchema = z.object({
+  id: z.string().min(1),
+  kind: z.literal("image"),
+  name: z.string().min(1),
+  mimeType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().min(16),
+  runnerStoragePath: z.string().min(1),
+});
+export type RunnerAttachmentRef = z.infer<typeof RunnerAttachmentRefSchema>;
+
+export const AttachmentWriteResultSchema = z.object({
+  requestId: z.string().min(1),
+  sessionId: z.string().min(1),
+  attachments: z.array(RunnerAttachmentRefSchema),
+});
+export type AttachmentWriteResult = z.infer<typeof AttachmentWriteResultSchema>;
+
+export const AttachmentContentResultSchema = z.object({
+  requestId: z.string().min(1),
+  sessionId: z.string().min(1),
+  attachmentId: z.string().min(1),
+  name: z.string().min(1),
+  mimeType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  contentBase64: Base64PayloadSchema,
+});
+export type AttachmentContentResult = z.infer<
+  typeof AttachmentContentResultSchema
+>;
+
+export const AttachmentDeleteResultSchema = z.object({
+  requestId: z.string().min(1),
+  sessionId: z.string().min(1),
+  deleted: z.array(z.string().min(1)),
+  failed: z.array(z.string().min(1)).default([]),
+});
+export type AttachmentDeleteResult = z.infer<
+  typeof AttachmentDeleteResultSchema
+>;
+
 export const ApprovalKindSchema = z.enum(["execCommand", "applyPatch"]);
 export type ApprovalKind = z.infer<typeof ApprovalKindSchema>;
 
@@ -422,12 +507,14 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     gitBaseRef: z.string().min(1).optional(),
     gitBranchName: z.string().min(1).optional(),
     prompt: z.string().min(1),
+    attachments: z.array(ImageAttachmentUploadSchema).default([]),
   }),
   z.object({
     type: z.literal("userMessage"),
     requestId: z.string().min(1),
     sessionId: z.string().min(1),
     content: z.string().min(1),
+    attachments: z.array(ImageAttachmentUploadSchema).default([]),
   }),
   z.object({
     type: z.literal("approvalResponse"),
@@ -452,11 +539,44 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     session: SessionSchema,
     prompt: z.string().min(1),
     resumeThreadId: z.string().min(1).optional(),
+    attachments: z.array(RunnerAttachmentRefSchema).default([]),
   }),
   z.object({
     type: z.literal("deliverInput"),
     sessionId: z.string().min(1),
     content: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("writeSessionAttachments"),
+    requestId: z.string().min(1),
+    sessionId: z.string().min(1),
+    attachments: z.array(ImageAttachmentUploadSchema).min(1),
+  }),
+  z.object({
+    type: z.literal("readSessionAttachment"),
+    requestId: z.string().min(1),
+    sessionId: z.string().min(1),
+    attachmentId: z.string().min(1),
+    runnerStoragePath: z.string().min(1),
+    maxBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1024 * 1024)
+      .default(10 * 1024 * 1024),
+  }),
+  z.object({
+    type: z.literal("deleteSessionAttachments"),
+    requestId: z.string().min(1),
+    sessionId: z.string().min(1),
+    attachments: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          runnerStoragePath: z.string().min(1),
+        }),
+      )
+      .min(1),
   }),
   z.object({
     type: z.literal("readFileTree"),
@@ -627,6 +747,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("message:created"), message: MessageSchema }),
   z.object({
+    type: z.literal("message_attachment:created"),
+    attachment: MessageAttachmentSchema,
+  }),
+  z.object({
     type: z.literal("token"),
     sessionId: z.string().min(1),
     content: z.string(),
@@ -693,6 +817,18 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     result: FileWriteResultSchema,
   }),
   z.object({
+    type: z.literal("attachmentWriteResult"),
+    result: AttachmentWriteResultSchema,
+  }),
+  z.object({
+    type: z.literal("attachmentContentResult"),
+    result: AttachmentContentResultSchema,
+  }),
+  z.object({
+    type: z.literal("attachmentDeleteResult"),
+    result: AttachmentDeleteResultSchema,
+  }),
+  z.object({
     type: z.literal("patchApplyResult"),
     result: PatchApplyResultSchema,
   }),
@@ -728,8 +864,15 @@ export const ApiCreateSessionSchema = z.object({
   gitBranchName: z.string().min(1).optional(),
   prompt: z.string().min(1),
   title: z.string().min(1).optional(),
+  attachments: z.array(ImageAttachmentUploadSchema).default([]),
 });
 export type ApiCreateSession = z.infer<typeof ApiCreateSessionSchema>;
+
+export const ApiCreateMessageSchema = z.object({
+  content: z.string().min(1),
+  attachments: z.array(ImageAttachmentUploadSchema).default([]),
+});
+export type ApiCreateMessage = z.infer<typeof ApiCreateMessageSchema>;
 
 export const ApiUpdateSessionSchema = z.object({
   title: z.string().trim().min(1),
@@ -832,4 +975,15 @@ export type ApiGitRemoveWorktree = z.infer<typeof ApiGitRemoveWorktreeSchema>;
 
 export function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isBase64Payload(value: string): boolean {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
+    return false;
+  }
+  const firstPadding = value.indexOf("=");
+  if (firstPadding !== -1 && !/^={1,2}$/.test(value.slice(firstPadding))) {
+    return false;
+  }
+  return true;
 }

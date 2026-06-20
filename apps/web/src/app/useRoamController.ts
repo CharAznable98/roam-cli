@@ -10,6 +10,7 @@ import type {
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
   ExecutionMode,
+  ImageAttachmentUpload,
 } from "@roamcli/shared/protocol";
 import {
   useCallback,
@@ -25,6 +26,7 @@ import {
   type RoamApiClient,
 } from "../api";
 import { buildPatchFromHunks } from "../features/approvals/model";
+import { toUiMessage } from "../features/conversation/model";
 import {
   getRunnerSessions,
   getProjectSessions,
@@ -256,7 +258,8 @@ export function useRoamController() {
     const sessionId = selectedSession.id;
     if (
       selectedSession.executionMode === "managed_worktree" &&
-      (selectedSession.status === "pending" || selectedSession.worktreeDeletedAt)
+      (selectedSession.status === "pending" ||
+        selectedSession.worktreeDeletedAt)
     ) {
       workspaceSessionIdRef.current = undefined;
       dispatch({
@@ -380,6 +383,7 @@ export function useRoamController() {
       executionMode: ExecutionMode;
       gitBaseRef?: string;
       gitBranchName?: string;
+      attachments?: ImageAttachmentUpload[];
     },
   ) => {
     if (!projectId || !apiRef.current) {
@@ -417,21 +421,44 @@ export function useRoamController() {
     }
   };
 
-  const sendMessage = (content: string) => {
-    if (!selectedSession) return;
-    const sent = sendStreamCommand(streamRef.current, {
-      type: "userMessage",
-      requestId: `req-${Date.now()}`,
-      sessionId: selectedSession.id,
-      content,
-    });
-    if (!sent) {
+  const sendMessage = async (
+    content: string,
+    attachments: ImageAttachmentUpload[] = [],
+  ) => {
+    if (!selectedSession || !apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    if (!streamRef.current || streamRef.current.readyState !== WebSocket.OPEN) {
       dispatch({
         type: "errorChanged",
         title: "Event stream is disconnected",
         message:
           "Message was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
       });
+      throw new Error("Event stream is disconnected.");
+    }
+    try {
+      const result = await apiRef.current.createUserMessage(
+        selectedSession.id,
+        {
+          content,
+          attachments,
+        },
+      );
+      dispatch({
+        type: "serverEventReceived",
+        event: { type: "message:created", message: result.message },
+      });
+      for (const attachment of result.attachments) {
+        dispatch({
+          type: "serverEventReceived",
+          event: { type: "message_attachment:created", attachment },
+        });
+      }
+    } catch (sendError: unknown) {
+      const message = errorMessage(sendError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
     }
   };
 
@@ -568,116 +595,176 @@ export function useRoamController() {
     return apiRef.current;
   }, []);
 
-  const fetchGitStatus = useCallback(async (context: ApiGitContext) => {
-    const api = requireApiClient();
-    try {
-      return await api.fetchGitStatus(context);
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({ type: "errorChanged", title: "Git status failed", message });
-      throw new Error(message);
-    }
-  }, [requireApiClient]);
+  const fetchMessageAttachmentContent = useCallback(
+    async (sessionId: string, attachmentId: string) => {
+      return requireApiClient().fetchMessageAttachmentContent(
+        sessionId,
+        attachmentId,
+      );
+    },
+    [requireApiClient],
+  );
 
-  const fetchGitDiff = useCallback(async (query: ApiGitFileDiffQuery) => {
-    const api = requireApiClient();
-    try {
-      return await api.fetchGitDiff(query);
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({ type: "errorChanged", title: "Git diff failed", message });
-      throw new Error(message);
-    }
-  }, [requireApiClient]);
+  const fetchGitStatus = useCallback(
+    async (context: ApiGitContext) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitStatus(context);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        dispatch({ type: "errorChanged", title: "Git status failed", message });
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
 
-  const fetchGitBlame = useCallback(async (query: ApiGitBlameQuery) => {
-    const api = requireApiClient();
-    try {
-      return await api.fetchGitBlame(query);
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({ type: "errorChanged", title: "Git blame failed", message });
-      throw new Error(message);
-    }
-  }, [requireApiClient]);
+  const fetchGitDiff = useCallback(
+    async (query: ApiGitFileDiffQuery) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitDiff(query);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        dispatch({ type: "errorChanged", title: "Git diff failed", message });
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
 
-  const fetchGitHistory = useCallback(async (query: ApiGitHistoryQuery) => {
-    const api = requireApiClient();
-    try {
-      return await api.fetchGitHistory(query);
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({ type: "errorChanged", title: "Git history failed", message });
-      throw new Error(message);
-    }
-  }, [requireApiClient]);
+  const fetchGitBlame = useCallback(
+    async (query: ApiGitBlameQuery) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitBlame(query);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        dispatch({ type: "errorChanged", title: "Git blame failed", message });
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
 
-  const fetchGitBranches = useCallback(async (context: ApiGitContext) => {
-    const api = requireApiClient();
-    try {
-      return await api.fetchGitBranches(context);
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({ type: "errorChanged", title: "Git branches failed", message });
-      throw new Error(message);
-    }
-  }, [requireApiClient]);
+  const fetchGitHistory = useCallback(
+    async (query: ApiGitHistoryQuery) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitHistory(query);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        dispatch({
+          type: "errorChanged",
+          title: "Git history failed",
+          message,
+        });
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
 
-  const fetchGitJobs = useCallback(async (projectId: string) => {
-    const api = requireApiClient();
-    return api.fetchGitJobs(projectId);
-  }, [requireApiClient]);
+  const fetchGitBranches = useCallback(
+    async (context: ApiGitContext) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitBranches(context);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        dispatch({
+          type: "errorChanged",
+          title: "Git branches failed",
+          message,
+        });
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
 
-  const runGitJob = useCallback(async (
-    run: () => Promise<Awaited<ReturnType<RoamApiClient["stageGitPaths"]>>>,
-  ) => {
-    try {
-      const job = await run();
-      if (job.status === "failed") {
+  const fetchGitJobs = useCallback(
+    async (projectId: string) => {
+      const api = requireApiClient();
+      return api.fetchGitJobs(projectId);
+    },
+    [requireApiClient],
+  );
+
+  const runGitJob = useCallback(
+    async (
+      run: () => Promise<Awaited<ReturnType<RoamApiClient["stageGitPaths"]>>>,
+    ) => {
+      try {
+        const job = await run();
+        if (job.status === "failed") {
+          dispatch({
+            type: "errorChanged",
+            title: "Git operation failed",
+            message: job.errorSummary ?? `${job.operation} failed`,
+          });
+        }
+        return job;
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
         dispatch({
           type: "errorChanged",
           title: "Git operation failed",
-          message: job.errorSummary ?? `${job.operation} failed`,
+          message,
         });
+        throw new Error(message);
       }
-      return job;
-    } catch (gitError: unknown) {
-      const message = errorMessage(gitError);
-      dispatch({
-        type: "errorChanged",
-        title: "Git operation failed",
-        message,
-      });
-      throw new Error(message);
-    }
-  }, []);
+    },
+    [],
+  );
 
-  const initGitRepository = useCallback((input: ApiGitInit) =>
-    runGitJob(() => requireApiClient().initGitRepository(input)),
-  [requireApiClient, runGitJob]);
-  const stageGitPaths = useCallback((input: ApiGitPaths) =>
-    runGitJob(() => requireApiClient().stageGitPaths(input)),
-  [requireApiClient, runGitJob]);
-  const unstageGitPaths = useCallback((input: ApiGitPaths) =>
-    runGitJob(() => requireApiClient().unstageGitPaths(input)),
-  [requireApiClient, runGitJob]);
-  const discardGitPaths = useCallback((input: ApiGitPaths) =>
-    runGitJob(() => requireApiClient().discardGitPaths(input)),
-  [requireApiClient, runGitJob]);
-  const commitGitChanges = useCallback((input: ApiGitCommit) =>
-    runGitJob(() => requireApiClient().commitGitChanges(input)),
-  [requireApiClient, runGitJob]);
-  const runGitRemoteOperation = useCallback((input: ApiGitRemoteOperation) =>
-    runGitJob(() => requireApiClient().runGitRemoteOperation(input)),
-  [requireApiClient, runGitJob]);
-  const removeGitWorktree = useCallback((input: ApiGitRemoveWorktree) =>
-    runGitJob(() => requireApiClient().removeGitWorktree(input)),
-  [requireApiClient, runGitJob]);
+  const initGitRepository = useCallback(
+    (input: ApiGitInit) =>
+      runGitJob(() => requireApiClient().initGitRepository(input)),
+    [requireApiClient, runGitJob],
+  );
+  const stageGitPaths = useCallback(
+    (input: ApiGitPaths) =>
+      runGitJob(() => requireApiClient().stageGitPaths(input)),
+    [requireApiClient, runGitJob],
+  );
+  const unstageGitPaths = useCallback(
+    (input: ApiGitPaths) =>
+      runGitJob(() => requireApiClient().unstageGitPaths(input)),
+    [requireApiClient, runGitJob],
+  );
+  const discardGitPaths = useCallback(
+    (input: ApiGitPaths) =>
+      runGitJob(() => requireApiClient().discardGitPaths(input)),
+    [requireApiClient, runGitJob],
+  );
+  const commitGitChanges = useCallback(
+    (input: ApiGitCommit) =>
+      runGitJob(() => requireApiClient().commitGitChanges(input)),
+    [requireApiClient, runGitJob],
+  );
+  const runGitRemoteOperation = useCallback(
+    (input: ApiGitRemoteOperation) =>
+      runGitJob(() => requireApiClient().runGitRemoteOperation(input)),
+    [requireApiClient, runGitJob],
+  );
+  const removeGitWorktree = useCallback(
+    (input: ApiGitRemoveWorktree) =>
+      runGitJob(() => requireApiClient().removeGitWorktree(input)),
+    [requireApiClient, runGitJob],
+  );
 
   const sessionMessages = selectedSession
-    ? state.messages.filter(
-        (message) => message.sessionId === selectedSession.id,
-      )
+    ? state.messages
+        .filter((message) => message.sessionId === selectedSession.id)
+        .map((message) =>
+          toUiMessage(
+            message,
+            state.messageAttachments.filter(
+              (attachment) => attachment.messageId === message.id,
+            ),
+          ),
+        )
     : [];
   const sessionApprovals = selectedSession
     ? state.approvals.filter(
@@ -726,6 +813,7 @@ export function useRoamController() {
     deleteSelectedSession,
     selectFile,
     saveSelectedFile,
+    fetchMessageAttachmentContent,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,

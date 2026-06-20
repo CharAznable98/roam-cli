@@ -67,6 +67,7 @@ export function AppShell({ controller }: AppShellProps) {
     deleteSelectedSession,
     selectFile,
     saveSelectedFile,
+    fetchMessageAttachmentContent,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,
@@ -216,6 +217,10 @@ export function AppShell({ controller }: AppShellProps) {
                 canSend={canUseStream}
                 canControl={canUseStream}
                 onOpenSessionSwitcher={() => setMobileSessionSwitcherOpen(true)}
+                imageCapability={selectedRunner?.capabilities.find(
+                  (capability) => capability.kind === selectedSession.agent,
+                )}
+                onFetchAttachmentContent={fetchMessageAttachmentContent}
               />
             ) : (
               <section className="chat-column" aria-label="Conversation">
