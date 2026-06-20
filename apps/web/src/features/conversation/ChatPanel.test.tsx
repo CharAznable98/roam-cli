@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   MessageAttachment,
   RunnerCapability,
@@ -301,6 +301,44 @@ describe("ChatPanel", () => {
       "href",
       "https://example.test",
     );
+  });
+
+  it("keeps session actions reachable from the compact action menu", () => {
+    const onControl = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        onControl={onControl}
+        onDelete={onDelete}
+        onRename={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+
+    const menu = screen.getByRole("menu", { name: "Session actions" });
+    expect(
+      within(menu).getByRole("menuitem", { name: "Rename session" }),
+    ).toBeEnabled();
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "Stop session" }),
+    );
+
+    expect(onControl).toHaveBeenCalledWith("stop");
+    expect(screen.queryByRole("menu", { name: "Session actions" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "Session actions" })).getByRole(
+        "menuitem",
+        { name: "Delete session" },
+      ),
+    );
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 });
 
