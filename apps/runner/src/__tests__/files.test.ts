@@ -223,6 +223,55 @@ describe("runner file reads", () => {
     ]);
   });
 
+  it("stops recursive path search at the traversal cap", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-paths-capped-"),
+    );
+    const sessionCwd = join(workspace, "project");
+    await mkdir(join(sessionCwd, "a"), { recursive: true });
+    await mkdir(join(sessionCwd, "b"), { recursive: true });
+    await mkdir(join(sessionCwd, "z"), { recursive: true });
+    await writeFile(join(sessionCwd, "a", "foo-needle.txt"), "early");
+    await writeFile(join(sessionCwd, "z", "needle.ts"), "late");
+
+    const result = await searchWorkspacePaths({
+      workspace,
+      requestId: "paths-cap",
+      basePath: sessionCwd,
+      query: "needle",
+      limit: 1,
+      maxVisitedEntries: 4,
+    });
+
+    expect(result.entries.map((entry) => entry.path)).toEqual([
+      "a/foo-needle.txt",
+    ]);
+  });
+
+  it("stops recursive path search at the candidate cap", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-paths-candidate-cap-"),
+    );
+    const sessionCwd = join(workspace, "project");
+    await mkdir(join(sessionCwd, "a"), { recursive: true });
+    await mkdir(join(sessionCwd, "z"), { recursive: true });
+    await writeFile(join(sessionCwd, "a", "foo-needle.txt"), "early");
+    await writeFile(join(sessionCwd, "z", "needle.ts"), "late");
+
+    const result = await searchWorkspacePaths({
+      workspace,
+      requestId: "paths-candidate-cap",
+      basePath: sessionCwd,
+      query: "needle",
+      limit: 1,
+      maxCandidateEntries: 1,
+    });
+
+    expect(result.entries.map((entry) => entry.path)).toEqual([
+      "a/foo-needle.txt",
+    ]);
+  });
+
   it("returns an empty path list for invalid or escaped base paths", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-paths-invalid-"),

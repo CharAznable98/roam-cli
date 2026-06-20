@@ -223,6 +223,41 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("lists CODEX_HOME skills before home fallback roots", async () => {
+    const workspace = await mkdirTemp("roam-codex-skills-");
+    const home = await mkdirTemp("roam-codex-home-");
+    const codexHome = await mkdirTemp("roam-codex-custom-home-");
+    const sessionCwd = join(workspace, "repo");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeSkill(
+      join(codexHome, "skills", "custom-docs"),
+      "docs",
+      "Custom Codex docs",
+    );
+    await writeSkill(
+      join(home, ".agents", "skills", "global-review"),
+      "review",
+      "Global review",
+    );
+    await writeSkill(
+      join(home, ".codex", "skills", "home-docs"),
+      "docs",
+      "Home Codex docs",
+    );
+
+    const skills = await listCodexSkills(workspace, sessionCwd, {
+      CODEX_HOME: codexHome,
+      HOME: home,
+    });
+
+    expect(skills.map((skill) => skill.name)).toEqual(["docs", "review"]);
+    expect(skills[0]).toMatchObject({
+      name: "docs",
+      description: "Custom Codex docs",
+      sourceType: "global",
+    });
+  });
+
   it("returns no skills when the configured base path escapes the workspace", async () => {
     const workspace = await mkdirTemp("roam-codex-skills-workspace-");
     const outside = await mkdirTemp("roam-codex-skills-outside-");

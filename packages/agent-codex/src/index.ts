@@ -179,11 +179,7 @@ export async function listCodexSkills(
     base.realPath,
     base.realWorkspace,
   );
-  const home = env.HOME && env.HOME.trim().length > 0 ? env.HOME : homedir();
-  roots.push(
-    { type: "global", path: join(home, ".agents", "skills") },
-    { type: "global", path: join(home, ".codex", "skills") },
-  );
+  roots.push(...globalSkillRoots(env));
 
   const skills: AgentSkillSummary[] = [];
   const seen = new Set<string>();
@@ -198,6 +194,28 @@ export async function listCodexSkills(
     }
   }
   return skills;
+}
+
+function globalSkillRoots(
+  env: NodeJS.ProcessEnv,
+): Array<{ type: "global"; path: string }> {
+  const home = env.HOME && env.HOME.trim().length > 0 ? env.HOME : homedir();
+  const roots = [
+    ...(env.CODEX_HOME && env.CODEX_HOME.trim().length > 0
+      ? [join(env.CODEX_HOME, "skills")]
+      : []),
+    join(home, ".agents", "skills"),
+    join(home, ".codex", "skills"),
+  ];
+  const seen = new Set<string>();
+  return roots.flatMap((root) => {
+    const normalized = resolve(root);
+    if (seen.has(normalized)) {
+      return [];
+    }
+    seen.add(normalized);
+    return [{ type: "global" as const, path: root }];
+  });
 }
 
 async function resolveSkillBase(

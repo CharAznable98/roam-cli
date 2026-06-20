@@ -19,6 +19,8 @@ import {
 export type { FileRequestScope } from "./scope.js";
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
+const DEFAULT_PATH_SEARCH_MAX_CANDIDATES = 1000;
+const DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES = 5000;
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
   ".hg",
@@ -62,6 +64,8 @@ export interface SearchWorkspacePathsOptions {
   basePath: string;
   query?: string;
   limit?: number;
+  maxCandidateEntries?: number;
+  maxVisitedEntries?: number;
 }
 
 export async function readFileTree(
@@ -99,7 +103,22 @@ export async function searchWorkspacePaths(
   const entries =
     query.trim().length === 0
       ? await readTopLevelPathEntries(base.path, base.realPath, limit)
-      : await searchPathEntries(base.path, base.realPath, query, limit);
+      : await searchPathEntries(
+          base.path,
+          base.realPath,
+          query,
+          limit,
+          {
+            maxCandidateEntries: clampSearchCandidateEntries(
+              options.maxCandidateEntries,
+              limit,
+            ),
+            maxVisitedEntries: clampSearchVisitedEntries(
+              options.maxVisitedEntries,
+              limit,
+            ),
+          },
+        );
   return {
     requestId: options.requestId,
     basePath: options.basePath,
@@ -210,6 +229,7 @@ async function searchPathEntries(
   realBasePath: string,
   rawQuery: string,
   limit: number,
+  caps: { maxCandidateEntries: number; maxVisitedEntries: number },
 ): Promise<PathSearchEntry[]> {
   const query = rawQuery.trim().toLowerCase();
   if (!query) {
@@ -217,12 +237,21 @@ async function searchPathEntries(
   }
 
   const candidates: Array<{ entry: PathSearchEntry; score: number }> = [];
-  await walkSearchBase(basePath, realBasePath, async (entry) => {
-    const score = pathMatchScore(entry, query);
-    if (score !== undefined) {
-      candidates.push({ entry, score });
-    }
-  });
+  await walkSearchBase(
+    basePath,
+    realBasePath,
+    caps.maxVisitedEntries,
+    async (entry) => {
+      const score = pathMatchScore(entry, query);
+      if (score !== undefined) {
+        candidates.push({ entry, score });
+        if (candidates.length >= caps.maxCandidateEntries) {
+          return "stop";
+        }
+      }
+      return undefined;
+    },
+  );
 
   return candidates
     .sort((left, right) => {
@@ -241,9 +270,13 @@ async function searchPathEntries(
 async function walkSearchBase(
   basePath: string,
   realBasePath: string,
-  visit: (entry: PathSearchEntry) => void | Promise<void>,
+  maxVisitedEntries: number,
+  visit: (
+    entry: PathSearchEntry,
+  ) => "stop" | undefined | Promise<"stop" | undefined>,
 ): Promise<void> {
   const visited = new Set<string>([realBasePath]);
+  let visitedEntries = 0;
   const stack = [basePath];
   while (stack.length > 0) {
     const current = stack.pop();
@@ -257,6 +290,10 @@ async function walkSearchBase(
       continue;
     }
     for (const entry of entries.sort(compareDirents).reverse()) {
+      if (visitedEntries >= maxVisitedEntries) {
+        return;
+      }
+      visitedEntries += 1;
       const child = await pathSearchEntry(
         basePath,
         realBasePath,
@@ -267,7 +304,9 @@ async function walkSearchBase(
       if (!child) {
         continue;
       }
-      await visit(child);
+      if ((await visit(child)) === "stop") {
+        return;
+      }
       if (child.type === "directory") {
         stack.push(resolve(basePath, child.path));
       }
@@ -442,4 +481,30 @@ function clampMaxBytes(maxBytes: number | undefined): number {
 
 function clampSearchLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(limit ?? 50, 200));
+}
+
+function clampSearchCandidateEntries(
+  maxCandidateEntries: number | undefined,
+  limit: number,
+): number {
+  return Math.max(
+    limit,
+    Math.min(
+      maxCandidateEntries ?? DEFAULT_PATH_SEARCH_MAX_CANDIDATES,
+      DEFAULT_PATH_SEARCH_MAX_CANDIDATES,
+    ),
+  );
+}
+
+function clampSearchVisitedEntries(
+  maxVisitedEntries: number | undefined,
+  limit: number,
+): number {
+  return Math.max(
+    limit,
+    Math.min(
+      maxVisitedEntries ?? DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES,
+      DEFAULT_PATH_SEARCH_MAX_VISITED_ENTRIES,
+    ),
+  );
 }
