@@ -727,6 +727,84 @@
     display: none;
   }
 
+  .session-actions {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .session-actions-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 35;
+    display: grid;
+    width: min(220px, calc(100vw - 20px));
+    gap: 2px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
+    padding: 6px;
+  }
+
+  .session-action-menu-item {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 28px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #2e3a49;
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .session-action-menu-item:hover {
+    background: #f3f7fb;
+    color: #17202e;
+  }
+
+  .session-action-menu-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .session-action-menu-item:disabled:hover {
+    background: transparent;
+    color: #2e3a49;
+  }
+
+  .session-action-menu-item.danger {
+    color: #9b2f2f;
+  }
+
+  .session-action-menu-item.danger:hover {
+    background: #fdeeee;
+    color: #d04444;
+  }
+
+  .session-action-menu-item > svg {
+    align-self: center;
+    justify-self: center;
+  }
+
+  .session-action-menu-item > svg.animate-spin {
+    animation: roam-spin 0.9s linear infinite;
+  }
+
+  .session-action-title {
+    color: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .message-list {
     display: flex;
     flex: 1;

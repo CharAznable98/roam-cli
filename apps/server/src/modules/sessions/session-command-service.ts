@@ -72,6 +72,33 @@ export class SessionCommandService {
     return ok({ session: updated });
   }
 
+  checkSessionStatus(sessionId: string): ServiceResult<{ session: Session }> {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      return fail("session_not_found");
+    }
+
+    const hasActiveRunnerWork =
+      session.status === "running" || session.status === "waiting_approval";
+    if (
+      hasActiveRunnerWork &&
+      !this.hub.isRunnerConnectionHealthy(session.runnerId)
+    ) {
+      const stopped = this.store.updateSessionStatus(
+        session.id,
+        "stopped",
+        nowIso(),
+      );
+      if (!stopped) {
+        return fail("session_not_found");
+      }
+      this.hub.broadcast({ type: "session:updated", session: stopped });
+      return ok({ session: stopped });
+    }
+
+    return ok({ session });
+  }
+
   deleteSession(sessionId: string): ServiceResult<void> {
     const session = this.store.getSession(sessionId);
     if (!session) {

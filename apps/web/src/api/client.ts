@@ -65,6 +65,7 @@ export interface RoamApiClient {
     input: { content: string; attachments?: ImageAttachmentUpload[] },
   ): Promise<{ message: Message; attachments: MessageAttachment[] }>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
+  checkSessionStatus(sessionId: string): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
   fetchMessageAttachmentContent(
     sessionId: string,
@@ -129,6 +130,10 @@ interface CreateSessionResponse {
 interface CreateMessageResponse {
   message: Message;
   attachments: MessageAttachment[];
+}
+
+interface SessionResponse {
+  session: Session;
 }
 
 interface ApprovalResponse {
@@ -353,6 +358,14 @@ export function createRoamApiClient(
           method: "PATCH",
           body: JSON.stringify(input),
         },
+      );
+      return session;
+    },
+
+    async checkSessionStatus(sessionId) {
+      const { session } = await request<SessionResponse>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/status/check`,
+        { method: "POST" },
       );
       return session;
     },

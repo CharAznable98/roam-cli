@@ -138,6 +138,18 @@ function registerSessionRoutes(
     };
   });
 
+  app.post("/v1/sessions/:id/status/check", async (request, reply) => {
+    const params = SessionParamsSchema.parse(request.params);
+    const result = context.services.sessions.checkSessionStatus(params.id);
+    if (!result.ok) {
+      if (result.error === "session_not_found") {
+        return reply.code(404).send({ error: "session_not_found" });
+      }
+      return reply.code(400).send({ error: result.error });
+    }
+    return result.value;
+  });
+
   app.post(
     "/v1/sessions/:id/messages",
     { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },

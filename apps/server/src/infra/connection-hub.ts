@@ -58,7 +58,14 @@ export class ConnectionHub {
   }
 
   isRunnerOnline(runnerId: string): boolean {
-    return this.runners.has(runnerId);
+    return this.isRunnerConnectionHealthy(runnerId);
+  }
+
+  isRunnerConnectionHealthy(runnerId: string): boolean {
+    const connection = this.runners.get(runnerId);
+    return Boolean(
+      connection && connection.socket.readyState === connection.socket.OPEN,
+    );
   }
 
   sendToRunner(runnerId: string, command: RunnerCommand): boolean {

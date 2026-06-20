@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type {
   MessageAttachment,
   RunnerCapability,
@@ -301,6 +307,127 @@ describe("ChatPanel", () => {
       "href",
       "https://example.test",
     );
+  });
+
+  it("groups session header actions in a text menu", () => {
+    const onControl = vi.fn();
+    const onRename = vi.fn();
+    const onDelete = vi.fn();
+    const onCheckStatus = vi.fn();
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        onControl={onControl}
+        onRename={onRename}
+        onDelete={onDelete}
+        onCheckStatus={onCheckStatus}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Rename session" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    const menu = screen.getByRole("menu", { name: "Session actions" });
+
+    expect(
+      within(menu).getByRole("menuitem", { name: /Rename/ }),
+    ).toHaveTextContent(/^Rename$/);
+    expect(
+      within(menu).getByRole("menuitem", { name: /Check status/ }),
+    ).toHaveTextContent(/^Check status$/);
+    expect(
+      within(menu).getByRole("menuitem", { name: /Resume/ }),
+    ).toHaveTextContent(/^Resume$/);
+    expect(
+      within(menu).getByRole("menuitem", { name: /Stop/ }),
+    ).toHaveTextContent(/^Stop$/);
+    expect(
+      within(menu).getByRole("menuitem", { name: /Resume/ }),
+    ).toBeDisabled();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Stop/ }),
+    ).not.toBeDisabled();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Delete/ }),
+    ).toHaveTextContent(/^Delete$/);
+    expect(screen.queryByText("Edit session title")).not.toBeInTheDocument();
+    expect(screen.queryByText("Refresh this session")).not.toBeInTheDocument();
+    expect(screen.queryByText("Continue agent work")).not.toBeInTheDocument();
+    expect(screen.queryByText("End current run")).not.toBeInTheDocument();
+    expect(screen.queryByText("Remove this session")).not.toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Stop/ }));
+
+    expect(onControl).toHaveBeenCalledWith("stop");
+    expect(
+      screen.queryByRole("menu", { name: "Session actions" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "Session actions" })).getByRole(
+        "menuitem",
+        { name: /Check status/ },
+      ),
+    );
+
+    expect(onCheckStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables stop for inactive sessions while keeping resume available", () => {
+    render(
+      <ChatPanel
+        session={{ ...baseSession, status: "stopped" }}
+        messages={[]}
+        onSend={vi.fn()}
+        onControl={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        onCheckStatus={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    const menu = screen.getByRole("menu", { name: "Session actions" });
+
+    expect(
+      within(menu).getByRole("menuitem", { name: /Resume/ }),
+    ).not.toBeDisabled();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Stop/ }),
+    ).toBeDisabled();
+  });
+
+  it("disables runner control actions when the selected runner is offline", () => {
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        onControl={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        onCheckStatus={vi.fn()}
+        canControl={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    const menu = screen.getByRole("menu", { name: "Session actions" });
+
+    expect(
+      within(menu).getByRole("menuitem", { name: /Check status/ }),
+    ).not.toBeDisabled();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Resume/ }),
+    ).toBeDisabled();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Stop/ }),
+    ).toBeDisabled();
   });
 });
 
