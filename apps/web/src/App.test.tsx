@@ -852,6 +852,47 @@ describe("App", () => {
     ).toBe(false);
   });
 
+  it("backs off passive session detail polling after a successful sync", async () => {
+    remoteSessionStatus = "running";
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+
+      const countSessionDetailReads = () =>
+        fetchCalls.filter((call) => {
+          const requestUrl = new URL(call.url);
+          return (
+            requestUrl.pathname === "/v1/sessions/session-1" &&
+            (call.init?.method ?? "GET") === "GET"
+          );
+        }).length;
+      const initialSessionDetailReads = countSessionDetailReads();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500);
+      });
+      const firstRepairReadCount = countSessionDetailReads();
+      expect(firstRepairReadCount).toBeGreaterThan(initialSessionDetailReads);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_999);
+      });
+      expect(countSessionDetailReads()).toBe(firstRepairReadCount);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(countSessionDetailReads()).toBeGreaterThan(firstRepairReadCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps existing sessions reachable when their runner is offline", async () => {
     runnerOnline = false;
     remoteSessionStatus = "running";
