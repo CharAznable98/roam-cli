@@ -579,6 +579,83 @@ describe("app reducer", () => {
     expect(next).toBe(loadingNew);
   });
 
+  it("ignores late broadcasts from failed file tree requests", () => {
+    const loadingOld = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-1": [{ path: "src", name: "src", type: "directory" }],
+        },
+      },
+      {
+        type: "fileTreePathLoading",
+        sessionId: "session-1",
+        path: "src",
+        requestId: "old-tree",
+      },
+    );
+    const failedOld = appReducer(loadingOld, {
+      type: "fileTreeFailed",
+      sessionId: "session-1",
+      path: "src",
+      requestId: "old-tree",
+      message: "timeout",
+    });
+    const loadingNew = appReducer(failedOld, {
+      type: "fileTreePathLoading",
+      sessionId: "session-1",
+      path: "src",
+      requestId: "new-tree",
+    });
+    const loadedNew = appReducer(loadingNew, {
+      type: "fileTreeLoaded",
+      sessionId: "session-1",
+      path: "src",
+      requestId: "new-tree",
+      files: [
+        {
+          path: "src/Fresh.tsx",
+          name: "Fresh.tsx",
+          type: "file",
+          size: 42,
+        },
+      ],
+    });
+    const lateFailedEvent: ServerEvent = {
+      type: "file:tree",
+      result: {
+        requestId: "server-old-tree",
+        clientRequestId: "old-tree",
+        sessionId: "session-1",
+        root: {
+          path: "src",
+          name: "src",
+          type: "directory",
+          children: [
+            {
+              path: "src/Stale.tsx",
+              name: "Stale.tsx",
+              type: "file",
+              size: 1,
+            },
+          ],
+        },
+      },
+    };
+
+    const next = appReducer(loadedNew, {
+      type: "serverEventReceived",
+      event: lateFailedEvent,
+    });
+
+    expect(failedOld.staleFileTreeRequestIds["old-tree"]).toBe(true);
+    expect(loadedNew.filesBySession["session-1"]?.[0]).toMatchObject({
+      path: "src",
+      children: [{ path: "src/Fresh.tsx" }],
+    });
+    expect(next).toBe(loadedNew);
+  });
+
   it("ignores child tree updates superseded by a parent replacement", () => {
     const files: FileNode[] = [
       {

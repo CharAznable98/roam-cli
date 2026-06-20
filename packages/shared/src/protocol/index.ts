@@ -441,6 +441,7 @@ export type FileContentRequest = z.infer<typeof FileContentRequestSchema>;
 
 export const FileTreeResultSchema = z.object({
   requestId: z.string().min(1),
+  clientRequestId: z.string().min(1).optional(),
   sessionId: z.string().min(1),
   root: FileNodeSchema,
 });
@@ -622,6 +623,7 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("readFileTree"),
     requestId: z.string().min(1),
+    clientRequestId: z.string().min(1).optional(),
     sessionId: z.string().min(1),
     cwd: z.string().min(1).optional(),
     path: z.string().default("."),

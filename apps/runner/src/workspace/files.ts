@@ -44,6 +44,7 @@ const IGNORED_DIRECTORY_NAMES = new Set([
 
 export interface ReadFileTreeOptions extends FileRequestScope {
   requestId: string;
+  clientRequestId?: string;
   sessionId: string;
   path?: string;
   depth?: number;
@@ -81,6 +82,9 @@ export async function readFileTree(
 
   return {
     requestId: options.requestId,
+    ...(options.clientRequestId === undefined
+      ? {}
+      : { clientRequestId: options.clientRequestId }),
     sessionId: options.sessionId,
     root: await buildNode(root.path, {
       sessionCwd: options.sessionCwd,

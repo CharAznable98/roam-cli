@@ -199,6 +199,7 @@ declare module "@roamcli/shared/protocol" {
 
   export interface FileTreeResult {
     requestId: string;
+    clientRequestId?: string;
     sessionId: string;
     root: FileNode;
   }
@@ -430,6 +431,7 @@ declare module "@roamcli/shared/protocol" {
     | {
         type: "readFileTree";
         requestId: string;
+        clientRequestId?: string;
         sessionId: string;
         cwd?: string;
         path?: string;

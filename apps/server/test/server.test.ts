@@ -912,15 +912,17 @@ describe("server", () => {
     const treeCommand = await nextJson(runner);
     expect(treeCommand).toMatchObject({
       type: "readFileTree",
-      requestId: "client-tree-1",
+      clientRequestId: "client-tree-1",
       sessionId,
       cwd: "/workspace",
       path: "src",
       depth: 2,
     });
+    expect(treeCommand.requestId).toMatch(/^file_tree_/);
 
     const treeResult = {
       requestId: treeCommand.requestId,
+      clientRequestId: treeCommand.clientRequestId,
       sessionId,
       root: {
         path: "src",
@@ -939,7 +941,8 @@ describe("server", () => {
       stream,
       (event) =>
         event.type === "file:tree" &&
-        event.result.requestId === treeCommand.requestId,
+        event.result.requestId === treeCommand.requestId &&
+        event.result.clientRequestId === "client-tree-1",
     );
 
     const contentPromise = app.inject({

@@ -77,6 +77,9 @@ export class WorkspaceCommandHandler {
         workspace: this.#workspace,
         sessionCwd,
         requestId: command.requestId,
+        ...(command.clientRequestId === undefined
+          ? {}
+          : { clientRequestId: command.clientRequestId }),
         sessionId: command.sessionId,
         ...(command.path === undefined ? {} : { path: command.path }),
         ...(command.depth === undefined ? {} : { depth: command.depth }),

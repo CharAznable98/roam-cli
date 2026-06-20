@@ -3,6 +3,7 @@ import type {
   Artifact,
   FileContentResult,
   FileNode,
+  FileTreeResult,
   MessageAttachment,
   Project,
   RunnerRegistration,
@@ -455,6 +456,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             action.sessionId,
             action.path,
           ),
+          staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+            state.staleFileTreeRequestIds,
+            action.requestId === undefined ? [] : [action.requestId],
+          ),
         },
         "File tree request failed",
         action.message,
@@ -606,7 +611,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
         state,
         event.result.sessionId,
         path,
-        event.result.requestId,
+        fileTreeRequestGeneration(event.result),
       )
     ) {
       return state;
@@ -715,6 +720,10 @@ function isCurrentFileTreeRequest(
     return false;
   }
   return state.fileTreeRequestIds[sessionId]?.[path] === requestId;
+}
+
+function fileTreeRequestGeneration(result: FileTreeResult): string {
+  return result.clientRequestId ?? result.requestId;
 }
 
 function shouldApplyFileTreeEvent(

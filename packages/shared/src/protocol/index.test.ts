@@ -166,6 +166,7 @@ describe("protocol schemas", () => {
     expect(
       FileTreeResultSchema.parse({
         requestId: "req-1",
+        clientRequestId: "client-req-1",
         sessionId: "s1",
         root: {
           path: ".",
@@ -175,8 +176,11 @@ describe("protocol schemas", () => {
             { path: "README.md", name: "README.md", type: "file", size: 42 },
           ],
         },
-      }).root.children?.[0]?.name,
-    ).toBe("README.md");
+      }),
+    ).toMatchObject({
+      clientRequestId: "client-req-1",
+      root: { children: [{ name: "README.md" }] },
+    });
 
     const textContent = FileContentResultSchema.parse({
       requestId: "req-2",

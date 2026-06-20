@@ -16,7 +16,7 @@ import { fail, ok, type ServiceResult } from "../result.js";
 import type { ApprovalSignatureVerifier } from "../approvals/approval-signatures.js";
 
 export interface FileTreeQuery {
-  requestId?: string;
+  clientRequestId?: string;
   path: string;
   depth: number;
 }
@@ -56,7 +56,10 @@ export class WorkspaceService {
       session.runnerId,
       {
         type: "readFileTree",
-        requestId: query.requestId ?? newId("file_tree"),
+        requestId: newId("file_tree"),
+        ...(query.clientRequestId === undefined
+          ? {}
+          : { clientRequestId: query.clientRequestId }),
         sessionId: session.id,
         cwd: session.executionFolder,
         path: query.path,

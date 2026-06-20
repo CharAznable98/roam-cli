@@ -32,11 +32,13 @@ describe("runner file reads", () => {
       workspace,
       sessionCwd,
       requestId: "r1",
+      clientRequestId: "client-tree-1",
       sessionId: "s1",
       path: ".",
       depth: 2,
     });
 
+    expect(result.clientRequestId).toBe("client-tree-1");
     expect(result.root.path).toBe(".");
     expect(result.root.children?.map((node) => node.name)).toEqual([
       "src",

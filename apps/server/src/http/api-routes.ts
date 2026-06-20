@@ -50,7 +50,7 @@ function toFileTreeQuery(parsed: {
     return {
       path: parsed.path,
       depth: parsed.depth,
-      requestId: parsed.requestId,
+      clientRequestId: parsed.requestId,
     };
   }
   return {
