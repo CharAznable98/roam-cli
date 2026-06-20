@@ -275,6 +275,19 @@ async function findSessionFile(name: RegExp) {
   return screen.findByRole("treeitem", { name });
 }
 
+function isSessionFileTreeRequest(
+  url: string,
+  path: string,
+  depth = "1",
+): boolean {
+  const requestUrl = new URL(url);
+  return (
+    requestUrl.pathname === "/v1/sessions/session-1/files" &&
+    requestUrl.searchParams.get("path") === path &&
+    requestUrl.searchParams.get("depth") === depth
+  );
+}
+
 function openSessionActions() {
   fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
   return within(screen.getByRole("menu", { name: "Session actions" }));
@@ -2012,14 +2025,10 @@ describe("App", () => {
 
     const fileButton = await findSessionFile(/App\.tsx/);
     expect(
-      fetchRequests.some((url) =>
-        url.includes("/v1/sessions/session-1/files?path=.&depth=1"),
-      ),
+      fetchRequests.some((url) => isSessionFileTreeRequest(url, ".")),
     ).toBe(true);
     expect(
-      fetchRequests.some((url) =>
-        url.includes("/v1/sessions/session-1/files?path=src&depth=1"),
-      ),
+      fetchRequests.some((url) => isSessionFileTreeRequest(url, "src")),
     ).toBe(true);
 
     fireEvent.click(fileButton);
@@ -2048,7 +2057,7 @@ describe("App", () => {
 
     await findSessionFile(/App\.tsx/);
     const srcRequestsBeforeRefresh = fetchRequests.filter((url) =>
-      url.includes("/v1/sessions/session-1/files?path=src&depth=1"),
+      isSessionFileTreeRequest(url, "src"),
     ).length;
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh file tree" }));
@@ -2066,9 +2075,8 @@ describe("App", () => {
     ).toBeInTheDocument();
     await waitFor(() => {
       expect(
-        fetchRequests.filter((url) =>
-          url.includes("/v1/sessions/session-1/files?path=src&depth=1"),
-        ).length,
+        fetchRequests.filter((url) => isSessionFileTreeRequest(url, "src"))
+          .length,
       ).toBe(srcRequestsBeforeRefresh + 1);
     });
   });
@@ -2130,6 +2138,52 @@ describe("App", () => {
     expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
       "src/App.tsx",
     );
+  });
+
+  it("refreshes the nearest visible parent after saving a linked deep file", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    await screen.findByRole("treeitem", { name: /src/ });
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-deep-file-link",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "Open [Button](/workspace/src/components/Button.tsx).",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    fireEvent.click(
+      await within(conversation).findByRole("button", { name: "Button" }),
+    );
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/components/Button.tsx",
+    });
+    fireEvent.change(editor, {
+      target: { value: "export const button = true;\n" },
+    });
+
+    const requestCountBeforeSave = fetchRequests.length;
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    const refreshedFileTreePaths = fetchRequests
+      .slice(requestCountBeforeSave)
+      .filter((url) => new URL(url).pathname === "/v1/sessions/session-1/files")
+      .map((url) => new URL(url).searchParams.get("path"));
+    expect(refreshedFileTreePaths).toContain("src");
+    expect(refreshedFileTreePaths).not.toContain("src/components");
   });
 
   it("keeps the currently selected file when an older file response finishes later", async () => {

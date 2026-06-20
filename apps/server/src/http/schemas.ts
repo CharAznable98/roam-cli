@@ -6,6 +6,7 @@ export const RunnerParamsSchema = z.object({ id: z.string().min(1) });
 export const ApprovalParamsSchema = z.object({ id: z.string().min(1) });
 
 export const FileTreeQuerySchema = z.object({
+  requestId: z.string().min(1).optional(),
   path: z.preprocess(
     (value) => (value === undefined || value === "" ? "." : value),
     z.string().min(1),

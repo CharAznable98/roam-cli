@@ -82,7 +82,7 @@ export interface RoamApiClient {
   ): Promise<Blob>;
   fetchFileTree(
     sessionId: string,
-    options?: { path?: string; depth?: number },
+    options?: { path?: string; depth?: number; requestId?: string },
   ): Promise<FileNode[]>;
   fetchFileContent(
     sessionId: string,
@@ -419,6 +419,9 @@ export function createRoamApiClient(
 
     async fetchFileTree(sessionId, options = {}) {
       const query = new URLSearchParams();
+      if (options.requestId) {
+        query.set("requestId", options.requestId);
+      }
       query.set("path", options.path ?? ".");
       query.set("depth", String(options.depth ?? 3));
       const payload = await request<FileTreeResponse>(

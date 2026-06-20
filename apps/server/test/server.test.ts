@@ -906,12 +906,13 @@ describe("server", () => {
 
     const treePromise = app.inject({
       method: "GET",
-      url: `/v1/sessions/${sessionId}/files?path=src&depth=2`,
+      url: `/v1/sessions/${sessionId}/files?requestId=client-tree-1&path=src&depth=2`,
       headers: { authorization: `Bearer ${token}` },
     });
     const treeCommand = await nextJson(runner);
     expect(treeCommand).toMatchObject({
       type: "readFileTree",
+      requestId: "client-tree-1",
       sessionId,
       cwd: "/workspace",
       path: "src",

@@ -46,6 +46,7 @@ import { appReducer, initialAppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+let fileTreeRequestSequence = 0;
 
 export type StreamReconnectInfo = {
   mode: "connecting" | "connected" | "waiting";
@@ -290,10 +291,16 @@ export function useRoamController() {
       });
       return;
     }
-    dispatch({ type: "sessionWorkspaceLoading", sessionId, resetSelection });
+    const requestId = nextFileTreeRequestId();
+    dispatch({
+      type: "sessionWorkspaceLoading",
+      sessionId,
+      resetSelection,
+      requestId,
+    });
 
     void apiRef.current
-      .fetchFileTree(sessionId, { path: ".", depth: 1 })
+      .fetchFileTree(sessionId, { path: ".", depth: 1, requestId })
       .then((fileTree) => {
         if (!cancelled) {
           dispatch({
@@ -301,6 +308,7 @@ export function useRoamController() {
             sessionId,
             path: ".",
             files: fileTree,
+            requestId,
           });
         }
       })
@@ -311,6 +319,7 @@ export function useRoamController() {
             sessionId,
             path: ".",
             message: errorMessage(fileError),
+            requestId,
           });
         }
       });
@@ -627,7 +636,14 @@ export function useRoamController() {
       .then(() => {
         dispatch({ type: "fileSaveSucceeded" });
         loadFileContent(sessionId, path);
-        loadFileTreePath(sessionId, parentDirectory(path), { force: true });
+        loadFileTreePath(
+          sessionId,
+          nearestTreeDirectoryPath(
+            state.filesBySession[sessionId] ?? [],
+            parentDirectory(path),
+          ),
+          { force: true },
+        );
       })
       .catch((saveError: unknown) =>
         dispatch({
@@ -663,18 +679,26 @@ export function useRoamController() {
     ) {
       return;
     }
+    const requestId = nextFileTreeRequestId();
     dispatch({
       type: "fileTreePathLoading",
       sessionId,
       path,
+      requestId,
       ...(options.resetTree === undefined
         ? {}
         : { resetTree: options.resetTree }),
     });
     void apiRef.current
-      .fetchFileTree(sessionId, { path, depth: 1 })
+      .fetchFileTree(sessionId, { path, depth: 1, requestId })
       .then((fileTree) =>
-        dispatch({ type: "fileTreeLoaded", sessionId, path, files: fileTree }),
+        dispatch({
+          type: "fileTreeLoaded",
+          sessionId,
+          path,
+          files: fileTree,
+          requestId,
+        }),
       )
       .catch((fileError: unknown) =>
         dispatch({
@@ -682,6 +706,7 @@ export function useRoamController() {
           sessionId,
           path,
           message: errorMessage(fileError),
+          requestId,
         }),
       );
   };
@@ -979,4 +1004,9 @@ export function useRoamController() {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function nextFileTreeRequestId(): string {
+  fileTreeRequestSequence += 1;
+  return `file-tree-${Date.now()}-${fileTreeRequestSequence}`;
 }

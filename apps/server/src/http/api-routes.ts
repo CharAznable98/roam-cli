@@ -26,6 +26,7 @@ import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js"
 import type { AppContext } from "../server/context.js";
 import { sendRunnerRpcError } from "./errors.js";
 import type { ServiceResult } from "../modules/result.js";
+import type { FileTreeQuery } from "../modules/workspace/workspace-service.js";
 import {
   ApprovalParamsSchema,
   DirectoryCreateBodySchema,
@@ -39,6 +40,24 @@ import {
 const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
   Math.ceil(DEFAULT_MAX_IMAGE_BYTES * DEFAULT_MAX_IMAGES_PER_TURN * (4 / 3)) +
   1024 * 1024;
+
+function toFileTreeQuery(parsed: {
+  path: string;
+  depth: number;
+  requestId?: string | undefined;
+}): FileTreeQuery {
+  if (parsed.requestId) {
+    return {
+      path: parsed.path,
+      depth: parsed.depth,
+      requestId: parsed.requestId,
+    };
+  }
+  return {
+    path: parsed.path,
+    depth: parsed.depth,
+  };
+}
 
 export async function registerApiRoutes(
   app: FastifyInstance,
@@ -73,7 +92,7 @@ function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
     try {
       const result = await context.services.workspace.readRunnerDirectoryTree(
         params.id,
-        parsed.data,
+        toFileTreeQuery(parsed.data),
       );
       if (!result.ok) {
         if (result.error === "runner_not_found") {
@@ -418,7 +437,7 @@ function registerWorkspaceRoutes(
     try {
       const result = await context.services.workspace.readFileTree(
         params.id,
-        parsed.data,
+        toFileTreeQuery(parsed.data),
       );
       if (!result.ok) {
         return sendServiceError(reply, result);

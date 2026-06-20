@@ -49,6 +49,8 @@ export interface AppState {
   filesBySession: Record<string, FileNode[]>;
   fileTreeState: Record<string, AsyncState>;
   fileTreePathState: Record<string, Record<string, AsyncState>>;
+  fileTreeRequestIds: Record<string, Record<string, string>>;
+  staleFileTreeRequestIds: Record<string, true>;
   selectedFilePath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
@@ -77,6 +79,8 @@ export const initialAppState: AppState = {
   filesBySession: {},
   fileTreeState: {},
   fileTreePathState: {},
+  fileTreeRequestIds: {},
+  staleFileTreeRequestIds: {},
   selectedFilePath: "",
   fileContent: undefined,
   editorContent: "",
@@ -130,24 +134,28 @@ export type AppAction =
       type: "sessionWorkspaceLoading";
       sessionId: string;
       resetSelection: boolean;
+      requestId?: string;
     }
   | {
       type: "fileTreePathLoading";
       sessionId: string;
       path: string;
       resetTree?: boolean;
+      requestId?: string;
     }
   | {
       type: "fileTreeLoaded";
       sessionId: string;
       path: string;
       files: FileNode[];
+      requestId?: string;
     }
   | {
       type: "fileTreeFailed";
       sessionId: string;
       path: string;
       message: string;
+      requestId?: string;
     }
   | { type: "fileContentLoading"; path: string }
   | { type: "fileContentLoaded"; result: FileContentResult }
@@ -292,6 +300,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileTreePathState: action.resetSelection
           ? omitKey(state.fileTreePathState, action.sessionId)
           : state.fileTreePathState,
+        fileTreeRequestIds: action.resetSelection
+          ? omitKey(state.fileTreeRequestIds, action.sessionId)
+          : state.fileTreeRequestIds,
       };
     case "approvalUpserted":
       return upsertApprovalState(state, action.approval);
@@ -356,6 +367,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state.fileTreePathState,
           [action.sessionId]: { ".": "loading" },
         },
+        ...nextFileTreeRequestTracking(
+          state,
+          action.sessionId,
+          ".",
+          action.requestId,
+          true,
+        ),
       };
     case "fileTreePathLoading":
       return {
@@ -379,9 +397,23 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             [action.path]: "loading",
           },
         },
+        ...nextFileTreeRequestTracking(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+          action.resetTree === true,
+        ),
       };
     case "fileTreeLoaded":
-      if (!isFileTreePathLoading(state, action.sessionId, action.path)) {
+      if (
+        !isCurrentFileTreeRequest(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+        )
+      ) {
         return state;
       }
       return applyLoadedFileTree(
@@ -391,7 +423,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         action.files,
       );
     case "fileTreeFailed":
-      if (!isFileTreePathLoading(state, action.sessionId, action.path)) {
+      if (
+        !isCurrentFileTreeRequest(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+        )
+      ) {
         return state;
       }
       return pushNotification(
@@ -411,6 +450,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
               [action.path]: "error",
             },
           },
+          fileTreeRequestIds: removeFileTreeRequestId(
+            state.fileTreeRequestIds,
+            action.sessionId,
+            action.path,
+          ),
         },
         "File tree request failed",
         action.message,
@@ -557,7 +601,14 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   }
   if (event.type === "file:tree") {
     const path = event.result.root.path;
-    if (!isFileTreePathLoading(state, event.result.sessionId, path)) {
+    if (
+      !shouldApplyFileTreeEvent(
+        state,
+        event.result.sessionId,
+        path,
+        event.result.requestId,
+      )
+    ) {
       return state;
     }
     return applyLoadedFileTree(
@@ -647,7 +698,39 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     filesBySession: omitKey(state.filesBySession, sessionId),
     fileTreeState: omitKey(state.fileTreeState, sessionId),
     fileTreePathState: omitKey(state.fileTreePathState, sessionId),
+    fileTreeRequestIds: omitKey(state.fileTreeRequestIds, sessionId),
   };
+}
+
+function isCurrentFileTreeRequest(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string | undefined,
+): boolean {
+  if (requestId === undefined) {
+    return state.fileTreePathState[sessionId]?.[path] === "loading";
+  }
+  if (state.staleFileTreeRequestIds[requestId]) {
+    return false;
+  }
+  return state.fileTreeRequestIds[sessionId]?.[path] === requestId;
+}
+
+function shouldApplyFileTreeEvent(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string,
+): boolean {
+  if (state.staleFileTreeRequestIds[requestId]) {
+    return false;
+  }
+  if (path !== "." && state.fileTreePathState[sessionId]?.["."] === "loading") {
+    return false;
+  }
+  const currentRequestId = state.fileTreeRequestIds[sessionId]?.[path];
+  return currentRequestId === undefined || currentRequestId === requestId;
 }
 
 function isFileTreePathLoading(
@@ -664,6 +747,10 @@ function applyLoadedFileTree(
   path: string,
   files: FileNode[],
 ): AppState {
+  const removedRequestIds = descendantPathEntryValues(
+    state.fileTreeRequestIds[sessionId] ?? {},
+    path,
+  );
   return {
     ...state,
     filesBySession: {
@@ -688,6 +775,94 @@ function applyLoadedFileTree(
         [path]: "ready",
       },
     },
+    fileTreeRequestIds: pruneFileTreeRequestIds(
+      state.fileTreeRequestIds,
+      sessionId,
+      path,
+    ),
+    staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+      state.staleFileTreeRequestIds,
+      removedRequestIds,
+    ),
+  };
+}
+
+function nextFileTreeRequestTracking(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string | undefined,
+  resetTree: boolean,
+): Pick<AppState, "fileTreeRequestIds" | "staleFileTreeRequestIds"> {
+  if (requestId === undefined) {
+    return {
+      fileTreeRequestIds: state.fileTreeRequestIds,
+      staleFileTreeRequestIds: state.staleFileTreeRequestIds,
+    };
+  }
+
+  const currentSessionRequests = state.fileTreeRequestIds[sessionId] ?? {};
+  const replacedRequestIds = resetTree
+    ? Object.values(currentSessionRequests)
+    : [currentSessionRequests[path]].filter(
+        (value): value is string => value !== undefined,
+      );
+  const staleFileTreeRequestIds = markStaleFileTreeRequestIds(
+    state.staleFileTreeRequestIds,
+    replacedRequestIds.filter((value) => value !== requestId),
+  );
+  return {
+    fileTreeRequestIds: {
+      ...state.fileTreeRequestIds,
+      [sessionId]: {
+        ...(resetTree ? {} : currentSessionRequests),
+        [path]: requestId,
+      },
+    },
+    staleFileTreeRequestIds,
+  };
+}
+
+function markStaleFileTreeRequestIds(
+  current: Record<string, true>,
+  requestIds: string[],
+): Record<string, true> {
+  if (requestIds.length === 0) {
+    return current;
+  }
+  return {
+    ...current,
+    ...Object.fromEntries(requestIds.map((requestId) => [requestId, true])),
+  };
+}
+
+function removeFileTreeRequestId(
+  requestIdsBySession: Record<string, Record<string, string>>,
+  sessionId: string,
+  path: string,
+): Record<string, Record<string, string>> {
+  return pruneFileTreeRequestIds(requestIdsBySession, sessionId, path);
+}
+
+function pruneFileTreeRequestIds(
+  requestIdsBySession: Record<string, Record<string, string>>,
+  sessionId: string,
+  path: string,
+): Record<string, Record<string, string>> {
+  const sessionRequestIds = requestIdsBySession[sessionId];
+  if (!sessionRequestIds) {
+    return requestIdsBySession;
+  }
+  const nextSessionRequestIds = pruneDescendantPathEntries(
+    sessionRequestIds,
+    path,
+  );
+  if (Object.keys(nextSessionRequestIds).length === 0) {
+    return omitKey(requestIdsBySession, sessionId);
+  }
+  return {
+    ...requestIdsBySession,
+    [sessionId]: nextSessionRequestIds,
   };
 }
 
@@ -695,15 +870,35 @@ function pruneDescendantPathStates(
   pathStates: Record<string, AsyncState>,
   path: string,
 ): Record<string, AsyncState> {
+  return pruneDescendantPathEntries(pathStates, path);
+}
+
+function pruneDescendantPathEntries<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): Record<string, T> {
   if (path === ".") {
     return {};
   }
   const prefix = `${path}/`;
   return Object.fromEntries(
-    Object.entries(pathStates).filter(([candidate]) => {
+    Object.entries(entriesByPath).filter(([candidate]) => {
       return candidate !== path && !candidate.startsWith(prefix);
     }),
   );
+}
+
+function descendantPathEntryValues<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): T[] {
+  if (path === ".") {
+    return Object.values(entriesByPath);
+  }
+  const prefix = `${path}/`;
+  return Object.entries(entriesByPath)
+    .filter(([candidate]) => candidate === path || candidate.startsWith(prefix))
+    .map(([, value]) => value);
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {
