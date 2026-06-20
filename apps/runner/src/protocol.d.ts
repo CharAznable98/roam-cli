@@ -434,6 +434,7 @@ declare module "@roamcli/shared/protocol" {
         cwd?: string;
         path?: string;
         depth?: number;
+        includeFiles?: boolean;
       }
     | {
         type: "readFileContent";

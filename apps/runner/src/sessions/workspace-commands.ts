@@ -80,6 +80,9 @@ export class WorkspaceCommandHandler {
         sessionId: command.sessionId,
         ...(command.path === undefined ? {} : { path: command.path }),
         ...(command.depth === undefined ? {} : { depth: command.depth }),
+        ...(command.includeFiles === undefined
+          ? {}
+          : { includeFiles: command.includeFiles }),
       });
       await this.#emit({ type: "fileTreeResult", result });
     } catch (error: unknown) {

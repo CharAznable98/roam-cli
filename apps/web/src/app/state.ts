@@ -391,6 +391,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         action.files,
       );
     case "fileTreeFailed":
+      if (!isFileTreePathLoading(state, action.sessionId, action.path)) {
+        return state;
+      }
       return pushNotification(
         {
           ...state,

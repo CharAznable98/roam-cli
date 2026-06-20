@@ -60,6 +60,7 @@ export class WorkspaceService {
         cwd: session.executionFolder,
         path: query.path,
         depth: query.depth,
+        includeFiles: true,
       },
       this.runnerRpcTimeoutMs,
     );
@@ -141,6 +142,7 @@ export class WorkspaceService {
         cwd: runner.workspaceRoot,
         path: query.path,
         depth: query.depth,
+        includeFiles: false,
       },
       this.runnerRpcTimeoutMs,
     );
@@ -222,6 +224,7 @@ export class WorkspaceService {
         cwd: directory,
         path: ".",
         depth: 0,
+        includeFiles: true,
       },
       this.runnerRpcTimeoutMs,
     );

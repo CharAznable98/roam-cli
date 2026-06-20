@@ -1048,6 +1048,7 @@ describe("server", () => {
       cwd: "/workspace",
       path: ".",
       depth: 1,
+      includeFiles: false,
     });
     expect(listCommand.sessionId).toBe("runner-directory-runner-1");
     runner.send(

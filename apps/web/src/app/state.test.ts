@@ -341,6 +341,32 @@ describe("app reducer", () => {
     expect(next.fileTreePathState["session-1"]).toEqual({ ".": "loading" });
   });
 
+  it("ignores stale file tree path failures after the path is no longer loading", () => {
+    const files: FileNode[] = [
+      {
+        path: "src",
+        name: "src",
+        type: "directory",
+      },
+    ];
+    const state: AppState = {
+      ...initialAppState,
+      filesBySession: { "session-1": files },
+      fileTreeState: { "session-1": "ready" },
+      fileTreePathState: { "session-1": { ".": "ready" } },
+    };
+
+    const next = appReducer(state, {
+      type: "fileTreeFailed",
+      sessionId: "session-1",
+      path: ".",
+      message: "late failure",
+    });
+
+    expect(next).toBe(state);
+    expect(next.notifications).toEqual([]);
+  });
+
   it("ignores stale streamed file tree results after a root reset", () => {
     const files: FileNode[] = [
       {

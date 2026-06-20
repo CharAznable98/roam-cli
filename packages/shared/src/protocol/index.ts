@@ -626,6 +626,7 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     cwd: z.string().min(1).optional(),
     path: z.string().default("."),
     depth: z.number().int().min(0).max(8).default(3),
+    includeFiles: z.boolean().default(true),
   }),
   z.object({
     type: z.literal("readFileContent"),

@@ -47,6 +47,50 @@ describe("runner file reads", () => {
     ).toEqual(["src/main.ts"]);
   });
 
+  it("can return a directory-only file tree", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-directory-tree-"),
+    );
+    const sessionCwd = join(workspace, "project");
+    await mkdir(join(sessionCwd, "src", "components"), { recursive: true });
+    await mkdir(join(sessionCwd, "docs"), { recursive: true });
+    await writeFile(join(sessionCwd, "README.md"), "readme");
+    await writeFile(join(sessionCwd, "docs", "guide.md"), "guide");
+    await writeFile(join(sessionCwd, "src", "main.ts"), "export {};");
+    await writeFile(join(sessionCwd, "src", "components", "App.tsx"), "app");
+
+    const result = await readFileTree({
+      workspace,
+      sessionCwd,
+      requestId: "dirs-1",
+      sessionId: "s1",
+      path: ".",
+      depth: 3,
+      includeFiles: false,
+    });
+
+    expect(result.root.children?.map((node) => node.name)).toEqual([
+      "docs",
+      "src",
+    ]);
+    expect(result.root.children?.[0]).toMatchObject({
+      path: "docs",
+      type: "directory",
+      children: [],
+    });
+    expect(result.root.children?.[1]).toMatchObject({
+      path: "src",
+      type: "directory",
+      children: [
+        {
+          path: "src/components",
+          type: "directory",
+          children: [],
+        },
+      ],
+    });
+  });
+
   it("returns utf8 file content with truncation metadata", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-content-"));
     const sessionCwd = join(workspace, "project");
@@ -68,6 +112,34 @@ describe("runner file reads", () => {
       path: "src/main.ts",
       kind: "text",
       content: "abc",
+      truncated: true,
+      encoding: "utf8",
+    });
+  });
+
+  it("keeps truncated UTF-8 content valid when the read splits a character", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-partial-utf8-"),
+    );
+    const sessionCwd = join(workspace, "project");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeFile(join(sessionCwd, "partial.txt"), Buffer.from("a€", "utf8"));
+
+    const result = await readFileContent({
+      workspace,
+      sessionCwd,
+      requestId: "partial-1",
+      sessionId: "s1",
+      path: "partial.txt",
+      maxBytes: 2,
+    });
+
+    expect(result).toMatchObject({
+      requestId: "partial-1",
+      sessionId: "s1",
+      path: "partial.txt",
+      kind: "text",
+      content: "a",
       truncated: true,
       encoding: "utf8",
     });
@@ -98,6 +170,31 @@ describe("runner file reads", () => {
     });
   });
 
+  it("allows ANSI-colored logs to remain editable text", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-ansi-log-"));
+    const sessionCwd = join(workspace, "project");
+    await mkdir(sessionCwd, { recursive: true });
+    await writeFile(join(sessionCwd, "log.txt"), "\u001b[31mfailed\u001b[0m\n");
+
+    const result = await readFileContent({
+      workspace,
+      sessionCwd,
+      requestId: "ansi-1",
+      sessionId: "s1",
+      path: "log.txt",
+    });
+
+    expect(result).toMatchObject({
+      requestId: "ansi-1",
+      sessionId: "s1",
+      path: "log.txt",
+      kind: "text",
+      content: "\u001b[31mfailed\u001b[0m\n",
+      truncated: false,
+      encoding: "utf8",
+    });
+  });
+
   it("returns image content as base64 and marks other binary files as binary", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-image-"));
     const sessionCwd = join(workspace, "project");
@@ -113,6 +210,10 @@ describe("runner file reads", () => {
     await writeFile(
       join(sessionCwd, "assets", "invalid-utf8.bin"),
       Buffer.from([0xff, 0xfe, 0xfd, 0xfc]),
+    );
+    await writeFile(
+      join(sessionCwd, "assets", "invalid-tail.bin"),
+      Buffer.from([0x61, 0xff]),
     );
 
     const image = await readFileContent({
@@ -166,6 +267,24 @@ describe("runner file reads", () => {
       kind: "binary",
       mimeType: "application/octet-stream",
       size: 4,
+      truncated: false,
+      encoding: "binary",
+    });
+
+    const invalidUtf8Tail = await readFileContent({
+      workspace,
+      sessionCwd,
+      requestId: "binary-3",
+      sessionId: "s1",
+      path: "assets/invalid-tail.bin",
+    });
+    expect(invalidUtf8Tail).toMatchObject({
+      requestId: "binary-3",
+      sessionId: "s1",
+      path: "assets/invalid-tail.bin",
+      kind: "binary",
+      mimeType: "application/octet-stream",
+      size: 2,
       truncated: false,
       encoding: "binary",
     });
