@@ -22,6 +22,7 @@ function runnerErrorStatusCode(runnerCode: string | undefined): number {
   switch (runnerCode) {
     case "INVALID_CWD":
     case "DIRECTORY_CREATE_ERROR":
+    case "FILE_TREE_ERROR":
       return 400;
     case "SESSION_NOT_FOUND":
       return 409;

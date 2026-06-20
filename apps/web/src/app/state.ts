@@ -620,7 +620,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       state,
       event.result.sessionId,
       path,
-      event.result.root.children ?? [event.result.root],
+      event.result.root.children ?? [],
     );
   }
   if (

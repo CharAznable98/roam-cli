@@ -6,7 +6,7 @@ import {
   LoaderCircle,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type TreePathStates = Record<
   string,
@@ -35,10 +35,53 @@ export function LazyFileTree({
   const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const requestedOpenLoadsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    requestedOpenLoadsRef.current.clear();
     setOpenPaths(new Set());
   }, [resetKey]);
+
+  useEffect(() => {
+    const directoriesByPath = collectDirectoryNodes(nodes);
+    const nextOpenPaths = new Set(openPaths);
+    const pathsToLoad: string[] = [];
+    let openPathsChanged = false;
+
+    for (const path of openPaths) {
+      const node = directoriesByPath.get(path);
+      if (node === undefined) {
+        nextOpenPaths.delete(path);
+        requestedOpenLoadsRef.current.delete(path);
+        openPathsChanged = true;
+        continue;
+      }
+      if (node.children !== undefined) {
+        requestedOpenLoadsRef.current.delete(path);
+        continue;
+      }
+
+      const pathState = pathStates[path] ?? "idle";
+      if (pathState === "loading") {
+        continue;
+      }
+      if (pathState === "error") {
+        requestedOpenLoadsRef.current.delete(path);
+        continue;
+      }
+      if (!requestedOpenLoadsRef.current.has(path)) {
+        requestedOpenLoadsRef.current.add(path);
+        pathsToLoad.push(path);
+      }
+    }
+
+    if (openPathsChanged) {
+      setOpenPaths(nextOpenPaths);
+    }
+    for (const path of pathsToLoad) {
+      onLoadDirectory(path);
+    }
+  }, [nodes, onLoadDirectory, openPaths, pathStates]);
 
   const toggleDirectory = (node: FileNode) => {
     onSelectDirectory?.(node.path);
@@ -49,10 +92,12 @@ export function LazyFileTree({
         next.add(node.path);
       } else {
         next.delete(node.path);
+        requestedOpenLoadsRef.current.delete(node.path);
       }
       return next;
     });
     if (willOpen && node.children === undefined) {
+      requestedOpenLoadsRef.current.add(node.path);
       onLoadDirectory(node.path);
     }
   };
@@ -73,6 +118,23 @@ export function LazyFileTree({
       ))}
     </>
   );
+}
+
+function collectDirectoryNodes(nodes: FileNode[]): Map<string, FileNode> {
+  const directoriesByPath = new Map<string, FileNode>();
+  const visit = (node: FileNode) => {
+    if (node.type !== "directory") {
+      return;
+    }
+    directoriesByPath.set(node.path, node);
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  };
+  for (const node of nodes) {
+    visit(node);
+  }
+  return directoriesByPath;
 }
 
 function TreeNode({

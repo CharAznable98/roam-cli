@@ -88,7 +88,7 @@ export async function readFileTree(
     sessionId: options.sessionId,
     root: await buildNode(root.path, {
       sessionCwd: options.sessionCwd,
-      realSessionCwd: root.realPath,
+      realSessionCwd: root.realSessionCwd,
       depth: clampDepth(options.depth),
       visited: new Set([root.realPath]),
       includeFiles: options.includeFiles ?? true,
@@ -204,7 +204,7 @@ export async function createDirectory(
     path: toNodePath(options.sessionCwd, targetPath),
     node: await buildNode(targetPath, {
       sessionCwd: options.sessionCwd,
-      realSessionCwd: parent.realPath,
+      realSessionCwd: parent.realSessionCwd,
       depth: 1,
       visited: new Set([parent.realPath, targetRealPath]),
       includeFiles: true,

@@ -93,6 +93,35 @@ describe("runner file reads", () => {
     });
   });
 
+  it("keeps internal symlinked directories visible during lazy reads", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-symlink-"));
+    const sessionCwd = join(workspace, "project");
+    await mkdir(join(sessionCwd, "src"), { recursive: true });
+    await mkdir(join(sessionCwd, "config"), { recursive: true });
+    await symlink("../config", join(sessionCwd, "src", "config"));
+
+    const result = await readFileTree({
+      workspace,
+      sessionCwd,
+      requestId: "symlink-1",
+      sessionId: "s1",
+      path: "src",
+      depth: 1,
+    });
+
+    expect(result.root).toMatchObject({
+      path: "src",
+      type: "directory",
+      children: [
+        {
+          path: "src/config",
+          name: "config",
+          type: "directory",
+        },
+      ],
+    });
+  });
+
   it("returns utf8 file content with truncation metadata", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-content-"));
     const sessionCwd = join(workspace, "project");

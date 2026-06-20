@@ -1158,6 +1158,47 @@ describe("server", () => {
     runner.close();
   });
 
+  it("returns bad requests for stale runner directory listing paths", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=missing&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: "missing",
+      depth: 1,
+      includeFiles: false,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: listCommand.requestId,
+        message: "Path does not exist: missing",
+        code: "FILE_TREE_ERROR",
+      }),
+    );
+
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(400);
+    expect(listResponse.json()).toEqual({
+      error: "runner_error",
+      code: "FILE_TREE_ERROR",
+      message: "Path does not exist: missing",
+    });
+
+    runner.close();
+  });
+
   it("returns runner errors when file RPCs cannot complete", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);

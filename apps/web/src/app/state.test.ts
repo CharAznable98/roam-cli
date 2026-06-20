@@ -529,6 +529,51 @@ describe("app reducer", () => {
     });
   });
 
+  it("treats streamed depth-zero directory updates as empty child lists", () => {
+    const event: ServerEvent = {
+      type: "file:tree",
+      result: {
+        requestId: "depth-zero-tree",
+        sessionId: "session-1",
+        root: {
+          path: "src",
+          name: "src",
+          type: "directory",
+        },
+      },
+    };
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-1": [
+            {
+              path: "src",
+              name: "src",
+              type: "directory",
+              children: [
+                {
+                  path: "src/Old.tsx",
+                  name: "Old.tsx",
+                  type: "file",
+                  size: 1,
+                },
+              ],
+            },
+          ],
+        },
+        fileTreePathState: { "session-1": { ".": "ready", src: "ready" } },
+      },
+      { type: "serverEventReceived", event },
+    );
+
+    expect(next.filesBySession["session-1"]?.[0]).toMatchObject({
+      path: "src",
+      children: [],
+    });
+  });
+
   it("ignores streamed file tree updates from superseded local requests", () => {
     const loadingOld = appReducer(
       {

@@ -618,7 +618,7 @@ export function useRoamController() {
 
   const loadSelectedDirectory = (path: string) => {
     if (!selectedSession || !apiRef.current) return;
-    loadFileTreePath(selectedSession.id, path);
+    loadFileTreePath(selectedSession.id, path, { force: true });
   };
 
   const refreshSelectedFileTree = () => {
