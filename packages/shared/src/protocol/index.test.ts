@@ -250,6 +250,32 @@ describe("protocol schemas", () => {
         message: "applied",
       }).rejected,
     ).toEqual([]);
+
+    expect(
+      RunnerCommandSchema.parse({
+        type: "checkSessionStatus",
+        requestId: "check-1",
+        sessionId: "s1",
+      }),
+    ).toMatchObject({
+      type: "checkSessionStatus",
+      requestId: "check-1",
+      sessionId: "s1",
+    });
+
+    expect(
+      RunnerEventSchema.parse({
+        type: "sessionStatusCheckResult",
+        result: {
+          requestId: "check-1",
+          sessionId: "s1",
+          active: false,
+        },
+      }),
+    ).toMatchObject({
+      type: "sessionStatusCheckResult",
+      result: { requestId: "check-1", sessionId: "s1", active: false },
+    });
   });
 });
 

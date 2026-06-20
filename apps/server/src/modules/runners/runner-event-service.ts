@@ -47,6 +47,11 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "sessionStatusCheckResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
     if (event.type === "assistantMessage") {
       const message: Message = {
         id: newId("message"),

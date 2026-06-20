@@ -30,6 +30,7 @@ describe("ConnectionHub", () => {
 
     expect(hub.isRunnerConnectionHealthy("runner-1")).toBe(true);
     expect(hub.isRunnerOnline("runner-1")).toBe(true);
+    expect(hub.listOnlineRunners()).toEqual([runner]);
   });
 
   it("reports stale socket runners as unhealthy", () => {
@@ -42,6 +43,7 @@ describe("ConnectionHub", () => {
 
     expect(hub.isRunnerConnectionHealthy("runner-1")).toBe(false);
     expect(hub.isRunnerOnline("runner-1")).toBe(false);
+    expect(hub.listOnlineRunners()).toEqual([]);
   });
 
   it("does not treat persisted online runners as live connections", () => {
@@ -50,6 +52,26 @@ describe("ConnectionHub", () => {
 
     expect(hub.isRunnerConnectionHealthy("runner-1")).toBe(false);
     expect(hub.isRunnerOnline("runner-1")).toBe(false);
+    expect(hub.listOnlineRunners()).toEqual([]);
+  });
+
+  it("marks unhealthy runner connections offline and broadcasts removal", () => {
+    const store = createFakeStore([runner]);
+    const hub = new ConnectionHub(store);
+    const stream = new FakeSocket();
+    const runnerSocket = new FakeSocket();
+    hub.addStream(stream as unknown as WebSocket);
+    hub.registerRunner(runner, runnerSocket as unknown as WebSocket);
+
+    hub.markRunnerOffline("runner-1");
+
+    expect(runnerSocket.readyState).toBe(runnerSocket.CLOSED);
+    expect(store.listOnlineRunners()).toEqual([]);
+    expect(hub.listOnlineRunners()).toEqual([]);
+    expect(JSON.parse(stream.sent.at(-1) ?? "{}")).toEqual({
+      type: "runner:offline",
+      runnerId: "runner-1",
+    });
   });
 });
 

@@ -84,6 +84,16 @@ export class SessionManager {
       case "deliverInput":
         this.deliverInput(command.sessionId, command.content);
         return;
+      case "checkSessionStatus":
+        await this.#emit({
+          type: "sessionStatusCheckResult",
+          result: {
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+            active: this.#sessions.has(command.sessionId),
+          },
+        });
+        return;
       case "writeSessionAttachments":
         try {
           await this.#emit({

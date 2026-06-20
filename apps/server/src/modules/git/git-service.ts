@@ -338,6 +338,7 @@ export class GitService {
     }
     if (
       session.executionMode !== "managed_worktree" ||
+      session.status === "pending" ||
       session.worktreeDeletedAt
     ) {
       return fail("worktree_not_available");

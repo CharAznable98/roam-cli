@@ -552,6 +552,60 @@ describe("SessionManager", () => {
     });
   });
 
+  it("reports active session liveness for status checks", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-status-check-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [longRunningCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(makeSession(workspace), "wait");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "running",
+      });
+    });
+
+    await manager.handle({
+      type: "checkSessionStatus",
+      requestId: "check-active",
+      sessionId: "s1",
+    });
+    await manager.handle({
+      type: "checkSessionStatus",
+      requestId: "check-missing",
+      sessionId: "missing-session",
+    });
+
+    expect(events).toContainEqual({
+      type: "sessionStatusCheckResult",
+      result: {
+        requestId: "check-active",
+        sessionId: "s1",
+        active: true,
+      },
+    });
+    expect(events).toContainEqual({
+      type: "sessionStatusCheckResult",
+      result: {
+        requestId: "check-missing",
+        sessionId: "missing-session",
+        active: false,
+      },
+    });
+
+    manager.control("s1", "stop");
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-patch-"),
@@ -810,6 +864,49 @@ function throwingParserCodexAgent(): LoadedAgent {
         return {
           feed(): AgentParseResult {
             throw new Error("parser failed");
+          },
+        };
+      },
+    },
+  };
+}
+
+function longRunningCodexAgent(): LoadedAgent {
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-long-running",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      buildLaunch() {
+        return {
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+          preferPty: false,
+          requirePty: false,
+          promptDelivery: "argument",
+        };
+      },
+      createParser(): AgentOutputParser {
+        return {
+          feed(): AgentParseResult {
+            return { text: "", approvals: [], artifacts: [] };
           },
         };
       },

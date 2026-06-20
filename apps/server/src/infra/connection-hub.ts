@@ -28,7 +28,7 @@ export class ConnectionHub {
 
   addStream(socket: WebSocket): void {
     this.streamClients.add(socket);
-    for (const { runner } of this.runners.values()) {
+    for (const runner of this.listOnlineRunners()) {
       sendJson(socket, { type: "runner:online", runner });
     }
     socket.once("close", () => {
@@ -66,6 +66,22 @@ export class ConnectionHub {
     return Boolean(
       connection && connection.socket.readyState === connection.socket.OPEN,
     );
+  }
+
+  listOnlineRunners(): RunnerRegistration[] {
+    return [...this.runners.values()]
+      .filter(({ socket }) => socket.readyState === socket.OPEN)
+      .map(({ runner }) => runner);
+  }
+
+  markRunnerOffline(runnerId: string): void {
+    const connection = this.runners.get(runnerId);
+    if (connection) {
+      this.runners.delete(runnerId);
+      connection.socket.close(1000, "runner marked offline");
+    }
+    this.store.markRunnerOffline(runnerId, nowIso());
+    this.broadcast({ type: "runner:offline", runnerId });
   }
 
   sendToRunner(runnerId: string, command: RunnerCommand): boolean {
