@@ -1,6 +1,7 @@
-import type {
-  ImageAttachmentUpload,
-  RunnerCapability,
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type ImageAttachmentUpload,
+  type RunnerCapability,
 } from "@roamcli/shared/protocol";
 
 export interface DraftImageAttachment {
@@ -26,7 +27,7 @@ export function imageInputLimits(
     accept:
       supportedMimeTypes.length > 0 ? supportedMimeTypes.join(",") : "image/*",
     maxImages: capability?.maxImagesPerTurn ?? 0,
-    maxBytes: capability?.maxImageBytes ?? 10 * 1024 * 1024,
+    maxBytes: capability?.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES,
     supportedMimeTypes,
   };
 }

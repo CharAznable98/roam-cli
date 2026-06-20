@@ -6,6 +6,9 @@ export type AgentKind = z.infer<typeof AgentKindSchema>;
 export const RunnerProfileSchema = z.enum(["strict", "standard", "trusted"]);
 export type RunnerProfile = z.infer<typeof RunnerProfileSchema>;
 
+export const DEFAULT_MAX_IMAGES_PER_TURN = 5;
+export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
 export const RunnerCapabilitySchema = z.object({
   kind: AgentKindSchema,
   label: z.string().min(1),
@@ -16,11 +19,7 @@ export const RunnerCapabilitySchema = z.object({
   supportsImages: z.boolean().default(false),
   supportedImageMimeTypes: z.array(z.string().min(1)).default([]),
   maxImagesPerTurn: z.number().int().nonnegative().default(0),
-  maxImageBytes: z
-    .number()
-    .int()
-    .positive()
-    .default(10 * 1024 * 1024),
+  maxImageBytes: z.number().int().positive().default(DEFAULT_MAX_IMAGE_BYTES),
   pluginName: z.string().min(1).optional(),
   pluginVersion: z.string().min(1).optional(),
 });

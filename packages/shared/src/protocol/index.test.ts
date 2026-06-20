@@ -8,6 +8,7 @@ import {
   ImageAttachmentUploadSchema,
   PatchApplyResultSchema,
   ApiCreateSessionSchema,
+  DEFAULT_MAX_IMAGE_BYTES,
   RunnerCommandSchema,
   RunnerRegistrationSchema,
   RunnerEventSchema,
@@ -41,6 +42,7 @@ describe("protocol schemas", () => {
     expect(runner.capabilities[0]?.supportsImages).toBe(false);
     expect(runner.capabilities[0]?.supportedImageMimeTypes).toEqual([]);
     expect(runner.capabilities[0]?.maxImagesPerTurn).toBe(0);
+    expect(runner.capabilities[0]?.maxImageBytes).toBe(DEFAULT_MAX_IMAGE_BYTES);
     expect(runner.capabilities[0]?.kind).toBe("vendor.custom-agent");
     expect(runner.capabilities[0]?.pluginName).toBe("@vendor/custom-agent");
   });

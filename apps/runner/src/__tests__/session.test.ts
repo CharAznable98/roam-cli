@@ -7,7 +7,11 @@ import type {
   AgentOutputParser,
   AgentParseResult,
 } from "@roamcli/agent-plugin-sdk";
-import type { RunnerEvent, Session } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type RunnerEvent,
+  type Session,
+} from "@roamcli/shared/protocol";
 import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
@@ -670,7 +674,7 @@ function artifactCodexAgent(): LoadedAgent {
     supportsImages: false,
     supportedImageMimeTypes: [],
     maxImagesPerTurn: 0,
-    maxImageBytes: 10 * 1024 * 1024,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];
@@ -724,7 +728,7 @@ function approvalCodexAgent(): LoadedAgent {
     supportsImages: false,
     supportedImageMimeTypes: [],
     maxImagesPerTurn: 0,
-    maxImageBytes: 10 * 1024 * 1024,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];
@@ -781,7 +785,7 @@ function throwingParserCodexAgent(): LoadedAgent {
     supportsImages: false,
     supportedImageMimeTypes: [],
     maxImagesPerTurn: 0,
-    maxImageBytes: 10 * 1024 * 1024,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
     pluginName: "test-codex",
     pluginVersion: "1.0.0",
   } satisfies LoadedAgent["capability"];
