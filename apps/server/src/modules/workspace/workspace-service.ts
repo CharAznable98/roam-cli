@@ -137,7 +137,7 @@ export class WorkspaceService {
       {
         type: "readFileTree",
         requestId: newId("runner_directory"),
-        sessionId: `runner-directory-${newId("tree")}`,
+        sessionId: `runner-directory-${runnerId}`,
         cwd: runner.workspaceRoot,
         path: query.path,
         depth: query.depth,

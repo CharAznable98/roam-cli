@@ -2276,6 +2276,65 @@ describe("App", () => {
     expect(approvalCall?.init?.method).toBe("POST");
   });
 
+  it("refreshes the nearest visible parent after patching a new nested directory", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    await screen.findByRole("treeitem", { name: /src/ });
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "approval:requested",
+            approval: {
+              ...patchApproval,
+              id: "approval-new-dir",
+              payload: {
+                hunks: [
+                  {
+                    ...patchHunk,
+                    id: "hunk-new-dir",
+                    filePath: "src/new/file.ts",
+                  },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+    });
+
+    const patchCard = await screen
+      .findByText("src/new/file.ts")
+      .then((element) => element.closest("article"));
+    expect(patchCard).not.toBeNull();
+    fireEvent.click(
+      within(patchCard as HTMLElement).getByRole("button", {
+        name: "Accept patch hunk hunk-new-dir",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        within(patchCard as HTMLElement).getByText("accepted"),
+      ).toBeInTheDocument(),
+    );
+    const requestCountBeforeApply = fetchRequests.length;
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+
+    const refreshedFileTreePaths = () =>
+      fetchRequests
+        .slice(requestCountBeforeApply)
+        .filter(
+          (url) => new URL(url).pathname === "/v1/sessions/session-1/files",
+        )
+        .map((url) => new URL(url).searchParams.get("path"));
+    await waitFor(() => {
+      expect(refreshedFileTreePaths()).toContain("src");
+    });
+    expect(refreshedFileTreePaths()).not.toContain("src/new");
+  });
+
   it("hides resolved approval actions after approve or reject", async () => {
     render(<App />);
     await screen.findByText("Apply generated patch");

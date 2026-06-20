@@ -49,8 +49,44 @@ export function parentDirectory(path: string): string {
   return index === -1 ? "." : path.slice(0, index) || ".";
 }
 
+export function hasTreeDirectory(nodes: FileNode[], path: string): boolean {
+  return path === "." || findTreeDirectory(nodes, path) !== undefined;
+}
+
+export function nearestTreeDirectoryPath(
+  nodes: FileNode[],
+  path: string,
+): string {
+  let candidate = path;
+  while (candidate !== ".") {
+    if (hasTreeDirectory(nodes, candidate)) {
+      return candidate;
+    }
+    candidate = parentDirectory(candidate);
+  }
+  return ".";
+}
+
 export function sortFileNodes(nodes: FileNode[]): FileNode[] {
   return [...nodes].sort(compareFileNodes);
+}
+
+function findTreeDirectory(
+  nodes: FileNode[],
+  path: string,
+): FileNode | undefined {
+  for (const node of nodes) {
+    if (node.path === path && node.type === "directory") {
+      return node;
+    }
+    if (node.type === "directory" && node.children) {
+      const match = findTreeDirectory(node.children, path);
+      if (match) {
+        return match;
+      }
+    }
+  }
+  return undefined;
 }
 
 function upsertNode(nodes: FileNode[], node: FileNode): FileNode[] {

@@ -1049,7 +1049,7 @@ describe("server", () => {
       path: ".",
       depth: 1,
     });
-    expect(String(listCommand.sessionId)).toMatch(/^runner-directory-/);
+    expect(listCommand.sessionId).toBe("runner-directory-runner-1");
     runner.send(
       JSON.stringify({
         type: "fileTreeResult",
@@ -1109,6 +1109,47 @@ describe("server", () => {
     expect(createResponse.json()).toEqual({ result: createResult });
 
     stream.close();
+    runner.close();
+  });
+
+  it("returns bad requests for runner directory creation failures", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const createPromise = app.inject({
+      method: "POST",
+      url: "/v1/runners/runner-1/directories",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { parentPath: ".", name: "../outside" },
+    });
+    const createCommand = await nextJson(runner);
+    expect(createCommand).toMatchObject({
+      type: "createDirectory",
+      cwd: "/workspace",
+      parentPath: ".",
+      name: "../outside",
+    });
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: createCommand.requestId,
+        message: "Invalid directory name: ../outside",
+        code: "DIRECTORY_CREATE_ERROR",
+      }),
+    );
+
+    const createResponse = await createPromise;
+    expect(createResponse.statusCode).toBe(400);
+    expect(createResponse.json()).toEqual({
+      error: "runner_error",
+      code: "DIRECTORY_CREATE_ERROR",
+      message: "Invalid directory name: ../outside",
+    });
+
     runner.close();
   });
 

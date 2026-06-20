@@ -30,7 +30,10 @@ import {
   buildPatchFromHunks,
 } from "../features/approvals/model";
 import { toUiMessage } from "../features/conversation/model";
-import { parentDirectory } from "../features/files/tree-model";
+import {
+  nearestTreeDirectoryPath,
+  parentDirectory,
+} from "../features/files/tree-model";
 import {
   getRunnerSessions,
   getProjectSessions,
@@ -541,10 +544,16 @@ export function useRoamController() {
           loadFileContent(sessionId, openPath);
         }
         if (result.applied) {
+          const fileTree = state.filesBySession[sessionId] ?? [];
           for (const path of new Set(
             sessionHunks
               .filter((hunk) => hunk.status === "accepted")
-              .map((hunk) => parentDirectory(hunk.filePath)),
+              .map((hunk) =>
+                nearestTreeDirectoryPath(
+                  fileTree,
+                  parentDirectory(hunk.filePath),
+                ),
+              ),
           )) {
             loadFileTreePath(sessionId, path, { force: true });
           }

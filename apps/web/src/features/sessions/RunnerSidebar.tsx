@@ -400,48 +400,66 @@ export function ProjectForm({
   };
 
   return (
-    <form className="sidebar-project-form" onSubmit={submit}>
-      <label className="field">
-        <span>Name</span>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Optional project name"
-        />
-      </label>
-      <label className="field">
-        <span>Runner</span>
-        <select
-          value={runnerId}
-          onChange={(event) => {
-            const next = event.target.value;
-            setRunnerId(next);
-            setDirectorySuffix("");
-            setError("");
-          }}
-        >
-          {runners.map((runner) => (
-            <option key={runner.runnerId} value={runner.runnerId}>
-              {runner.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="field">
-        <span id={directoryLabelId}>Directory</span>
-        <button
-          className="directory-select-button"
-          type="button"
-          aria-labelledby={directoryLabelId}
-          disabled={!selectedRunner}
-          onClick={() => setDirectoryPickerOpen(true)}
-        >
-          <span className="truncate">
-            {directoryValue || "Choose a directory"}
-          </span>
-          <Folder size={15} />
-        </button>
-      </div>
+    <>
+      <form className="sidebar-project-form" onSubmit={submit}>
+        <label className="field">
+          <span>Name</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Optional project name"
+          />
+        </label>
+        <label className="field">
+          <span>Runner</span>
+          <select
+            value={runnerId}
+            onChange={(event) => {
+              const next = event.target.value;
+              setRunnerId(next);
+              setDirectorySuffix("");
+              setError("");
+            }}
+          >
+            {runners.map((runner) => (
+              <option key={runner.runnerId} value={runner.runnerId}>
+                {runner.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="field">
+          <span id={directoryLabelId}>Directory</span>
+          <button
+            className="directory-select-button"
+            type="button"
+            aria-labelledby={directoryLabelId}
+            disabled={!selectedRunner}
+            onClick={() => setDirectoryPickerOpen(true)}
+          >
+            <span className="truncate">
+              {directoryValue || "Choose a directory"}
+            </span>
+            <Folder size={15} />
+          </button>
+        </div>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="form-actions">
+          <button
+            className="primary-action-button"
+            type="submit"
+            title="Create project"
+            disabled={submitting}
+          >
+            <FolderPlus size={16} />
+            <span>{submitting ? "Creating project..." : "Create project"}</span>
+          </button>
+        </div>
+      </form>
       {directoryPickerOpen && selectedRunner ? (
         <DirectoryPickerModal
           runner={selectedRunner}
@@ -456,23 +474,7 @@ export function ProjectForm({
           onClose={() => setDirectoryPickerOpen(false)}
         />
       ) : null}
-      {error ? (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <div className="form-actions">
-        <button
-          className="primary-action-button"
-          type="submit"
-          title="Create project"
-          disabled={submitting}
-        >
-          <FolderPlus size={16} />
-          <span>{submitting ? "Creating project..." : "Create project"}</span>
-        </button>
-      </div>
-    </form>
+    </>
   );
 }
 
@@ -583,7 +585,13 @@ function DirectoryPickerModal({
             resetKey={runner.runnerId}
           />
         </div>
-        <div className="directory-create-row">
+        <form
+          className="directory-create-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void createFolder();
+          }}
+        >
           <input
             value={folderName}
             aria-label="New folder name"
@@ -593,16 +601,11 @@ function DirectoryPickerModal({
               setError("");
             }}
           />
-          <button
-            className="small-button"
-            type="button"
-            disabled={creating}
-            onClick={createFolder}
-          >
+          <button className="small-button" type="submit" disabled={creating}>
             <FolderPlus size={15} />
             <span>{creating ? "Creating..." : "New folder"}</span>
           </button>
-        </div>
+        </form>
         {error ? (
           <p className="form-error" role="alert">
             {error}

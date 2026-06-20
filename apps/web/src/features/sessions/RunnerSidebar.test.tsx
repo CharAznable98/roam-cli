@@ -65,6 +65,56 @@ describe("ProjectForm", () => {
       });
     });
   });
+
+  it("submits new folders from the directory picker without creating a project", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const onFetchRunnerDirectoryTree = vi.fn(async () => []);
+    const onCreateRunnerDirectory = vi.fn(
+      async (
+        _runnerId: string,
+        input: { parentPath: string; name: string },
+      ) => ({
+        requestId: "directory-create-1",
+        path:
+          input.parentPath === "."
+            ? input.name
+            : `${input.parentPath}/${input.name}`,
+        node: {
+          path:
+            input.parentPath === "."
+              ? input.name
+              : `${input.parentPath}/${input.name}`,
+          name: input.name,
+          type: "directory" as const,
+          children: [],
+        },
+      }),
+    );
+    render(
+      <ProjectForm
+        runners={runners}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    const picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+    const folderInput = within(picker).getByLabelText("New folder name");
+    fireEvent.change(folderInput, { target: { value: "web" } });
+    fireEvent.submit(folderInput.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(onCreateRunnerDirectory).toHaveBeenCalledWith("runner-1", {
+        parentPath: ".",
+        name: "web",
+      });
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+  });
 });
 
 const runners: RunnerRegistration[] = [
