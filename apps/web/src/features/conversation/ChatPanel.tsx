@@ -144,10 +144,7 @@ export function ChatPanel({
 
     const closeOnOutsidePointer = (event: MouseEvent) => {
       const target = event.target;
-      if (
-        target instanceof Node &&
-        !sessionMenuRef.current?.contains(target)
-      ) {
+      if (target instanceof Node && !sessionMenuRef.current?.contains(target)) {
         setSessionMenuOpen(false);
       }
     };
@@ -590,6 +587,7 @@ export function ChatPanel({
           type="file"
           accept={imageLimits.accept}
           multiple
+          tabIndex={-1}
           onChange={(event) => {
             if (event.target.files) {
               addFiles(event.target.files);
@@ -685,8 +683,29 @@ function IntermediateOutputGroup({
   fileLinkContext: MarkdownFileLinkContext;
   onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
 }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+
+  const keepExpandedOutputVisible = () => {
+    const details = detailsRef.current;
+    if (!details?.open || typeof details.scrollIntoView !== "function") {
+      return;
+    }
+    const scrollIntoView = () => {
+      details.scrollIntoView({ block: "start", inline: "nearest" });
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(scrollIntoView);
+    } else {
+      scrollIntoView();
+    }
+  };
+
   return (
-    <details className="collapsible-message intermediate-group">
+    <details
+      className="collapsible-message intermediate-group"
+      onToggle={keepExpandedOutputVisible}
+      ref={detailsRef}
+    >
       <summary>
         <ChevronDown size={16} />
         中间过程（{messages.length} 条）

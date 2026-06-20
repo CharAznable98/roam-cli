@@ -11,6 +11,7 @@ import type {
   ApiGitRemoveWorktree,
   ExecutionMode,
   ImageAttachmentUpload,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
   useCallback,
@@ -42,6 +43,7 @@ import { appReducer, initialAppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS = 1_500;
 
 export type StreamReconnectInfo = {
   mode: "connecting" | "connected" | "waiting";
@@ -235,6 +237,45 @@ export function useRoamController() {
       ),
     [projectSessions, state.selectedSessionId, state.sessions],
   );
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    const status = selectedSession?.status;
+    if (!sessionId || !status || !isActiveSessionStatus(status)) {
+      return;
+    }
+
+    let cancelled = false;
+    const syncStatus = () => {
+      const api = apiRef.current;
+      if (!api) {
+        return;
+      }
+      void api
+        .checkSessionStatus(sessionId)
+        .then((session) => {
+          if (!cancelled) {
+            dispatch({
+              type: "serverEventReceived",
+              event: { type: "session:updated", session },
+            });
+          }
+        })
+        .catch(() => {
+          // Manual status checks surface errors; this background sync only repairs missed events.
+        });
+    };
+
+    const interval = globalThis.setInterval(
+      syncStatus,
+      ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS,
+    );
+    return () => {
+      cancelled = true;
+      globalThis.clearInterval(interval);
+    };
+  }, [selectedSession?.id, selectedSession?.status]);
+
   const selectedGitContext = useMemo<ApiGitContext | undefined>(() => {
     if (
       selectedSession?.executionMode === "managed_worktree" &&
@@ -888,4 +929,12 @@ export function useRoamController() {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isActiveSessionStatus(status: SessionStatus): boolean {
+  return (
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_approval"
+  );
 }

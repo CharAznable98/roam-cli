@@ -30,9 +30,7 @@ vi.mock("@monaco-editor/react", () => {
     return (
       <textarea
         aria-label={
-          options?.ariaLabel ??
-          wrapperProps?.["aria-label"] ??
-          "Monaco editor"
+          options?.ariaLabel ?? wrapperProps?.["aria-label"] ?? "Monaco editor"
         }
         className={className}
         readOnly={options?.readOnly}
@@ -286,6 +284,7 @@ describe("App", () => {
   let runnerOnline: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
+  let statusCheckResultStatus: string;
   let remoteSessionExecutionMode: "direct" | "managed_worktree";
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
@@ -314,6 +313,7 @@ describe("App", () => {
     runnerOnline = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
+    statusCheckResultStatus = "stopped";
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
@@ -457,7 +457,7 @@ describe("App", () => {
           requestUrl.pathname === "/v1/sessions/session-1/status/check" &&
           init?.method === "POST"
         ) {
-          remoteSessionStatus = "stopped";
+          remoteSessionStatus = statusCheckResultStatus;
           return jsonResponse({
             session: {
               ...session,
@@ -735,6 +735,27 @@ describe("App", () => {
     );
     expect(await screen.findByText("已停止")).toBeInTheDocument();
     expect(screen.getByText("1 runners online")).toBeInTheDocument();
+  });
+
+  it("automatically repairs stale active session status when stream updates are missed", async () => {
+    remoteSessionStatus = "pending";
+    statusCheckResultStatus = "completed";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(screen.getByText("待执行")).toBeInTheDocument();
+
+    await waitFor(
+      () =>
+        expect(
+          fetchCalls.some(
+            (call) =>
+              call.url.endsWith("/v1/sessions/session-1/status/check") &&
+              call.init?.method === "POST",
+          ),
+        ).toBe(true),
+      { timeout: 2500 },
+    );
+    expect(await screen.findByText("已结束")).toBeInTheDocument();
   });
 
   it("keeps existing sessions reachable when their runner is offline", async () => {

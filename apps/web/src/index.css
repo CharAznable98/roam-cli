@@ -538,12 +538,11 @@
     padding-top: 0;
   }
 
-  .rename-session-dialog .form-actions {
-    gap: 8px;
-  }
-
   .form-actions {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
     justify-content: flex-end;
   }
 
@@ -1112,6 +1111,7 @@
   }
 
   .collapsible-message {
+    width: min(840px, 100%);
     min-width: 0;
     max-width: min(840px, 100%);
     overflow: hidden;
@@ -1123,12 +1123,26 @@
 
   .collapsible-message summary {
     display: flex;
+    min-width: 0;
+    min-height: 22px;
     cursor: pointer;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     color: #465568;
     font-size: 13px;
     font-weight: 700;
+    line-height: 1.35;
+    list-style: none;
+  }
+
+  .collapsible-message summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .collapsible-message.intermediate-group {
+    overflow: visible;
+    scroll-margin: 12px;
   }
 
   .collapsible-message[open] summary {
@@ -1482,6 +1496,11 @@
     display: block;
   }
 
+  .active-approvals .approvals-surface {
+    display: grid;
+    gap: 12px;
+  }
+
   .tool-panel,
   .push-panel {
     min-height: 0;
@@ -1712,14 +1731,23 @@
 
   .git-change-list {
     display: grid;
+    min-width: 0;
+    max-width: 100%;
     gap: 10px;
     margin-top: 10px;
   }
 
+  .git-change-group {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   .git-change-group h3 {
     display: flex;
+    min-width: 0;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin: 0 0 4px;
     color: #586a80;
     font-size: 11px;
@@ -1739,6 +1767,11 @@
     color: #1f2937;
     padding: 7px 8px;
     text-align: left;
+  }
+
+  .git-change-group button .truncate {
+    min-width: 0;
+    flex: 1;
   }
 
   .git-change-group button:hover,
@@ -1899,6 +1932,18 @@
     margin: 10px 0;
     max-height: 160px;
     padding: 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .approvals-surface .approval-card {
+    border-width: 1px 0 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .approvals-surface .approval-card:first-of-type {
+    border-top: 0;
   }
 
   .approval-status,
@@ -2143,8 +2188,118 @@
     width: 44px;
   }
 
+  .primary-action-button,
   .small-button {
     min-height: 44px;
+  }
+
+  .field input,
+  .field select,
+  .field textarea {
+    min-height: 44px;
+  }
+
+  .session-title-button {
+    min-height: 44px;
+    align-content: center;
+  }
+
+  .collapsible-message summary {
+    min-height: 44px;
+  }
+
+  .modal-sheet .new-session-form .draft-image-strip {
+    scroll-margin-bottom: 76px;
+  }
+
+  .modal-sheet .new-session-form .form-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: calc(-14px - env(safe-area-inset-bottom));
+    margin: 0 -14px calc(-14px - env(safe-area-inset-bottom));
+    border-top: 1px solid #d9e1ea;
+    background: #f8fafc;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .draft-image-tile {
+    min-height: 64px;
+    padding-right: 54px;
+  }
+
+  .draft-image-remove {
+    top: 4px;
+    right: 4px;
+    height: 44px;
+    width: 44px;
+  }
+
+  .markdown-code-header {
+    min-height: 44px;
+    padding-bottom: 4px;
+    padding-top: 4px;
+  }
+
+  .markdown-code-header .small-icon-button {
+    height: 44px;
+    width: 44px;
+    flex: 0 0 auto;
+  }
+
+  .tool-panel-header.git-panel-header {
+    min-height: 52px;
+  }
+
+  .git-panel-header .icon-button {
+    height: 44px;
+    width: 44px;
+  }
+
+  .git-toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+    padding: 8px 10px;
+  }
+
+  .git-context-field,
+  .git-remote-actions {
+    flex: 1 1 100%;
+  }
+
+  .git-remote-actions {
+    flex-wrap: wrap;
+  }
+
+  .git-context-field select,
+  .git-toolbar .small-button,
+  .git-file-actions .small-button,
+  .git-error-actions .small-button {
+    min-height: 44px;
+    padding-bottom: 8px;
+    padding-top: 8px;
+  }
+
+  .git-remote-actions .small-button {
+    flex: 1 1 calc(33.333% - 8px);
+  }
+
+  .git-change-group button {
+    min-height: 44px;
+    padding-bottom: 10px;
+    padding-top: 10px;
+  }
+
+  .danger-text-button {
+    min-height: 44px;
+    padding: 10px 0;
+  }
+
+  .approval-card {
+    padding: 10px;
+  }
+
+  .approval-card pre {
+    max-height: 72px;
   }
 
   .session-action-menu-item {
@@ -2347,6 +2502,10 @@
   .active-git .git-surface,
   .active-approvals .approvals-surface {
     display: block;
+  }
+
+  .active-approvals .approvals-surface {
+    display: grid;
   }
 
   .active-chat .approvals-surface,
