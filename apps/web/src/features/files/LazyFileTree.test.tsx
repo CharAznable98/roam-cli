@@ -63,6 +63,43 @@ describe("LazyFileTree", () => {
     });
   });
 
+  it("loads an expanded directory again after a parent refresh clears its loading state", async () => {
+    const onLoadDirectory = vi.fn();
+    const { rerender } = render(
+      <LazyFileTree
+        nodes={[directory("src", [directory("src/components")])]}
+        pathStates={{ src: "ready" }}
+        onLoadDirectory={onLoadDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("treeitem", { name: /src/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /components/ }));
+    expect(onLoadDirectory).toHaveBeenCalledWith("src/components");
+
+    rerender(
+      <LazyFileTree
+        nodes={[directory("src", [directory("src/components")])]}
+        pathStates={{ src: "ready", "src/components": "loading" }}
+        onLoadDirectory={onLoadDirectory}
+      />,
+    );
+
+    onLoadDirectory.mockClear();
+    rerender(
+      <LazyFileTree
+        nodes={[directory("src", [directory("src/components")])]}
+        pathStates={{ src: "ready" }}
+        onLoadDirectory={onLoadDirectory}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onLoadDirectory).toHaveBeenCalledTimes(1);
+      expect(onLoadDirectory).toHaveBeenCalledWith("src/components");
+    });
+  });
+
   it("does not duplicate the manual load request when opening a directory", async () => {
     const onLoadDirectory = vi.fn();
     render(

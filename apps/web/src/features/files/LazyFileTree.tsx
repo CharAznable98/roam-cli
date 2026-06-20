@@ -63,11 +63,15 @@ export function LazyFileTree({
 
       const pathState = pathStates[path] ?? "idle";
       if (pathState === "loading") {
+        requestedOpenLoadsRef.current.delete(path);
         continue;
       }
       if (pathState === "error") {
         requestedOpenLoadsRef.current.delete(path);
         continue;
+      }
+      if (pathState === "ready") {
+        requestedOpenLoadsRef.current.delete(path);
       }
       if (!requestedOpenLoadsRef.current.has(path)) {
         requestedOpenLoadsRef.current.add(path);
