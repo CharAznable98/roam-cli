@@ -172,7 +172,7 @@ export class WorkspaceService {
 
   #worktreeUnavailable(session: Session): ServiceResult<never> | undefined {
     return session.executionMode === "managed_worktree" &&
-      session.worktreeDeletedAt
+      (session.status === "pending" || session.worktreeDeletedAt)
       ? fail("worktree_not_available")
       : undefined;
   }

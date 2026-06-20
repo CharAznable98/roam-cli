@@ -103,6 +103,12 @@ declare module "@roamcli/shared/protocol" {
     createdAt: string;
   }
 
+  export interface SessionStatusCheckResult {
+    requestId: string;
+    sessionId: string;
+    active: boolean;
+  }
+
   export interface ImageAttachmentUpload {
     name: string;
     mimeType: string;
@@ -362,6 +368,11 @@ declare module "@roamcli/shared/protocol" {
       }
     | { type: "deliverInput"; sessionId: string; content: string }
     | {
+        type: "checkSessionStatus";
+        requestId: string;
+        sessionId: string;
+      }
+    | {
         type: "writeSessionAttachments";
         requestId: string;
         sessionId: string;
@@ -459,6 +470,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "registered"; runner: RunnerRegistration }
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
     | { type: "sessionThread"; sessionId: string; threadId: string }
+    | { type: "sessionStatusCheckResult"; result: SessionStatusCheckResult }
     | {
         type: "assistantMessage";
         sessionId: string;

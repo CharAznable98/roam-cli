@@ -356,6 +356,18 @@ export class ServerStore {
     return this.getSession(id);
   }
 
+  clearSessionWorktreeDeleted(
+    id: string,
+    updatedAt: string,
+  ): Session | undefined {
+    this.db
+      .prepare(
+        "UPDATE sessions SET worktree_deleted_at = NULL, updated_at = ? WHERE id = ?",
+      )
+      .run(updatedAt, id);
+    return this.getSession(id);
+  }
+
   addMessage(message: Message): Message {
     this.db
       .prepare(

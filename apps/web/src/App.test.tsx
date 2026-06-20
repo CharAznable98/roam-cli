@@ -269,6 +269,11 @@ function openSessionSwitcher(name: RegExp = /Real session|Created session/) {
   return within(screen.getByRole("dialog", { name: "Switch Session" }));
 }
 
+function openSessionActions() {
+  fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+  return within(screen.getByRole("menu", { name: "Session actions" }));
+}
+
 describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
@@ -278,6 +283,7 @@ describe("App", () => {
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
+  let runnerOnline: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
   let remoteSessionExecutionMode: "direct" | "managed_worktree";
@@ -305,6 +311,7 @@ describe("App", () => {
     failNextProjectCreate = false;
     failNextSessionCreate = false;
     failNextSessionRename = false;
+    runnerOnline = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
     remoteSessionExecutionMode = "direct";
@@ -345,7 +352,7 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/runners") {
-          return jsonResponse({ runners: [runner] });
+          return jsonResponse({ runners: runnerOnline ? [runner] : [] });
         }
         if (requestUrl.pathname === "/v1/projects" && init?.method === "POST") {
           if (failNextProjectCreate) {
@@ -444,6 +451,25 @@ describe("App", () => {
             messages: sessionDetailMessages,
             approvals: [patchApproval],
             artifacts: [patchArtifact],
+          });
+        }
+        if (
+          requestUrl.pathname === "/v1/sessions/session-1/status/check" &&
+          init?.method === "POST"
+        ) {
+          remoteSessionStatus = "stopped";
+          return jsonResponse({
+            session: {
+              ...session,
+              title: remoteSessionTitle,
+              status: remoteSessionStatus,
+              executionMode: remoteSessionExecutionMode,
+              executionFolder: remoteSessionExecutionFolder,
+              ...(remoteSessionWorktreeDeletedAt === undefined
+                ? {}
+                : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
+              updatedAt: "2026-06-05T00:02:00.000Z",
+            },
           });
         }
         if (
@@ -685,6 +711,56 @@ describe("App", () => {
     expect(
       screen.getByRole("complementary", { name: "Workspace tools" }),
     ).toBeInTheDocument();
+  });
+
+  it("checks only the selected session status from the session actions menu", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const menu = openSessionActions();
+    expect(menu.getByRole("menuitem", { name: /Check status/ })).toBeEnabled();
+    expect(menu.getByRole("menuitem", { name: /Resume/ })).toBeDisabled();
+    expect(menu.getByRole("menuitem", { name: /Stop/ })).toBeDisabled();
+
+    fireEvent.click(menu.getByRole("menuitem", { name: /Check status/ }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            call.url.endsWith("/v1/sessions/session-1/status/check") &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText("已停止")).toBeInTheDocument();
+    expect(screen.getByText("1 runners online")).toBeInTheDocument();
+  });
+
+  it("keeps existing sessions reachable when their runner is offline", async () => {
+    runnerOnline = false;
+    remoteSessionStatus = "running";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    expect(screen.queryByText("No runners are online")).not.toBeInTheDocument();
+    expect(screen.getByText("0 runners online")).toBeInTheDocument();
+    expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Check status/ }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            call.url.endsWith("/v1/sessions/session-1/status/check") &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText("已停止")).toBeInTheDocument();
   });
 
   it("uses project git context while a managed worktree session is pending", async () => {
@@ -946,7 +1022,9 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Rename/ }),
+    );
 
     const dialog = await screen.findByRole("dialog", {
       name: "Rename session",
@@ -995,7 +1073,9 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Rename/ }),
+    );
 
     const dialog = await screen.findByRole("dialog", {
       name: "Rename session",
@@ -1792,6 +1872,58 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("selects the owning project when a session from another project is clicked", async () => {
+    const backupSession = {
+      ...session,
+      id: "session-backup",
+      title: "Backup session",
+      projectId: backupProject.id,
+      runnerId: backupRunner.runnerId,
+      executionFolder: "/backup-workspace",
+      cwd: "/backup-workspace",
+    };
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:created",
+            session: backupSession,
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project Backup Project" }),
+    );
+    fireEvent.click(screen.getByText("Backup session"));
+
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Backup session" }),
+    ).toBeInTheDocument();
+
+    const sessionSwitcher = openSessionSwitcher(/Backup session/);
+    expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(
+      "project-backup",
+    );
+  });
+
   it("loads the selected session file tree and displays real file content", async () => {
     render(<App />);
 
@@ -2322,7 +2454,9 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete session" }));
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Delete/ }),
+    );
 
     await waitFor(() =>
       expect(screen.queryByText("Real session")).not.toBeInTheDocument(),

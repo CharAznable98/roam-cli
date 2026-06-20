@@ -43,6 +43,8 @@ export function AppShell({ controller }: AppShellProps) {
     setToken,
     streamReconnect,
     reconnectStream,
+    sessionStatusCheckState,
+    checkSelectedSessionStatus,
     dispatch,
     selectedRunner,
     selectedProject,
@@ -85,8 +87,21 @@ export function AppShell({ controller }: AppShellProps) {
     (tab: WorkspaceTab) => dispatch({ type: "activeTabChanged", tab }),
     [dispatch],
   );
-  const setSelectedSessionId = (sessionId: string) =>
-    dispatch({ type: "sessionSelected", sessionId });
+  const setSelectedSessionId = useCallback(
+    (sessionId: string) => {
+      const session = state.sessions.find((item) => item.id === sessionId);
+      if (session && session.projectId !== selectedProject?.id) {
+        dispatch({
+          type: "projectSelected",
+          projectId: session.projectId,
+          nextSessionId: session.id,
+        });
+        return;
+      }
+      dispatch({ type: "sessionSelected", sessionId });
+    },
+    [dispatch, selectedProject?.id, state.sessions],
+  );
   const openMarkdownFileLink = useCallback(
     (target: MarkdownFileLinkTarget) => {
       setActiveTab("files");
@@ -102,7 +117,18 @@ export function AppShell({ controller }: AppShellProps) {
     () => state.projects.filter((project) => !project.archivedAt),
     [state.projects],
   );
+  const hasWorkspaceData =
+    activeProjects.length > 0 ||
+    state.sessions.some((session) => !session.archivedAt);
+  const showNoRunnerEmpty =
+    state.loadState === "ready" &&
+    state.runners.length === 0 &&
+    !hasWorkspaceData;
+  const showWorkspace =
+    state.loadState === "ready" &&
+    (state.runners.length > 0 || hasWorkspaceData);
   const canUseStream = state.connectionState === "open";
+  const canUseSelectedRunner = canUseStream && Boolean(selectedRunner);
   const compactStatus = getCompactStatusLabel(
     state.connectionState,
     state.loadState,
@@ -177,7 +203,7 @@ export function AppShell({ controller }: AppShellProps) {
         <div className="empty-state">Loading remote RoamCli state...</div>
       ) : null}
 
-      {state.loadState === "ready" && state.runners.length === 0 ? (
+      {showNoRunnerEmpty ? (
         <div className="empty-state">
           <div>
             <h2>No runners are online</h2>
@@ -190,7 +216,7 @@ export function AppShell({ controller }: AppShellProps) {
         </div>
       ) : null}
 
-      {state.loadState === "ready" && state.runners.length > 0 ? (
+      {showWorkspace ? (
         <>
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
             {workspaceTabs.map((tab) => (
@@ -224,8 +250,10 @@ export function AppShell({ controller }: AppShellProps) {
                 onControl={sendControl}
                 onRename={renameSelectedSession}
                 onDelete={deleteSelectedSession}
-                canSend={canUseStream}
-                canControl={canUseStream}
+                onCheckStatus={checkSelectedSessionStatus}
+                statusCheckState={sessionStatusCheckState}
+                canSend={canUseSelectedRunner}
+                canControl={canUseSelectedRunner}
                 onOpenSessionSwitcher={() => setMobileSessionSwitcherOpen(true)}
                 onOpenFileLink={openMarkdownFileLink}
                 imageCapability={selectedRunner?.capabilities.find(

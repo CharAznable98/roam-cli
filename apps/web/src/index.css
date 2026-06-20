@@ -744,27 +744,18 @@
     display: none;
   }
 
-  .session-header-actions {
+  .session-actions {
     position: relative;
-    display: flex;
-    min-width: 0;
     flex-shrink: 0;
-    align-items: center;
-    gap: 8px;
   }
 
-  .session-action-menu {
-    position: relative;
-    display: none;
-  }
-
-  .session-action-menu-panel {
+  .session-actions-dropdown {
     position: absolute;
     top: calc(100% + 6px);
     right: 0;
     z-index: 35;
     display: grid;
-    min-width: 158px;
+    width: min(220px, calc(100vw - 20px));
     gap: 2px;
     border: 1px solid #d9e1ea;
     border-radius: 8px;
@@ -775,31 +766,61 @@
 
   .session-action-menu-item {
     display: grid;
+    width: 100%;
     min-width: 0;
     min-height: 36px;
-    grid-template-columns: 20px minmax(0, 1fr);
+    grid-template-columns: 28px minmax(0, 1fr);
     align-items: center;
     gap: 8px;
     border: 0;
     border-radius: 6px;
     background: transparent;
     color: #2e3a49;
-    padding: 7px 8px;
+    padding: 8px 10px;
     text-align: left;
   }
 
   .session-action-menu-item:hover {
-    background: #eef2f6;
+    background: #f3f7fb;
     color: #17202e;
-  }
-
-  .session-action-menu-item.danger {
-    color: #d04444;
   }
 
   .session-action-menu-item:disabled {
     cursor: not-allowed;
-    opacity: 0.48;
+    opacity: 0.45;
+  }
+
+  .session-action-menu-item:disabled:hover {
+    background: transparent;
+    color: #2e3a49;
+  }
+
+  .session-action-menu-item.danger {
+    color: #9b2f2f;
+  }
+
+  .session-action-menu-item.danger:hover {
+    background: #fdeeee;
+    color: #d04444;
+  }
+
+  .session-action-menu-item > svg {
+    align-self: center;
+    justify-self: center;
+  }
+
+  .session-action-menu-item > svg.animate-spin {
+    animation: roam-spin 0.9s linear infinite;
+  }
+
+  .session-action-title {
+    color: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .message-list {
@@ -2156,16 +2177,8 @@
     white-space: nowrap;
   }
 
-  .session-header-actions {
-    gap: 0;
-  }
-
-  .session-action-inline {
-    display: none;
-  }
-
-  .session-action-menu {
-    display: block;
+  .session-actions {
+    min-width: 44px;
   }
 
   .message-list {

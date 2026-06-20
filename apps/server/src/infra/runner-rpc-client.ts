@@ -13,6 +13,7 @@ import type {
   GitStatus,
   PatchApplyResult,
   RunnerCommand,
+  SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "./connection-hub.js";
 
@@ -24,6 +25,7 @@ type RunnerRpcResult =
   | FileContentResult
   | FileWriteResult
   | PatchApplyResult
+  | SessionStatusCheckResult
   | GitStatus
   | GitFileDiff
   | GitBlame
@@ -38,6 +40,7 @@ export type RunnerRpcCommand = Extract<
       | "readFileTree"
       | "readFileContent"
       | "writeFileContent"
+      | "checkSessionStatus"
       | "writeSessionAttachments"
       | "readSessionAttachment"
       | "deleteSessionAttachments"

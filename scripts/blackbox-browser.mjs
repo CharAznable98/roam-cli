@@ -553,7 +553,7 @@ async function assertMobileTouchTargets(page, scenario) {
       {
         name: "Session actions button",
         element: document.querySelector(
-          '.session-action-menu > button[aria-label="Session actions"]',
+          '.session-actions > button[aria-label="Session actions"]',
         ),
       },
       {
@@ -592,15 +592,15 @@ async function assertMobileTouchTargets(page, scenario) {
 
 async function clickSessionAction(page, scenario, actionName) {
   const conversation = page.getByRole("region", { name: "Conversation" });
-  if (scenario.mobile) {
-    await conversation.getByRole("button", { name: "Session actions" }).click();
-    await page
-      .getByRole("menu", { name: "Session actions" })
-      .getByRole("menuitem", { name: actionName })
-      .click();
-    return;
-  }
-  await conversation.getByRole("button", { name: actionName }).click();
+  await conversation.getByRole("button", { name: "Session actions" }).click();
+  await page
+    .getByRole("menu", { name: "Session actions" })
+    .getByRole("menuitem", { name: sessionActionMenuItemName(actionName) })
+    .click();
+}
+
+function sessionActionMenuItemName(actionName) {
+  return actionName.replace(/ session$/u, "");
 }
 
 async function assertResumeFromUi(page, scenario, session) {

@@ -12,6 +12,8 @@ import {
   type MessageAttachment,
   type RunnerAttachmentRef,
   type Session,
+  type SessionStatus,
+  type SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import { newId } from "../../infra/ids.js";
@@ -70,6 +72,75 @@ export class SessionCommandService {
 
     this.hub.broadcast({ type: "session:updated", session: updated });
     return ok({ session: updated });
+  }
+
+  async checkSessionStatus(
+    sessionId: string,
+  ): Promise<ServiceResult<{ session: Session }>> {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      return fail("session_not_found");
+    }
+
+    if (!hasActiveRunnerWork(session)) {
+      return ok({ session });
+    }
+
+    if (!this.hub.isRunnerConnectionHealthy(session.runnerId)) {
+      this.hub.markRunnerOffline(session.runnerId);
+      const stopped = this.stopSessionIfStillActive(session.id, nowIso());
+      if (!stopped) {
+        return fail("session_not_found");
+      }
+      return ok({ session: stopped });
+    }
+
+    try {
+      const result = await this.rpc.requestRunner<SessionStatusCheckResult>(
+        session.runnerId,
+        {
+          type: "checkSessionStatus",
+          requestId: newId("session_status_check"),
+          sessionId: session.id,
+        },
+        this.runnerRpcTimeoutMs,
+      );
+      if (!result.active) {
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
+        if (!stopped) {
+          return fail("session_not_found");
+        }
+        return ok({ session: stopped });
+      }
+    } catch (error) {
+      if (error instanceof RunnerRpcError && error.code === "runner_offline") {
+        this.hub.markRunnerOffline(session.runnerId);
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
+        if (!stopped) {
+          return fail("session_not_found");
+        }
+        return ok({ session: stopped });
+      }
+      if (
+        error instanceof RunnerRpcError &&
+        error.code === "runner_error" &&
+        error.runnerCode === "SESSION_NOT_RUNNING"
+      ) {
+        const stopped = this.stopSessionIfStillActive(session.id, nowIso());
+        if (!stopped) {
+          return fail("session_not_found");
+        }
+        return ok({ session: stopped });
+      }
+      if (error instanceof RunnerRpcError && error.code === "runner_timeout") {
+        return fail("runner_timeout", { message: "runner request timed out" });
+      }
+      return fail("runner_error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return ok({ session: this.store.getSession(session.id) ?? session });
   }
 
   deleteSession(sessionId: string): ServiceResult<void> {
@@ -413,23 +484,72 @@ export class SessionCommandService {
     prompt: string,
     attachments: readonly RunnerAttachmentRef[],
   ): void {
+    const restartedAt = nowIso();
     const pending = this.store.updateSessionStatus(
       session.id,
       "pending",
-      nowIso(),
+      restartedAt,
     );
+    const restarted =
+      pending?.worktreeDeletedAt
+        ? this.store.clearSessionWorktreeDeleted(session.id, restartedAt)
+        : pending;
     if (pending) {
-      this.hub.broadcast({ type: "session:updated", session: pending });
+      this.hub.broadcast({
+        type: "session:updated",
+        session: restarted ?? pending,
+      });
     }
     this.hub.sendToRunner(session.runnerId, {
       type: "startSession",
-      session: pending ?? { ...session, status: "pending" },
+      session:
+        restarted ??
+        pending ?? {
+          ...session,
+          status: "pending",
+          updatedAt: restartedAt,
+          worktreeDeletedAt: undefined,
+        },
       prompt,
       attachments: [...attachments],
       ...(session.agentThreadId
         ? { resumeThreadId: session.agentThreadId }
         : {}),
     });
+  }
+
+  private stopSessionIfStillActive(
+    sessionId: string,
+    stoppedAt: string,
+  ): Session | undefined {
+    const latest = this.store.getSession(sessionId);
+    if (!latest) {
+      return undefined;
+    }
+    if (!hasActiveRunnerWork(latest)) {
+      return latest;
+    }
+    return this.stopActiveSession(latest, stoppedAt);
+  }
+
+  private stopActiveSession(
+    session: Session,
+    stoppedAt: string,
+  ): Session | undefined {
+    let stopped = this.store.updateSessionStatus(
+      session.id,
+      "stopped",
+      stoppedAt,
+    );
+    if (!stopped) {
+      return undefined;
+    }
+    if (isUnconfirmedManagedWorktree(session)) {
+      stopped =
+        this.store.markSessionWorktreeDeleted(session.id, stoppedAt) ?? stopped;
+    }
+    this.hub.broadcast({ type: "session:updated", session: stopped });
+    return stopped;
   }
 
   private validateAttachments(
@@ -595,4 +715,22 @@ function toPublicAttachment(
     createdAt: attachment.createdAt,
     ...(attachment.deletedAt ? { deletedAt: attachment.deletedAt } : {}),
   };
+}
+
+const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
+  "pending",
+  "running",
+  "waiting_approval",
+]);
+
+function hasActiveRunnerWork(session: Session): boolean {
+  return ACTIVE_RUNNER_STATUSES.has(session.status);
+}
+
+function isUnconfirmedManagedWorktree(session: Session): boolean {
+  return (
+    session.executionMode === "managed_worktree" &&
+    session.status === "pending" &&
+    !session.worktreeDeletedAt
+  );
 }

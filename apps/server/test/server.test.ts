@@ -49,6 +49,23 @@ describe("server", () => {
     expect(authorized.json()).toEqual({ sessions: [] });
   });
 
+  it("does not list persisted online runners without live hub sockets", async () => {
+    app.roam.store.setRunnerOnline(
+      runnerRegistration(),
+      true,
+      new Date().toISOString(),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/runners",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ runners: [] });
+  });
+
   it("ignores invalid runner events without sending incompatible commands", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
@@ -405,6 +422,93 @@ describe("server", () => {
 
     stream.close();
     runner.close();
+  });
+
+  it("keeps active sessions across runner socket reconnects", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const firstRunner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    firstRunner.send(JSON.stringify(runnerRegistration()));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+    const streamEvents: Array<Record<string, any>> = [];
+    stream.on("message", (data) => {
+      streamEvents.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+    createTestProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "long running task",
+      },
+    });
+    const sessionId = created.json().session.id as string;
+    await nextJson(firstRunner);
+
+    const secondRunner = await openSocket(`${baseUrl}/v1/runner`, token);
+    secondRunner.send(JSON.stringify(runnerRegistration()));
+
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(app.roam.store.getSession(sessionId)?.status).toBe("pending");
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: sessionId,
+          status: "stopped",
+        }),
+      }),
+    );
+
+    const checked = app.inject({
+      method: "POST",
+      url: `/v1/sessions/${sessionId}/status/check`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const checkCommand = await nextJson(secondRunner);
+    expect(checkCommand).toMatchObject({
+      type: "checkSessionStatus",
+      sessionId,
+    });
+    secondRunner.send(
+      JSON.stringify({
+        type: "sessionStatusCheckResult",
+        result: {
+          requestId: checkCommand.requestId,
+          sessionId,
+          active: false,
+        },
+      }),
+    );
+    const checkResponse = await checked;
+    expect(checkResponse.statusCode).toBe(200);
+    expect(checkResponse.json().session).toMatchObject({
+      id: sessionId,
+      status: "stopped",
+    });
+    await waitUntil(() =>
+      streamEvents.some(
+        (event) =>
+          event.type === "session:updated" &&
+          event.session.id === sessionId &&
+          event.session.status === "stopped",
+      ),
+    );
+
+    stream.close();
+    firstRunner.close();
+    secondRunner.close();
   });
 
   it("accepts 5MB image payloads and rejects larger images at the business limit", async () => {

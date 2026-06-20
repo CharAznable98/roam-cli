@@ -274,6 +274,15 @@ export const MessageSchema = z.object({
 });
 export type Message = z.infer<typeof MessageSchema>;
 
+export const SessionStatusCheckResultSchema = z.object({
+  requestId: z.string().min(1),
+  sessionId: z.string().min(1),
+  active: z.boolean(),
+});
+export type SessionStatusCheckResult = z.infer<
+  typeof SessionStatusCheckResultSchema
+>;
+
 const Base64PayloadSchema = z
   .string()
   .min(1)
@@ -546,6 +555,11 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     content: z.string().min(1),
   }),
   z.object({
+    type: z.literal("checkSessionStatus"),
+    requestId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
     type: z.literal("writeSessionAttachments"),
     requestId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -793,6 +807,10 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("sessionThread"),
     sessionId: z.string().min(1),
     threadId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("sessionStatusCheckResult"),
+    result: SessionStatusCheckResultSchema,
   }),
   z.object({
     type: z.literal("assistantMessage"),

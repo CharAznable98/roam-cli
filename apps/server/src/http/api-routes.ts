@@ -53,7 +53,7 @@ export async function registerApiRoutes(
 
 function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
   app.get("/v1/runners", async () => ({
-    runners: context.store.listOnlineRunners(),
+    runners: context.hub.listOnlineRunners(),
   }));
 }
 
@@ -136,6 +136,21 @@ function registerSessionRoutes(
       approvals: context.store.listApprovals(session.id),
       artifacts: context.store.listArtifacts(session.id),
     };
+  });
+
+  app.post("/v1/sessions/:id/status/check", async (request, reply) => {
+    const params = SessionParamsSchema.parse(request.params);
+    const result = await context.services.sessions.checkSessionStatus(params.id);
+    if (!result.ok) {
+      if (result.error === "session_not_found") {
+        return reply.code(404).send({ error: "session_not_found" });
+      }
+      if (result.error === "runner_timeout") {
+        return reply.code(504).send({ error: "runner_timeout" });
+      }
+      return reply.code(400).send({ error: result.error });
+    }
+    return result.value;
   });
 
   app.post(

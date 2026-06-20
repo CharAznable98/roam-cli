@@ -60,6 +60,9 @@ export function useRoamController() {
     attempt: 0,
     delayMs: INITIAL_RECONNECT_DELAY_MS,
   });
+  const [checkingSessionStatusId, setCheckingSessionStatusId] = useState<
+    string | undefined
+  >();
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
@@ -619,6 +622,31 @@ export function useRoamController() {
     return apiRef.current;
   }, []);
 
+  const checkSelectedSessionStatus = useCallback(async () => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId) {
+      return;
+    }
+    setCheckingSessionStatusId(sessionId);
+    try {
+      const session = await requireApiClient().checkSessionStatus(sessionId);
+      dispatch({
+        type: "serverEventReceived",
+        event: { type: "session:updated", session },
+      });
+    } catch (statusError: unknown) {
+      dispatch({
+        type: "errorChanged",
+        title: "Session status check failed",
+        message: errorMessage(statusError),
+      });
+    } finally {
+      setCheckingSessionStatusId((currentSessionId) =>
+        currentSessionId === sessionId ? undefined : currentSessionId,
+      );
+    }
+  }, [requireApiClient, selectedSession?.id]);
+
   const fetchMessageAttachmentContent = useCallback(
     async (sessionId: string, attachmentId: string) => {
       return requireApiClient().fetchMessageAttachmentContent(
@@ -804,6 +832,8 @@ export function useRoamController() {
   const sessionFileTreeState = selectedSession
     ? (state.fileTreeState[selectedSession.id] ?? "idle")
     : "idle";
+  const sessionStatusCheckState: "idle" | "loading" =
+    checkingSessionStatusId === selectedSession?.id ? "loading" : "idle";
 
   return {
     state,
@@ -811,6 +841,8 @@ export function useRoamController() {
     setToken,
     streamReconnect,
     reconnectStream,
+    sessionStatusCheckState,
+    checkSelectedSessionStatus,
     dispatch,
     selectedRunner,
     selectedProject,
