@@ -24,6 +24,7 @@ import { omitKey, upsertBy } from "../shared/lib/collections";
 import type { AsyncState } from "../shared/types/async";
 import type { InitialRemoteState } from "../api/contracts";
 import type { WorkspaceTab } from "./navigation";
+import { replaceTreeChildren } from "../features/files/tree-model";
 
 export type LoadState = "loading" | "ready" | "error";
 export type ConnectionState = "open" | "closed" | "error";
@@ -47,6 +48,7 @@ export interface AppState {
   hunks: SessionPatchHunk[];
   filesBySession: Record<string, FileNode[]>;
   fileTreeState: Record<string, AsyncState>;
+  fileTreePathState: Record<string, Record<string, AsyncState>>;
   selectedFilePath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
@@ -74,6 +76,7 @@ export const initialAppState: AppState = {
   hunks: [],
   filesBySession: {},
   fileTreeState: {},
+  fileTreePathState: {},
   selectedFilePath: "",
   fileContent: undefined,
   editorContent: "",
@@ -128,8 +131,24 @@ export type AppAction =
       sessionId: string;
       resetSelection: boolean;
     }
-  | { type: "fileTreeLoaded"; sessionId: string; files: FileNode[] }
-  | { type: "fileTreeFailed"; sessionId: string; message: string }
+  | {
+      type: "fileTreePathLoading";
+      sessionId: string;
+      path: string;
+      resetTree?: boolean;
+    }
+  | {
+      type: "fileTreeLoaded";
+      sessionId: string;
+      path: string;
+      files: FileNode[];
+    }
+  | {
+      type: "fileTreeFailed";
+      sessionId: string;
+      path: string;
+      message: string;
+    }
   | { type: "fileContentLoading"; path: string }
   | { type: "fileContentLoaded"; result: FileContentResult }
   | { type: "fileContentFailed"; message: string }
@@ -270,6 +289,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state.fileTreeState,
           [action.sessionId]: "idle",
         },
+        fileTreePathState: action.resetSelection
+          ? omitKey(state.fileTreePathState, action.sessionId)
+          : state.fileTreePathState,
       };
     case "approvalUpserted":
       return upsertApprovalState(state, action.approval);
@@ -330,17 +352,55 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state.fileTreeState,
           [action.sessionId]: "loading",
         },
+        fileTreePathState: {
+          ...state.fileTreePathState,
+          [action.sessionId]: { ".": "loading" },
+        },
+      };
+    case "fileTreePathLoading":
+      return {
+        ...state,
+        filesBySession: action.resetTree
+          ? omitKey(state.filesBySession, action.sessionId)
+          : state.filesBySession,
+        fileTreeState: {
+          ...state.fileTreeState,
+          [action.sessionId]:
+            action.path === "."
+              ? "loading"
+              : (state.fileTreeState[action.sessionId] ?? "ready"),
+        },
+        fileTreePathState: {
+          ...state.fileTreePathState,
+          [action.sessionId]: {
+            ...(action.resetTree
+              ? {}
+              : state.fileTreePathState[action.sessionId]),
+            [action.path]: "loading",
+          },
+        },
       };
     case "fileTreeLoaded":
       return {
         ...state,
         filesBySession: {
           ...state.filesBySession,
-          [action.sessionId]: action.files,
+          [action.sessionId]: replaceTreeChildren(
+            state.filesBySession[action.sessionId] ?? [],
+            action.path,
+            action.files,
+          ),
         },
         fileTreeState: {
           ...state.fileTreeState,
           [action.sessionId]: "ready",
+        },
+        fileTreePathState: {
+          ...state.fileTreePathState,
+          [action.sessionId]: {
+            ...state.fileTreePathState[action.sessionId],
+            [action.path]: "ready",
+          },
         },
       };
     case "fileTreeFailed":
@@ -349,7 +409,17 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state,
           fileTreeState: {
             ...state.fileTreeState,
-            [action.sessionId]: "error",
+            [action.sessionId]:
+              action.path === "."
+                ? "error"
+                : (state.fileTreeState[action.sessionId] ?? "ready"),
+          },
+          fileTreePathState: {
+            ...state.fileTreePathState,
+            [action.sessionId]: {
+              ...state.fileTreePathState[action.sessionId],
+              [action.path]: "error",
+            },
           },
         },
         "File tree request failed",
@@ -370,7 +440,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ? {
             ...state,
             fileContent: action.result,
-            editorContent: action.result.content,
+            editorContent:
+              action.result.kind === undefined || action.result.kind === "text"
+                ? action.result.content
+                : "",
             fileContentState: "ready",
           }
         : state;
@@ -493,17 +566,27 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     };
   }
   if (event.type === "file:tree") {
+    const path = event.result.root.path;
     return {
       ...state,
       filesBySession: {
         ...state.filesBySession,
-        [event.result.sessionId]: event.result.root.children ?? [
-          event.result.root,
-        ],
+        [event.result.sessionId]: replaceTreeChildren(
+          state.filesBySession[event.result.sessionId] ?? [],
+          path,
+          event.result.root.children ?? [event.result.root],
+        ),
       },
       fileTreeState: {
         ...state.fileTreeState,
         [event.result.sessionId]: "ready",
+      },
+      fileTreePathState: {
+        ...state.fileTreePathState,
+        [event.result.sessionId]: {
+          ...state.fileTreePathState[event.result.sessionId],
+          [path]: "ready",
+        },
       },
     };
   }
@@ -515,7 +598,10 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       fileContent: event.result,
-      editorContent: event.result.content,
+      editorContent:
+        event.result.kind === undefined || event.result.kind === "text"
+          ? event.result.content
+          : "",
       fileContentState: "ready",
     };
   }
@@ -583,6 +669,7 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     hunks: state.hunks.filter((hunk) => hunk.sessionId !== sessionId),
     filesBySession: omitKey(state.filesBySession, sessionId),
     fileTreeState: omitKey(state.fileTreeState, sessionId),
+    fileTreePathState: omitKey(state.fileTreePathState, sessionId),
   };
 }
 

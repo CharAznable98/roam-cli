@@ -1,6 +1,7 @@
 import type { GitJob, RunnerCommand } from "@roamcli/shared/protocol";
 import { applyUnifiedDiff } from "../workspace/patch.js";
 import {
+  createDirectory,
   readFileContent,
   readFileTree,
   writeFileContent,
@@ -157,6 +158,31 @@ export class WorkspaceCommandHandler {
         sessionId: command.sessionId,
         message,
         code: "FILE_WRITE_ERROR",
+      });
+    }
+  }
+
+  public async createDirectory(
+    command: Extract<RunnerCommand, { type: "createDirectory" }>,
+  ): Promise<void> {
+    try {
+      const result = await createDirectory({
+        workspace: this.#workspace,
+        sessionCwd: command.cwd,
+        requestId: command.requestId,
+        ...(command.parentPath === undefined
+          ? {}
+          : { parentPath: command.parentPath }),
+        name: command.name,
+      });
+      await this.#emit({ type: "directoryCreateResult", result });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({
+        type: "error",
+        requestId: command.requestId,
+        message,
+        code: "DIRECTORY_CREATE_ERROR",
       });
     }
   }

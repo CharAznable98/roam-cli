@@ -28,9 +28,11 @@ import { sendRunnerRpcError } from "./errors.js";
 import type { ServiceResult } from "../modules/result.js";
 import {
   ApprovalParamsSchema,
+  DirectoryCreateBodySchema,
   FileContentQuerySchema,
   FileTreeQuerySchema,
   ProjectParamsSchema,
+  RunnerParamsSchema,
   SessionParamsSchema,
 } from "./schemas.js";
 
@@ -55,6 +57,64 @@ function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
   app.get("/v1/runners", async () => ({
     runners: context.hub.listOnlineRunners(),
   }));
+
+  app.get("/v1/runners/:id/directories", async (request, reply) => {
+    const params = RunnerParamsSchema.parse(request.params);
+    const parsed = FileTreeQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    if (!context.hub.isRunnerOnline(params.id)) {
+      return reply.code(409).send({ error: "runner_offline" });
+    }
+
+    try {
+      const result = await context.services.workspace.readRunnerDirectoryTree(
+        params.id,
+        parsed.data,
+      );
+      if (!result.ok) {
+        if (result.error === "runner_not_found") {
+          return reply.code(404).send({ error: "runner_not_found" });
+        }
+        return reply.code(400).send({ error: result.error });
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/runners/:id/directories", async (request, reply) => {
+    const params = RunnerParamsSchema.parse(request.params);
+    const parsed = DirectoryCreateBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    if (!context.hub.isRunnerOnline(params.id)) {
+      return reply.code(409).send({ error: "runner_offline" });
+    }
+
+    try {
+      const result = await context.services.workspace.createRunnerDirectory(
+        params.id,
+        parsed.data,
+      );
+      if (!result.ok) {
+        if (result.error === "runner_not_found") {
+          return reply.code(404).send({ error: "runner_not_found" });
+        }
+        return reply.code(400).send({ error: result.error });
+      }
+      return reply.code(201).send(result.value);
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
 }
 
 function registerSessionRoutes(
@@ -140,7 +200,9 @@ function registerSessionRoutes(
 
   app.post("/v1/sessions/:id/status/check", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
-    const result = await context.services.sessions.checkSessionStatus(params.id);
+    const result = await context.services.sessions.checkSessionStatus(
+      params.id,
+    );
     if (!result.ok) {
       if (result.error === "session_not_found") {
         return reply.code(404).send({ error: "session_not_found" });

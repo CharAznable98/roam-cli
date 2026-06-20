@@ -959,6 +959,7 @@ describe("server", () => {
       requestId: contentCommand.requestId,
       sessionId,
       path: "src/index.ts",
+      kind: "text",
       content: "console.log('hello');\n",
       truncated: false,
       encoding: "utf8",
@@ -1014,6 +1015,89 @@ describe("server", () => {
         event.type === "file:written" &&
         event.result.requestId === writeCommand.requestId,
     );
+
+    stream.close();
+    runner.close();
+  });
+
+  it("lists and creates runner workspace directories", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=.&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: ".",
+      depth: 1,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "fileTreeResult",
+        result: {
+          requestId: listCommand.requestId,
+          sessionId: listCommand.sessionId,
+          root: {
+            path: ".",
+            name: "workspace",
+            type: "directory",
+            children: [
+              { path: "api", name: "api", type: "directory", children: [] },
+              { path: "README.md", name: "README.md", type: "file", size: 42 },
+            ],
+          },
+        },
+      }),
+    );
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json().result.root.children).toEqual([
+      { path: "api", name: "api", type: "directory", children: [] },
+    ]);
+
+    const createPromise = app.inject({
+      method: "POST",
+      url: "/v1/runners/runner-1/directories",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { parentPath: "api", name: "web" },
+    });
+    const createCommand = await nextJson(runner);
+    expect(createCommand).toMatchObject({
+      type: "createDirectory",
+      cwd: "/workspace",
+      parentPath: "api",
+      name: "web",
+    });
+    const createResult = {
+      requestId: createCommand.requestId,
+      path: "api/web",
+      node: {
+        path: "api/web",
+        name: "web",
+        type: "directory",
+        children: [],
+      },
+    };
+    runner.send(
+      JSON.stringify({ type: "directoryCreateResult", result: createResult }),
+    );
+    const createResponse = await createPromise;
+    expect(createResponse.statusCode).toBe(201);
+    expect(createResponse.json()).toEqual({ result: createResult });
 
     stream.close();
     runner.close();

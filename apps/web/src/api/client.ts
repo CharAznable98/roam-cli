@@ -15,6 +15,7 @@ import type {
   ApiUpdateSession,
   Approval,
   ClientCommand,
+  DirectoryCreateResult,
   ExecutionMode,
   FileContentResult,
   FileNode,
@@ -46,6 +47,14 @@ export interface RoamApiOptions {
 
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
+  fetchRunnerDirectoryTree(
+    runnerId: string,
+    options?: { path?: string; depth?: number },
+  ): Promise<FileNode[]>;
+  createRunnerDirectory(
+    runnerId: string,
+    input: { parentPath: string; name: string },
+  ): Promise<DirectoryCreateResult>;
   createProject(input: ApiCreateProject): Promise<Project>;
   updateProject(projectId: string, input: ApiUpdateProject): Promise<Project>;
   archiveProject(projectId: string): Promise<Project>;
@@ -146,6 +155,10 @@ interface FileTreeResponse {
   result?: {
     root: FileNode;
   };
+}
+
+interface DirectoryCreateResponse {
+  result: DirectoryCreateResult;
 }
 
 interface FileContentResponse {
@@ -265,6 +278,28 @@ export function createRoamApiClient(
         approvals: details.flatMap((detail) => detail.approvals),
         artifacts: details.flatMap((detail) => detail.artifacts),
       };
+    },
+
+    async fetchRunnerDirectoryTree(runnerId, options = {}) {
+      const query = new URLSearchParams();
+      query.set("path", options.path ?? ".");
+      query.set("depth", String(options.depth ?? 1));
+      const payload = await request<FileTreeResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories?${query.toString()}`,
+      );
+      const root = payload.result?.root ?? payload.root;
+      return payload.files ?? root?.children ?? (root ? [root] : []);
+    },
+
+    async createRunnerDirectory(runnerId, input) {
+      const { result } = await request<DirectoryCreateResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
     },
 
     async createProject(input) {

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
   type RunnerRegistration,
@@ -9,22 +15,45 @@ import { describe, expect, it, vi } from "vitest";
 import { ProjectForm } from "./RunnerSidebar";
 
 describe("ProjectForm", () => {
-  it("keeps the runner base read-only and resets the suffix when runner changes", async () => {
+  it("opens a directory picker and resets the selected directory when runner changes", async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
-    render(<ProjectForm runners={runners} onCreate={onCreate} />);
+    const onFetchRunnerDirectoryTree = vi.fn(
+      async (_runnerId: string, options?: { path?: string }) =>
+        options?.path === "."
+          ? [{ path: "mobile", name: "mobile", type: "directory" as const }]
+          : [],
+    );
+    const onCreateRunnerDirectory = vi.fn();
+    render(
+      <ProjectForm
+        runners={runners}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
 
-    expect(screen.getByLabelText("Runner base")).toHaveValue("/workspace");
-    expect(screen.getByLabelText("Runner base")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Directory")).toHaveTextContent("/workspace");
 
-    fireEvent.change(screen.getByLabelText("Directory"), {
-      target: { value: "mobile" },
+    fireEvent.click(screen.getByLabelText("Directory"));
+    const picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
     });
+    expect(onFetchRunnerDirectoryTree).toHaveBeenCalledWith("runner-1", {
+      path: ".",
+      depth: 1,
+    });
+    fireEvent.click(await screen.findByRole("treeitem", { name: /mobile/ }));
+    fireEvent.click(within(picker).getByRole("button", { name: "Choose" }));
+    expect(screen.getByLabelText("Directory")).toHaveTextContent(
+      "/workspace/mobile",
+    );
+
     fireEvent.change(screen.getByLabelText("Runner"), {
       target: { value: "runner-2" },
     });
 
-    expect(screen.getByLabelText("Runner base")).toHaveValue("/backup");
-    expect(screen.getByLabelText("Directory")).toHaveValue("");
+    expect(screen.getByLabelText("Directory")).toHaveTextContent("/backup");
 
     fireEvent.click(screen.getByRole("button", { name: "Create project" }));
 

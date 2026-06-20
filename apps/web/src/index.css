@@ -305,6 +305,70 @@
     min-width: 0;
   }
 
+  .directory-select-button {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid #cdd7e3;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1f2937;
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .directory-select-button:hover {
+    border-color: #9fb0c3;
+    background: #f8fafc;
+  }
+
+  .directory-picker {
+    display: grid;
+    gap: 12px;
+  }
+
+  .directory-picker-current {
+    display: grid;
+    gap: 4px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 10px;
+  }
+
+  .directory-picker-current span {
+    color: #586a80;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .directory-picker-current strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  .directory-picker-tree {
+    min-height: 260px;
+    max-height: min(46vh, 420px);
+    overflow: auto;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 6px 0;
+  }
+
+  .directory-create-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
   .tablet-tabs,
   .workspace-tabs {
     display: none;
@@ -691,6 +755,13 @@
     gap: 8px;
     border-bottom: 1px solid #d9e1ea;
     padding: 4px 10px;
+  }
+
+  .tool-panel-header-actions {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
   }
 
   .chat-header {
@@ -1539,9 +1610,28 @@
     color: #1f2937;
   }
 
+  .tree-row-status {
+    cursor: default;
+    color: #586a80;
+    font-size: 12px;
+  }
+
+  .tree-row-status:hover {
+    background: transparent;
+    color: #586a80;
+  }
+
+  .tree-row-status.error {
+    color: #b42318;
+  }
+
   .tree-row svg {
     flex-shrink: 0;
     transition: transform 120ms ease;
+  }
+
+  .tree-row svg.animate-spin {
+    animation: roam-spin 0.9s linear infinite;
   }
 
   .editor-placeholder {
@@ -1564,6 +1654,31 @@
     overflow-wrap: anywhere;
     font-size: 14px;
     font-weight: 700;
+  }
+
+  .file-image-preview,
+  .file-preview-empty {
+    display: grid;
+    min-height: 240px;
+    flex: 1;
+    place-items: center;
+    overflow: auto;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .file-image-preview img {
+    display: block;
+    max-width: 100%;
+    max-height: 64vh;
+    object-fit: contain;
+  }
+
+  .file-preview-empty {
+    color: #586a80;
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
   .editor-header {

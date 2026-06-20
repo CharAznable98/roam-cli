@@ -30,6 +30,7 @@ import {
   buildPatchFromHunks,
 } from "../features/approvals/model";
 import { toUiMessage } from "../features/conversation/model";
+import { parentDirectory } from "../features/files/tree-model";
 import {
   getRunnerSessions,
   getProjectSessions,
@@ -289,10 +290,15 @@ export function useRoamController() {
     dispatch({ type: "sessionWorkspaceLoading", sessionId, resetSelection });
 
     void apiRef.current
-      .fetchFileTree(sessionId)
+      .fetchFileTree(sessionId, { path: ".", depth: 1 })
       .then((fileTree) => {
         if (!cancelled) {
-          dispatch({ type: "fileTreeLoaded", sessionId, files: fileTree });
+          dispatch({
+            type: "fileTreeLoaded",
+            sessionId,
+            path: ".",
+            files: fileTree,
+          });
         }
       })
       .catch((fileError: unknown) => {
@@ -300,6 +306,7 @@ export function useRoamController() {
           dispatch({
             type: "fileTreeFailed",
             sessionId,
+            path: ".",
             message: errorMessage(fileError),
           });
         }
@@ -533,6 +540,15 @@ export function useRoamController() {
         if (openPath) {
           loadFileContent(sessionId, openPath);
         }
+        if (result.applied) {
+          for (const path of new Set(
+            sessionHunks
+              .filter((hunk) => hunk.status === "accepted")
+              .map((hunk) => parentDirectory(hunk.filePath)),
+          )) {
+            loadFileTreePath(sessionId, path, { force: true });
+          }
+        }
       })
       .catch((patchError: unknown) =>
         dispatch({
@@ -582,6 +598,16 @@ export function useRoamController() {
     loadFileContent(selectedSession.id, path);
   };
 
+  const loadSelectedDirectory = (path: string) => {
+    if (!selectedSession || !apiRef.current) return;
+    loadFileTreePath(selectedSession.id, path);
+  };
+
+  const refreshSelectedFileTree = () => {
+    if (!selectedSession || !apiRef.current) return;
+    loadFileTreePath(selectedSession.id, ".", { force: true, resetTree: true });
+  };
+
   const saveSelectedFile = () => {
     if (!selectedSession || !state.selectedFilePath || !apiRef.current) return;
     const sessionId = selectedSession.id;
@@ -592,6 +618,7 @@ export function useRoamController() {
       .then(() => {
         dispatch({ type: "fileSaveSucceeded" });
         loadFileContent(sessionId, path);
+        loadFileTreePath(sessionId, parentDirectory(path), { force: true });
       })
       .catch((saveError: unknown) =>
         dispatch({
@@ -610,6 +637,41 @@ export function useRoamController() {
       .catch((fileError: unknown) =>
         dispatch({
           type: "fileContentFailed",
+          message: errorMessage(fileError),
+        }),
+      );
+  };
+
+  const loadFileTreePath = (
+    sessionId: string,
+    path: string,
+    options: { force?: boolean; resetTree?: boolean } = {},
+  ) => {
+    if (!apiRef.current) return;
+    if (
+      !options.force &&
+      state.fileTreePathState[sessionId]?.[path] === "ready"
+    ) {
+      return;
+    }
+    dispatch({
+      type: "fileTreePathLoading",
+      sessionId,
+      path,
+      ...(options.resetTree === undefined
+        ? {}
+        : { resetTree: options.resetTree }),
+    });
+    void apiRef.current
+      .fetchFileTree(sessionId, { path, depth: 1 })
+      .then((fileTree) =>
+        dispatch({ type: "fileTreeLoaded", sessionId, path, files: fileTree }),
+      )
+      .catch((fileError: unknown) =>
+        dispatch({
+          type: "fileTreeFailed",
+          sessionId,
+          path,
           message: errorMessage(fileError),
         }),
       );
@@ -654,6 +716,18 @@ export function useRoamController() {
         attachmentId,
       );
     },
+    [requireApiClient],
+  );
+
+  const fetchRunnerDirectoryTree = useCallback(
+    async (runnerId: string, options: { path?: string; depth?: number } = {}) =>
+      requireApiClient().fetchRunnerDirectoryTree(runnerId, options),
+    [requireApiClient],
+  );
+
+  const createRunnerDirectory = useCallback(
+    async (runnerId: string, input: { parentPath: string; name: string }) =>
+      requireApiClient().createRunnerDirectory(runnerId, input),
     [requireApiClient],
   );
 
@@ -832,6 +906,9 @@ export function useRoamController() {
   const sessionFileTreeState = selectedSession
     ? (state.fileTreeState[selectedSession.id] ?? "idle")
     : "idle";
+  const sessionFileTreePathState = selectedSession
+    ? (state.fileTreePathState[selectedSession.id] ?? {})
+    : {};
   const sessionStatusCheckState: "idle" | "loading" =
     checkingSessionStatusId === selectedSession?.id ? "loading" : "idle";
 
@@ -854,6 +931,7 @@ export function useRoamController() {
     sessionHunks,
     sessionFiles,
     sessionFileTreeState,
+    sessionFileTreePathState,
     runnerCommand: buildRunnerCommand(token),
     selectRunner,
     selectProject,
@@ -868,8 +946,12 @@ export function useRoamController() {
     sendControl,
     deleteSelectedSession,
     selectFile,
+    loadSelectedDirectory,
+    refreshSelectedFileTree,
     saveSelectedFile,
     fetchMessageAttachmentContent,
+    fetchRunnerDirectoryTree,
+    createRunnerDirectory,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,

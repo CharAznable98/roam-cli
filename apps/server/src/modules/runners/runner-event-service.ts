@@ -100,6 +100,11 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "directoryCreateResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
     if (event.type === "attachmentWriteResult") {
       this.rpc.resolveRunnerResponse(event.result);
       return;

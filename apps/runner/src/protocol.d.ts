@@ -203,13 +203,48 @@ declare module "@roamcli/shared/protocol" {
     root: FileNode;
   }
 
-  export interface FileContentResult {
+  export interface TextFileContentResult {
     requestId: string;
     sessionId: string;
     path: string;
+    kind: "text";
     content: string;
     truncated: boolean;
     encoding: "utf8";
+  }
+
+  export interface ImageFileContentResult {
+    requestId: string;
+    sessionId: string;
+    path: string;
+    kind: "image";
+    contentBase64?: string;
+    mimeType: string;
+    size: number;
+    truncated: boolean;
+    encoding: "base64";
+  }
+
+  export interface BinaryFileContentResult {
+    requestId: string;
+    sessionId: string;
+    path: string;
+    kind: "binary";
+    mimeType: string;
+    size: number;
+    truncated: boolean;
+    encoding: "binary";
+  }
+
+  export type FileContentResult =
+    | TextFileContentResult
+    | ImageFileContentResult
+    | BinaryFileContentResult;
+
+  export interface DirectoryCreateResult {
+    requestId: string;
+    path: string;
+    node: FileNode;
   }
 
   export interface FileWriteResult {
@@ -418,6 +453,13 @@ declare module "@roamcli/shared/protocol" {
         encoding?: "utf8";
       }
     | {
+        type: "createDirectory";
+        requestId: string;
+        cwd: string;
+        parentPath?: string;
+        name: string;
+      }
+    | {
         type: "applyPatch";
         requestId: string;
         sessionId: string;
@@ -481,6 +523,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "fileTreeResult"; result: FileTreeResult }
     | { type: "fileContentResult"; result: FileContentResult }
     | { type: "fileWriteResult"; result: FileWriteResult }
+    | { type: "directoryCreateResult"; result: DirectoryCreateResult }
     | { type: "attachmentWriteResult"; result: AttachmentWriteResult }
     | { type: "attachmentContentResult"; result: AttachmentContentResult }
     | { type: "attachmentDeleteResult"; result: AttachmentDeleteResult }

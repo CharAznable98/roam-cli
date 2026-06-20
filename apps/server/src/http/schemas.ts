@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const SessionParamsSchema = z.object({ id: z.string().min(1) });
 export const ProjectParamsSchema = z.object({ id: z.string().min(1) });
+export const RunnerParamsSchema = z.object({ id: z.string().min(1) });
 export const ApprovalParamsSchema = z.object({ id: z.string().min(1) });
 
 export const FileTreeQuerySchema = z.object({
@@ -25,4 +26,9 @@ export const FileContentQuerySchema = z.object({
       .positive()
       .max(1024 * 1024),
   ),
+});
+
+export const DirectoryCreateBodySchema = z.object({
+  parentPath: z.string().min(1).default("."),
+  name: z.string().min(1),
 });

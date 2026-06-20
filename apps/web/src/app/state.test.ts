@@ -143,6 +143,7 @@ describe("app reducer", () => {
     const withNotification = appReducer(initialAppState, {
       type: "fileTreeFailed",
       sessionId: "session-1",
+      path: ".",
       message: "runner offline",
     });
 
@@ -256,6 +257,7 @@ describe("app reducer", () => {
         requestId: "file-content-1",
         sessionId: "session-1",
         path: "src/App.tsx",
+        kind: "text",
         content: "export const value = true;",
         truncated: false,
         encoding: "utf8",
@@ -270,7 +272,10 @@ describe("app reducer", () => {
       { type: "serverEventReceived", event },
     );
 
-    expect(next.fileContent?.content).toBe("export const value = true;");
+    expect(next.fileContent).toMatchObject({
+      kind: "text",
+      content: "export const value = true;",
+    });
     expect(next.editorContent).toBe("export const value = true;");
     expect(next.fileContentState).toBe("ready");
   });
@@ -289,6 +294,7 @@ describe("app reducer", () => {
           requestId: "file-content-1",
           sessionId: "session-1",
           path: "src/Slow.tsx",
+          kind: "text",
           content: "export const slow = true;",
           truncated: false,
           encoding: "utf8",
@@ -311,6 +317,7 @@ describe("app reducer", () => {
           requestId: "file-content-1",
           sessionId: "session-1",
           path: "src/App.tsx",
+          kind: "text",
           content: "export const saved = true;",
           truncated: false,
           encoding: "utf8",
@@ -327,7 +334,10 @@ describe("app reducer", () => {
     );
 
     expect(next.selectedFilePath).toBe("src/App.tsx");
-    expect(next.fileContent?.content).toBe("export const saved = true;");
+    expect(next.fileContent).toMatchObject({
+      kind: "text",
+      content: "export const saved = true;",
+    });
     expect(next.editorContent).toBe("export const unsaved = true;");
     expect(next.fileContentState).toBe("ready");
     expect(next.fileSaveState).toBe("error");
@@ -344,6 +354,7 @@ describe("app reducer", () => {
           requestId: "file-content-1",
           sessionId: "session-1",
           path: "src/App.tsx",
+          kind: "text",
           content: "export const saved = true;",
           truncated: false,
           encoding: "utf8",
@@ -361,7 +372,10 @@ describe("app reducer", () => {
     );
 
     expect(next.selectedFilePath).toBe("src/App.tsx");
-    expect(next.fileContent?.content).toBe("export const saved = true;");
+    expect(next.fileContent).toMatchObject({
+      kind: "text",
+      content: "export const saved = true;",
+    });
     expect(next.editorContent).toBe("export const unsaved = true;");
     expect(next.fileContentState).toBe("ready");
     expect(next.fileSaveState).toBe("error");
