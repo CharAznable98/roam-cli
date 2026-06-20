@@ -135,6 +135,60 @@ describe("app reducer", () => {
     expect(next.messages[0]?.content).toBe("partial answer with newer token");
   });
 
+  it("reconciles stream placeholders when local timestamps trail persisted timestamps", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "prompt",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:10.000Z",
+          },
+          {
+            id: "stream-session-1-100-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:10.001Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:11.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "stream_session-1_100",
+    ]);
+    expect(next.messages[1]?.content).toBe("answer with newer token");
+  });
+
   it("does not reconcile a current stream placeholder into an older turn", () => {
     const next = appReducer(
       {

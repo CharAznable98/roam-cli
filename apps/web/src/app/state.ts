@@ -527,8 +527,9 @@ function reconcileStreamMessage(
     return { messages, message };
   }
 
-  const placeholderIndex = messages.findIndex((item) =>
-    isMatchingStreamPlaceholder(messages, item, message),
+  const placeholderIndex = findMatchingStreamPlaceholderIndex(
+    messages,
+    message,
   );
   const placeholder = messages[placeholderIndex];
   if (!placeholder) {
@@ -544,40 +545,72 @@ function reconcileStreamMessage(
   };
 }
 
-function isMatchingStreamPlaceholder(
+function findMatchingStreamPlaceholderIndex(
   messages: UiMessage[],
-  placeholder: UiMessage,
   persistedMessage: Message,
-): boolean {
-  if (!isClientStreamPlaceholder(placeholder, persistedMessage.sessionId)) {
-    return false;
+): number {
+  const persistedBoundaryId = latestStreamBoundaryIdBeforeMessage(
+    messages,
+    persistedMessage,
+  );
+  return messages.findIndex(
+    (message, index) =>
+      isClientStreamPlaceholder(message, persistedMessage.sessionId) &&
+      latestStreamBoundaryIdBeforeIndex(
+        messages,
+        index,
+        persistedMessage.sessionId,
+      ) === persistedBoundaryId,
+  );
+}
+
+function latestStreamBoundaryIdBeforeMessage(
+  messages: UiMessage[],
+  message: Message,
+): string | undefined {
+  const messageTime = Date.parse(message.createdAt);
+  if (!Number.isFinite(messageTime)) {
+    return undefined;
   }
 
-  const persistedTime = Date.parse(persistedMessage.createdAt);
-  const placeholderTime = Date.parse(placeholder.createdAt);
-  if (!Number.isFinite(persistedTime) || !Number.isFinite(placeholderTime)) {
-    return false;
-  }
-  if (placeholderTime < persistedTime) {
-    return false;
-  }
-
-  return !messages.some((message) => {
-    if (
-      message.id === placeholder.id ||
-      message.sessionId !== persistedMessage.sessionId ||
-      isClientStreamPlaceholder(message, persistedMessage.sessionId)
-    ) {
-      return false;
+  return messages.reduce<UiMessage | undefined>((latest, candidate) => {
+    if (!isStreamSegmentBoundary(candidate, message.sessionId)) {
+      return latest;
     }
+    const candidateTime = Date.parse(candidate.createdAt);
+    if (!Number.isFinite(candidateTime) || candidateTime > messageTime) {
+      return latest;
+    }
+    if (!latest || Date.parse(latest.createdAt) <= candidateTime) {
+      return candidate;
+    }
+    return latest;
+  }, undefined)?.id;
+}
 
-    const messageTime = Date.parse(message.createdAt);
-    return (
-      Number.isFinite(messageTime) &&
-      persistedTime < messageTime &&
-      messageTime < placeholderTime
-    );
-  });
+function latestStreamBoundaryIdBeforeIndex(
+  messages: UiMessage[],
+  index: number,
+  sessionId: string,
+): string | undefined {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const message = messages[cursor];
+    if (message && isStreamSegmentBoundary(message, sessionId)) {
+      return message.id;
+    }
+  }
+  return undefined;
+}
+
+function isStreamSegmentBoundary(
+  message: UiMessage,
+  sessionId: string,
+): boolean {
+  return (
+    message.sessionId === sessionId &&
+    !isClientStreamPlaceholder(message, sessionId) &&
+    !isPersistedStreamMessage(message)
+  );
 }
 
 function preserveLongerStreamContent(
