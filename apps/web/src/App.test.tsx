@@ -25,11 +25,15 @@ vi.mock("@monaco-editor/react", () => {
     onChange?: (value: string | undefined, event: unknown) => void;
     className?: string;
     wrapperProps?: { "aria-label"?: string };
-    options?: { readOnly?: boolean };
+    options?: { ariaLabel?: string; readOnly?: boolean };
   }) {
     return (
       <textarea
-        aria-label={wrapperProps?.["aria-label"] ?? "Monaco editor"}
+        aria-label={
+          options?.ariaLabel ??
+          wrapperProps?.["aria-label"] ??
+          "Monaco editor"
+        }
         className={className}
         readOnly={options?.readOnly}
         value={value}

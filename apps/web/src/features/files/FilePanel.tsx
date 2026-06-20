@@ -148,9 +148,10 @@ export function FilePanel({
                   onChange={(value) => onChangeContent(value ?? "")}
                   onMount={handleEditorMount}
                   wrapperProps={{
-                    "aria-label": `Edit ${visibleContent.path}`,
+                    "aria-label": `File editor for ${visibleContent.path}`,
                   }}
                   options={{
+                    ariaLabel: `Edit ${visibleContent.path}`,
                     readOnly: !canEdit || saveState === "loading",
                     minimap: { enabled: false },
                     automaticLayout: true,
