@@ -64,6 +64,7 @@ export interface RoamApiClient {
     sessionId: string,
     input: { content: string; attachments?: ImageAttachmentUpload[] },
   ): Promise<{ message: Message; attachments: MessageAttachment[] }>;
+  fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   checkSessionStatus(sessionId: string): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
@@ -240,6 +241,12 @@ export function createRoamApiClient(
     return response.blob();
   }
 
+  function fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload> {
+    return request<SessionDetailPayload>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
   return {
     async loadInitialState() {
       const [{ runners }, { projects }, { sessions }] = await Promise.all([
@@ -248,9 +255,7 @@ export function createRoamApiClient(
         request<SessionsResponse>("/v1/sessions"),
       ]);
       const details = await Promise.all(
-        sessions.map((session) =>
-          request<SessionDetailPayload>(`/v1/sessions/${session.id}`),
-        ),
+        sessions.map((session) => fetchSessionDetail(session.id)),
       );
       return {
         projects,
@@ -350,6 +355,8 @@ export function createRoamApiClient(
         },
       );
     },
+
+    fetchSessionDetail,
 
     async updateSession(sessionId, input) {
       const { session } = await request<CreateSessionResponse>(

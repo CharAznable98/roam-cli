@@ -737,24 +737,37 @@ describe("App", () => {
     expect(screen.getByText("1 runners online")).toBeInTheDocument();
   });
 
-  it("automatically repairs stale active session status when stream updates are missed", async () => {
+  it("automatically repairs stale active session status from persisted session state", async () => {
     remoteSessionStatus = "pending";
-    statusCheckResultStatus = "completed";
     render(<App />);
     await screen.findByText("Loaded from API");
     expect(screen.getByText("待执行")).toBeInTheDocument();
 
+    const countSessionDetailReads = () =>
+      fetchCalls.filter((call) => {
+        const requestUrl = new URL(call.url);
+        return (
+          requestUrl.pathname === "/v1/sessions/session-1" &&
+          (call.init?.method ?? "GET") === "GET"
+        );
+      }).length;
+    const initialSessionDetailReads = countSessionDetailReads();
+    remoteSessionStatus = "completed";
+
     await waitFor(
       () =>
-        expect(
-          fetchCalls.some(
-            (call) =>
-              call.url.endsWith("/v1/sessions/session-1/status/check") &&
-              call.init?.method === "POST",
-          ),
-        ).toBe(true),
+        expect(countSessionDetailReads()).toBeGreaterThan(
+          initialSessionDetailReads,
+        ),
       { timeout: 2500 },
     );
+    expect(
+      fetchCalls.some(
+        (call) =>
+          call.url.endsWith("/v1/sessions/session-1/status/check") &&
+          call.init?.method === "POST",
+      ),
+    ).toBe(false);
     expect(await screen.findByText("已结束")).toBeInTheDocument();
   });
 

@@ -246,14 +246,27 @@ export function useRoamController() {
     }
 
     let cancelled = false;
+    let syncTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+    const scheduleNextSync = () => {
+      if (cancelled) {
+        return;
+      }
+      syncTimer = globalThis.setTimeout(
+        syncStatus,
+        ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS,
+      );
+    };
+
     const syncStatus = () => {
       const api = apiRef.current;
       if (!api) {
+        scheduleNextSync();
         return;
       }
       void api
-        .checkSessionStatus(sessionId)
-        .then((session) => {
+        .fetchSessionDetail(sessionId)
+        .then(({ session }) => {
           if (!cancelled) {
             dispatch({
               type: "serverEventReceived",
@@ -263,16 +276,18 @@ export function useRoamController() {
         })
         .catch(() => {
           // Manual status checks surface errors; this background sync only repairs missed events.
+        })
+        .finally(() => {
+          scheduleNextSync();
         });
     };
 
-    const interval = globalThis.setInterval(
-      syncStatus,
-      ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS,
-    );
+    scheduleNextSync();
     return () => {
       cancelled = true;
-      globalThis.clearInterval(interval);
+      if (syncTimer) {
+        globalThis.clearTimeout(syncTimer);
+      }
     };
   }, [selectedSession?.id, selectedSession?.status]);
 
