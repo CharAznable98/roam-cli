@@ -13,9 +13,9 @@ import type { UiMessage } from "./model";
 const originalCreateObjectUrl = URL.createObjectURL;
 const originalRevokeObjectUrl = URL.revokeObjectURL;
 
-const session: Session = {
+const baseSession: Session = {
   id: "session-1",
-  title: "Image session",
+  title: "Active session",
   projectId: "project-1",
   runnerId: "runner-1",
   agent: "codex",
@@ -40,7 +40,7 @@ const imageCapability: RunnerCapability = {
   maxImageBytes: 1024,
 };
 
-describe("ChatPanel image attachments", () => {
+describe("ChatPanel", () => {
   beforeEach(() => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -63,11 +63,89 @@ describe("ChatPanel image attachments", () => {
     });
   });
 
+  it("submits the composer with Command+Enter", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    expect(composer).toHaveAttribute(
+      "placeholder",
+      "Message the active session, Cmd/Ctrl+Enter to send",
+    );
+    fireEvent.change(composer, { target: { value: "  run tests  " } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: true,
+    });
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith("run tests", []),
+    );
+    expect(composer).toHaveValue("");
+  });
+
+  it("submits the composer with Ctrl+Enter", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "  run lint  " } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("run lint", []));
+    expect(composer).toHaveValue("");
+  });
+
+  it("does not submit while IME composition is active", () => {
+    const onSend = vi.fn();
+    render(
+      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "中文输入" } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: true,
+      isComposing: true,
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("中文输入");
+  });
+
+  it("keeps plain Enter available for multiline drafts", () => {
+    const onSend = vi.fn();
+    render(
+      <ChatPanel session={baseSession} messages={[]} onSend={onSend} />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "first line" } });
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("first line");
+  });
+
   it("sends selected images with the composed message", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { container } = render(
       <ChatPanel
-        session={session}
+        session={baseSession}
         messages={[]}
         onSend={onSend}
         imageCapability={imageCapability}
@@ -106,7 +184,7 @@ describe("ChatPanel image attachments", () => {
       .mockRejectedValue(new Error("Images are unavailable"));
     const { container } = render(
       <ChatPanel
-        session={session}
+        session={baseSession}
         messages={[]}
         onSend={onSend}
         imageCapability={imageCapability}
@@ -162,7 +240,7 @@ describe("ChatPanel image attachments", () => {
 
     render(
       <ChatPanel
-        session={session}
+        session={baseSession}
         messages={[message]}
         onSend={vi.fn()}
         imageCapability={imageCapability}

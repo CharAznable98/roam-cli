@@ -18,7 +18,14 @@ import {
   User,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { getConversationDisplayItems, type UiMessage } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -160,8 +167,7 @@ export function ChatPanel({
     setAttachmentError(undefined);
   };
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const submitDraft = async () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !canSend || submitting) {
       return;
@@ -179,6 +185,27 @@ export function ChatPanel({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void submitDraft();
+  };
+
+  const handleComposerKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    const isSubmitShortcut = event.metaKey || event.ctrlKey;
+    if (
+      event.key !== "Enter" ||
+      !isSubmitShortcut ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    void submitDraft();
   };
 
   const openRenameDialog = () => {
@@ -417,6 +444,7 @@ export function ChatPanel({
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData.files).filter(
                 (file) => file.type.startsWith("image/"),
@@ -428,7 +456,9 @@ export function ChatPanel({
             }}
             rows={2}
             placeholder={
-              canSend ? "Message the active session" : "Stream is reconnecting"
+              canSend
+                ? "Message the active session, Cmd/Ctrl+Enter to send"
+                : "Stream is reconnecting"
             }
             aria-label="Chat composer"
           />
