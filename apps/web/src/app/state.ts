@@ -22,7 +22,10 @@ import {
 } from "../features/approvals/model";
 import { omitKey, upsertBy } from "../shared/lib/collections";
 import type { AsyncState } from "../shared/types/async";
-import type { InitialRemoteState } from "../api/contracts";
+import type {
+  InitialRemoteState,
+  SessionDetailPayload,
+} from "../api/contracts";
 import type { WorkspaceTab } from "./navigation";
 
 export type LoadState = "loading" | "ready" | "error";
@@ -138,6 +141,7 @@ export type AppAction =
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
+  | { type: "sessionDetailMerged"; detail: SessionDetailPayload }
   | { type: "errorChanged"; title?: string; message: string | undefined }
   | { type: "notificationDismissed"; id: string };
 
@@ -394,6 +398,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       );
     case "serverEventReceived":
       return applyServerEvent(state, action.event);
+    case "sessionDetailMerged":
+      return mergeSessionDetailState(state, action.detail);
     case "errorChanged":
       if (action.message === undefined) {
         return state;
@@ -411,6 +417,38 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
   }
+}
+
+function mergeSessionDetailState(
+  state: AppState,
+  detail: SessionDetailPayload,
+): AppState {
+  const attachments = detail.attachments ?? [];
+  const approvals = detail.approvals ?? [];
+  const artifacts = detail.artifacts ?? [];
+  return {
+    ...state,
+    sessions: upsertBy(state.sessions, detail.session, (item) => item.id),
+    messages: detail.messages.reduce(
+      (messages, message) => upsertMessage(messages, message),
+      state.messages,
+    ),
+    messageAttachments: attachments.reduce(
+      (items, attachment) => upsertBy(items, attachment, (item) => item.id),
+      state.messageAttachments,
+    ),
+    approvals: approvals.reduce(
+      (items, approval) => upsertBy(items, approval, (item) => item.id),
+      state.approvals,
+    ),
+    artifacts: artifacts.reduce(
+      (items, artifact) => upsertBy(items, artifact, (item) => item.id),
+      state.artifacts,
+    ),
+    hunks: mergePatchHunks(state.hunks, extractPatchHunks(approvals)),
+    selectedProjectId: state.selectedProjectId || detail.session.projectId,
+    selectedSessionId: state.selectedSessionId || detail.session.id,
+  };
 }
 
 function applyServerEvent(state: AppState, event: ServerEvent): AppState {

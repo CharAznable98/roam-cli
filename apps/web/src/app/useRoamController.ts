@@ -266,12 +266,9 @@ export function useRoamController() {
       }
       void api
         .fetchSessionDetail(sessionId)
-        .then(({ session }) => {
+        .then((detail) => {
           if (!cancelled) {
-            dispatch({
-              type: "serverEventReceived",
-              event: { type: "session:updated", session },
-            });
+            dispatch({ type: "sessionDetailMerged", detail });
           }
         })
         .catch(() => {

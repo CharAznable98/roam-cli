@@ -241,7 +241,9 @@ export function createRoamApiClient(
     return response.blob();
   }
 
-  function fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload> {
+  function fetchSessionDetail(
+    sessionId: string,
+  ): Promise<SessionDetailPayload> {
     return request<SessionDetailPayload>(
       `/v1/sessions/${encodeURIComponent(sessionId)}`,
     );
