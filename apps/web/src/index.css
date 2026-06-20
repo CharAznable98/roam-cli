@@ -507,7 +507,9 @@
   .modal-panel {
     display: grid;
     width: min(100%, 460px);
+    max-height: calc(100dvh - 48px);
     gap: 14px;
+    overflow: auto;
     border: 1px solid #d9e1ea;
     border-radius: 8px;
     background: #f8fafc;
@@ -517,7 +519,7 @@
 
   .modal-sheet {
     width: 100%;
-    max-height: min(82dvh, 640px);
+    max-height: calc(100dvh - 16px);
     overflow: auto;
     border-bottom: 0;
     border-radius: 12px 12px 0 0;
@@ -530,6 +532,104 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+  }
+
+  .skill-list-dialog {
+    width: min(720px, calc(100vw - 28px));
+  }
+
+  .skill-list-header-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .skill-list-timestamp {
+    margin: 4px 0 0;
+    color: #6a7b8f;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .skill-list,
+  .skill-list-state,
+  .skill-list-empty {
+    margin-top: 12px;
+  }
+
+  .skill-list {
+    display: grid;
+    max-height: min(520px, 62vh);
+    gap: 8px;
+    overflow: auto;
+  }
+
+  .skill-list-row {
+    display: grid;
+    min-width: 0;
+    gap: 7px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #fbfdff;
+    padding: 10px 12px;
+  }
+
+  .skill-list-row-main,
+  .skill-list-row-meta {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .skill-list-row-main strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #17202e;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skill-list-row-main span,
+  .skill-list-row-meta span,
+  .skill-list-row-meta code {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skill-list-row-main span {
+    color: #4d5f73;
+    font-size: 12px;
+  }
+
+  .skill-list-row-meta {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    color: #748398;
+    font-size: 11px;
+  }
+
+  .skill-list-row-meta code {
+    border-radius: 4px;
+    background: #eef3f8;
+    color: #43556b;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
+    padding: 2px 5px;
+  }
+
+  .skill-list-state,
+  .skill-list-empty {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    gap: 8px;
+    color: #66788f;
+    font-size: 13px;
   }
 
   .modal-panel .sidebar-project-form,
@@ -1228,6 +1328,88 @@
     border-radius: 8px;
     padding: 9px 10px;
     outline: none;
+  }
+
+  .prompt-composer {
+    position: relative;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .prompt-composer textarea {
+    display: block;
+  }
+
+  .prompt-suggestion-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 42;
+    display: grid;
+    max-height: min(320px, 44vh);
+    gap: 2px;
+    overflow: auto;
+    border: 1px solid #c8d3e1;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+    padding: 6px;
+  }
+
+  .prompt-suggestion-panel.below {
+    position: static;
+    max-height: min(176px, 24vh);
+    margin-top: 6px;
+  }
+
+  .prompt-suggestion-option {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #263445;
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .prompt-suggestion-option:hover,
+  .prompt-suggestion-option.active {
+    background: #edf5ff;
+    color: #162033;
+  }
+
+  .prompt-suggestion-title,
+  .prompt-suggestion-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prompt-suggestion-title {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .prompt-suggestion-meta {
+    color: #65758a;
+    font-size: 12px;
+  }
+
+  .prompt-suggestion-status,
+  .prompt-suggestion-empty {
+    display: flex;
+    min-height: 36px;
+    align-items: center;
+    gap: 8px;
+    color: #66788f;
+    font-size: 12px;
+    padding: 8px 10px;
   }
 
   .composer-error {
@@ -2156,6 +2338,18 @@
   .composer .primary-icon-button {
     height: 44px;
     width: 44px;
+  }
+
+  .prompt-suggestion-panel {
+    left: 0;
+    right: auto;
+    width: min(360px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+  }
+
+  .prompt-suggestion-option {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 

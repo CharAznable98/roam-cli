@@ -43,6 +43,9 @@ import {
   revokeDraftPreview,
   type DraftImageAttachment,
 } from "./attachments";
+import { PromptComposer } from "./PromptComposer";
+import { SkillListDialog } from "./SkillListDialog";
+import type { AgentSkillFetcher, PathSearchFetcher } from "./prompt-resources";
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
@@ -66,6 +69,8 @@ type ChatPanelProps = {
   onFetchAttachmentContent?:
     | ((sessionId: string, attachmentId: string) => Promise<Blob>)
     | undefined;
+  onListAgentSkills?: AgentSkillFetcher | undefined;
+  onSearchWorkspacePaths?: PathSearchFetcher | undefined;
 };
 
 export function ChatPanel({
@@ -83,6 +88,8 @@ export function ChatPanel({
   onOpenFileLink,
   imageCapability,
   onFetchAttachmentContent,
+  onListAgentSkills = emptyAgentSkillList,
+  onSearchWorkspacePaths = emptyPathSearch,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
@@ -93,6 +100,7 @@ export function ChatPanel({
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const [renameError, setRenameError] = useState<string | undefined>();
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [skillListOpen, setSkillListOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -135,6 +143,7 @@ export function ChatPanel({
       return [];
     });
     setSessionMenuOpen(false);
+    setSkillListOpen(false);
   }, [session.id]);
 
   useEffect(() => {
@@ -144,10 +153,7 @@ export function ChatPanel({
 
     const closeOnOutsidePointer = (event: MouseEvent) => {
       const target = event.target;
-      if (
-        target instanceof Node &&
-        !sessionMenuRef.current?.contains(target)
-      ) {
+      if (target instanceof Node && !sessionMenuRef.current?.contains(target)) {
         setSessionMenuOpen(false);
       }
     };
@@ -360,6 +366,18 @@ export function ChatPanel({
                 className="session-action-menu-item"
                 type="button"
                 role="menuitem"
+                onClick={() => {
+                  setSessionMenuOpen(false);
+                  setSkillListOpen(true);
+                }}
+              >
+                <SquareTerminal size={17} />
+                <span className="session-action-title">Skill list</span>
+              </button>
+              <button
+                className="session-action-menu-item"
+                type="button"
+                role="menuitem"
                 disabled={!onRename}
                 onClick={() => {
                   setSessionMenuOpen(false);
@@ -502,6 +520,16 @@ export function ChatPanel({
         </div>
       ) : null}
 
+      {skillListOpen ? (
+        <SkillListDialog
+          runnerId={session.runnerId}
+          agent={session.agent}
+          basePath={session.executionFolder}
+          onListAgentSkills={onListAgentSkills}
+          onClose={() => setSkillListOpen(false)}
+        />
+      ) : null}
+
       <div
         className="message-list"
         ref={messageListRef}
@@ -557,9 +585,14 @@ export function ChatPanel({
               onRemove={removeDraftImage}
             />
           ) : null}
-          <textarea
+          <PromptComposer
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={setDraft}
+            runnerId={session.runnerId}
+            agent={session.agent}
+            basePath={session.executionFolder}
+            onListAgentSkills={onListAgentSkills}
+            onSearchWorkspacePaths={onSearchWorkspacePaths}
             onKeyDown={handleComposerKeyDown}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData.files).filter(
@@ -576,7 +609,7 @@ export function ChatPanel({
                 ? "Message the active session, Cmd/Ctrl+Enter to send"
                 : "Stream is reconnecting"
             }
-            aria-label="Chat composer"
+            ariaLabel="Chat composer"
           />
           {attachmentError ? (
             <p className="form-error composer-error" role="alert">
@@ -641,6 +674,29 @@ function getErrorMessage(
   return fallback;
 }
 
+async function emptyAgentSkillList(
+  input: Parameters<AgentSkillFetcher>[0],
+): Promise<Awaited<ReturnType<AgentSkillFetcher>>> {
+  return {
+    requestId: "empty-agent-skills",
+    agent: input.agent,
+    basePath: input.basePath,
+    queriedAt: new Date().toISOString(),
+    skills: [],
+  };
+}
+
+async function emptyPathSearch(
+  input: Parameters<PathSearchFetcher>[0],
+): Promise<Awaited<ReturnType<PathSearchFetcher>>> {
+  return {
+    requestId: "empty-path-search",
+    basePath: input.basePath,
+    query: input.query,
+    entries: [],
+  };
+}
+
 function DraftImageStrip({
   attachments,
   onRemove,
@@ -689,7 +745,7 @@ function IntermediateOutputGroup({
     <details className="collapsible-message intermediate-group">
       <summary>
         <ChevronDown size={16} />
-        中间过程（{messages.length} 条）
+        Intermediate output ({messages.length})
       </summary>
       <div className="intermediate-group-list">
         {messages.map((message) => (

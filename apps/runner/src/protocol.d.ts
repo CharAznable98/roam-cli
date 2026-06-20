@@ -197,6 +197,36 @@ declare module "@roamcli/shared/protocol" {
     children?: FileNode[];
   }
 
+  export type AgentSkillSourceType = "project" | "global";
+
+  export interface AgentSkillSummary {
+    name: string;
+    description?: string;
+    sourceType: AgentSkillSourceType;
+    sourcePath: string;
+  }
+
+  export interface AgentSkillListResult {
+    requestId: string;
+    agent: AgentKind;
+    basePath: string;
+    queriedAt: string;
+    skills: AgentSkillSummary[];
+  }
+
+  export interface PathSearchEntry {
+    path: string;
+    name: string;
+    type: "file" | "directory";
+  }
+
+  export interface PathSearchResult {
+    requestId: string;
+    basePath: string;
+    query: string;
+    entries: PathSearchEntry[];
+  }
+
   export interface FileTreeResult {
     requestId: string;
     sessionId: string;
@@ -373,6 +403,19 @@ declare module "@roamcli/shared/protocol" {
         sessionId: string;
       }
     | {
+        type: "listAgentSkills";
+        requestId: string;
+        agent: AgentKind;
+        basePath: string;
+      }
+    | {
+        type: "searchWorkspacePaths";
+        requestId: string;
+        basePath: string;
+        query: string;
+        limit: number;
+      }
+    | {
         type: "writeSessionAttachments";
         requestId: string;
         sessionId: string;
@@ -471,6 +514,8 @@ declare module "@roamcli/shared/protocol" {
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
     | { type: "sessionThread"; sessionId: string; threadId: string }
     | { type: "sessionStatusCheckResult"; result: SessionStatusCheckResult }
+    | { type: "agentSkillListResult"; result: AgentSkillListResult }
+    | { type: "pathSearchResult"; result: PathSearchResult }
     | {
         type: "assistantMessage";
         sessionId: string;

@@ -694,7 +694,7 @@ describe("App", () => {
     expect(screen.getByTitle("Real Runner runner")).toBeInTheDocument();
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
-    expect(screen.getAllByText("执行中").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
     expect(screen.getByText("changes.patch")).toBeInTheDocument();
     expect(
       screen.getByText(/artifacts\/session-1\/changes.patch/),
@@ -733,7 +733,7 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    expect(await screen.findByText("已停止")).toBeInTheDocument();
+    expect(await screen.findByText("Stopped")).toBeInTheDocument();
     expect(screen.getByText("1 runners online")).toBeInTheDocument();
   });
 
@@ -760,7 +760,7 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    expect(await screen.findByText("已停止")).toBeInTheDocument();
+    expect(await screen.findByText("Stopped")).toBeInTheDocument();
   });
 
   it("uses project git context while a managed worktree session is pending", async () => {
@@ -1468,13 +1468,13 @@ describe("App", () => {
     );
 
     expect(
-      mobileTabs.getByRole("button", { name: "对话" }),
+      mobileTabs.getByRole("button", { name: "Conversation" }),
     ).toBeInTheDocument();
     expect(
-      mobileTabs.getByRole("button", { name: "文件" }),
+      mobileTabs.getByRole("button", { name: "Files" }),
     ).toBeInTheDocument();
     expect(
-      mobileTabs.getByRole("button", { name: "审批" }),
+      mobileTabs.getByRole("button", { name: "Approvals" }),
     ).toBeInTheDocument();
   });
 
@@ -2422,7 +2422,7 @@ describe("App", () => {
 
     const conversation = screen.getByRole("region", { name: "Conversation" });
     expect(
-      within(conversation).queryByText("中间过程（2 条）"),
+      within(conversation).queryByText("Intermediate output (2)"),
     ).not.toBeInTheDocument();
 
     act(() => {
@@ -2441,7 +2441,7 @@ describe("App", () => {
     });
 
     const intermediate =
-      await within(conversation).findByText("中间过程（2 条）");
+      await within(conversation).findByText("Intermediate output (2)");
     const group = intermediate.closest("details");
     expect(group).not.toHaveAttribute("open");
     expect(group).not.toBeNull();

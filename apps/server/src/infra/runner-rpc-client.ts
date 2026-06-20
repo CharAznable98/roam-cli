@@ -1,4 +1,5 @@
 import type {
+  AgentSkillListResult,
   AttachmentContentResult,
   AttachmentDeleteResult,
   AttachmentWriteResult,
@@ -12,12 +13,14 @@ import type {
   GitJob,
   GitStatus,
   PatchApplyResult,
+  PathSearchResult,
   RunnerCommand,
   SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "./connection-hub.js";
 
 type RunnerRpcResult =
+  | AgentSkillListResult
   | AttachmentWriteResult
   | AttachmentContentResult
   | AttachmentDeleteResult
@@ -25,6 +28,7 @@ type RunnerRpcResult =
   | FileContentResult
   | FileWriteResult
   | PatchApplyResult
+  | PathSearchResult
   | SessionStatusCheckResult
   | GitStatus
   | GitFileDiff
@@ -40,6 +44,8 @@ export type RunnerRpcCommand = Extract<
       | "readFileTree"
       | "readFileContent"
       | "writeFileContent"
+      | "listAgentSkills"
+      | "searchWorkspacePaths"
       | "checkSessionStatus"
       | "writeSessionAttachments"
       | "readSessionAttachment"

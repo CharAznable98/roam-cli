@@ -16,6 +16,11 @@ import {
   revokeDraftPreview,
   type DraftImageAttachment,
 } from "../conversation/attachments";
+import { PromptComposer } from "../conversation/PromptComposer";
+import type {
+  AgentSkillFetcher,
+  PathSearchFetcher,
+} from "../conversation/prompt-resources";
 
 export type NewSessionValues = {
   title: string;
@@ -32,6 +37,8 @@ type NewSessionFormProps = {
   runner: RunnerRegistration;
   onCreate: (values: NewSessionValues) => void | Promise<void>;
   onCreated?: () => void;
+  onListAgentSkills?: AgentSkillFetcher | undefined;
+  onSearchWorkspacePaths?: PathSearchFetcher | undefined;
 };
 
 export function NewSessionForm({
@@ -39,6 +46,8 @@ export function NewSessionForm({
   runner,
   onCreate,
   onCreated,
+  onListAgentSkills = emptyAgentSkillList,
+  onSearchWorkspacePaths = emptyPathSearch,
 }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -213,11 +222,17 @@ export function NewSessionForm({
         }}
       >
         <span>Prompt</span>
-        <textarea
+        <PromptComposer
           value={prompt}
-          aria-invalid={error ? true : undefined}
-          onChange={(event) => {
-            setPrompt(event.target.value);
+          ariaLabel="Prompt"
+          ariaInvalid={Boolean(error)}
+          runnerId={runner.runnerId}
+          agent={agent}
+          basePath={project.directory}
+          onListAgentSkills={onListAgentSkills}
+          onSearchWorkspacePaths={onSearchWorkspacePaths}
+          onChange={(nextPrompt) => {
+            setPrompt(nextPrompt);
             setError("");
           }}
           onPaste={(event) => {
@@ -231,6 +246,7 @@ export function NewSessionForm({
           }}
           rows={4}
           placeholder="Describe the work"
+          suggestionPlacement="below"
         />
       </label>
       {draftImages.length > 0 ? (
@@ -308,4 +324,27 @@ export function NewSessionForm({
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+async function emptyAgentSkillList(
+  input: Parameters<AgentSkillFetcher>[0],
+): Promise<Awaited<ReturnType<AgentSkillFetcher>>> {
+  return {
+    requestId: "empty-agent-skills",
+    agent: input.agent,
+    basePath: input.basePath,
+    queriedAt: new Date().toISOString(),
+    skills: [],
+  };
+}
+
+async function emptyPathSearch(
+  input: Parameters<PathSearchFetcher>[0],
+): Promise<Awaited<ReturnType<PathSearchFetcher>>> {
+  return {
+    requestId: "empty-path-search",
+    basePath: input.basePath,
+    query: input.query,
+    entries: [],
+  };
 }

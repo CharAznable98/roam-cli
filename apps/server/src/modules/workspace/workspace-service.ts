@@ -1,10 +1,14 @@
 import type {
+  AgentSkillListResult,
+  ApiAgentSkillList,
   ApiApplyPatch,
+  ApiPathSearch,
   ApiWriteFile,
   FileContentResult,
   FileTreeResult,
   FileWriteResult,
   PatchApplyResult,
+  PathSearchResult,
   Session,
 } from "@roamcli/shared/protocol";
 import { RunnerRpcClient } from "../../infra/runner-rpc-client.js";
@@ -155,7 +159,43 @@ export class WorkspaceService {
     return ok({ result });
   }
 
-  async validateRunnerDirectory(runnerId: string, directory: string): Promise<void> {
+  async listAgentSkills(
+    body: ApiAgentSkillList,
+  ): Promise<ServiceResult<{ result: AgentSkillListResult }>> {
+    const result = await this.rpc.requestRunner<AgentSkillListResult>(
+      body.runnerId,
+      {
+        type: "listAgentSkills",
+        requestId: newId("agent_skills"),
+        agent: body.agent,
+        basePath: body.basePath,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
+  async searchPaths(
+    body: ApiPathSearch,
+  ): Promise<ServiceResult<{ result: PathSearchResult }>> {
+    const result = await this.rpc.requestRunner<PathSearchResult>(
+      body.runnerId,
+      {
+        type: "searchWorkspacePaths",
+        requestId: newId("path_search"),
+        basePath: body.basePath,
+        query: body.query,
+        limit: body.limit,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
+  async validateRunnerDirectory(
+    runnerId: string,
+    directory: string,
+  ): Promise<void> {
     await this.rpc.requestRunner<FileTreeResult>(
       runnerId,
       {

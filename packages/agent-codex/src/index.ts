@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import type {
   AgentDefinition,
   AgentLaunch,
@@ -10,11 +15,13 @@ import type {
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
 import {
+  type AgentSkillSummary,
   DEFAULT_MAX_IMAGE_BYTES,
   DEFAULT_MAX_IMAGES_PER_TURN,
   type RunnerCapability,
 } from "@roamcli/shared/protocol";
 
+const execFileAsync = promisify(execFile);
 const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
@@ -64,6 +71,9 @@ export const codexAgent: AgentDefinition = {
   },
   createParser(): AgentOutputParser {
     return new CodexJsonParser();
+  },
+  async listSkills(context) {
+    return listCodexSkills(context.workspace, context.basePath, context.env);
   },
 };
 
@@ -152,6 +162,219 @@ function imagePaths(context: AgentLaunchContext): string[] {
   return (context.attachments ?? [])
     .filter((attachment) => attachment.kind === "image")
     .map((attachment) => attachment.localPath);
+}
+
+export async function listCodexSkills(
+  workspace: string,
+  basePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<AgentSkillSummary[]> {
+  const base = await resolveSkillBase(workspace, basePath);
+  if (!base) {
+    return [];
+  }
+
+  const roots = await skillRootsForBase(
+    base.path,
+    base.realPath,
+    base.realWorkspace,
+  );
+  const home = env.HOME && env.HOME.trim().length > 0 ? env.HOME : homedir();
+  roots.push(
+    { type: "global", path: join(home, ".agents", "skills") },
+    { type: "global", path: join(home, ".codex", "skills") },
+  );
+
+  const skills: AgentSkillSummary[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    const discovered = await readSkillRoot(root.path, root.type);
+    for (const skill of discovered) {
+      if (seen.has(skill.name)) {
+        continue;
+      }
+      seen.add(skill.name);
+      skills.push(skill);
+    }
+  }
+  return skills;
+}
+
+async function resolveSkillBase(
+  workspace: string,
+  basePath: string,
+): Promise<
+  { path: string; realPath: string; realWorkspace: string } | undefined
+> {
+  try {
+    const workspacePath = resolve(workspace);
+    const candidate = isAbsolute(basePath)
+      ? resolve(basePath)
+      : resolve(workspacePath, basePath);
+    const [realWorkspace, realCandidate] = await Promise.all([
+      realpath(workspacePath),
+      realpath(candidate),
+    ]);
+    const candidateStat = await stat(realCandidate);
+    if (
+      !candidateStat.isDirectory() ||
+      !isInside(realWorkspace, realCandidate)
+    ) {
+      return undefined;
+    }
+    return { path: candidate, realPath: realCandidate, realWorkspace };
+  } catch {
+    return undefined;
+  }
+}
+
+async function skillRootsForBase(
+  basePath: string,
+  realBasePath: string,
+  realWorkspace: string,
+): Promise<Array<{ type: "project" | "global"; path: string }>> {
+  const repoRoot = await gitRoot(realBasePath);
+  const realStop =
+    repoRoot &&
+    isInside(realWorkspace, repoRoot) &&
+    isInside(repoRoot, realBasePath)
+      ? repoRoot
+      : realBasePath;
+  const roots: Array<{ type: "project"; path: string }> = [];
+  let current = realBasePath;
+  while (isInside(realStop, current)) {
+    roots.push(
+      { type: "project", path: join(current, ".agents", "skills") },
+      { type: "project", path: join(current, ".codex", "skills") },
+    );
+    if (current === realStop) {
+      break;
+    }
+    const next = dirname(current);
+    if (next === current) {
+      break;
+    }
+    current = next;
+  }
+  if (realBasePath !== basePath && roots.length === 0) {
+    roots.push(
+      { type: "project", path: join(basePath, ".agents", "skills") },
+      { type: "project", path: join(basePath, ".codex", "skills") },
+    );
+  }
+  return roots;
+}
+
+async function gitRoot(cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", cwd, "rev-parse", "--show-toplevel"],
+      { timeout: 3000 },
+    );
+    const value = stdout.trim();
+    return value ? await realpath(value) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readSkillRoot(
+  root: string,
+  sourceType: "project" | "global",
+): Promise<AgentSkillSummary[]> {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const skills: AgentSkillSummary[] = [];
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const sourcePath = join(root, entry.name);
+    const metadata = await readSkillMetadata(join(sourcePath, "SKILL.md"));
+    if (!metadata) {
+      continue;
+    }
+    skills.push({
+      name: metadata.name,
+      ...(metadata.description ? { description: metadata.description } : {}),
+      sourceType,
+      sourcePath,
+    });
+  }
+  return skills;
+}
+
+async function readSkillMetadata(
+  path: string,
+): Promise<{ name: string; description?: string } | undefined> {
+  let content: string;
+  try {
+    content = await readFile(path, "utf8");
+  } catch {
+    return undefined;
+  }
+  const frontmatter = parseFrontmatter(content);
+  const name = frontmatter.get("name")?.trim();
+  if (!name) {
+    return undefined;
+  }
+  const description = frontmatter.get("description")?.trim();
+  return {
+    name,
+    ...(description ? { description } : {}),
+  };
+}
+
+function parseFrontmatter(content: string): Map<string, string> {
+  const result = new Map<string, string>();
+  if (!content.startsWith("---")) {
+    return result;
+  }
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    return result;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === undefined) {
+      continue;
+    }
+    if (line.trim() === "---") {
+      break;
+    }
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separatorIndex).trim();
+    const value = unquoteFrontmatterValue(
+      line.slice(separatorIndex + 1).trim(),
+    );
+    result.set(key, value);
+  }
+  return result;
+}
+
+function unquoteFrontmatterValue(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
 }
 
 function commandFor(kind: string, env: NodeJS.ProcessEnv): string {
