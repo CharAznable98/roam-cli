@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
 import {
   CodexJsonParser,
   agentPlugin,
@@ -28,7 +29,7 @@ describe("codex agent plugin", () => {
       supportsImages: true,
       supportedImageMimeTypes: ["image/png", "image/jpeg"],
       maxImagesPerTurn: 5,
-      maxImageBytes: 10 * 1024 * 1024,
+      maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
       pluginName: "@roamcli/agent-codex",
     });
   });
@@ -75,11 +76,11 @@ describe("codex agent plugin", () => {
     ).toEqual([
       "exec",
       "--json",
+      "describe image",
       "--image",
       "/tmp/a.png",
       "--image",
       "/tmp/b.jpg",
-      "describe image",
     ]);
 
     expect(
@@ -93,10 +94,10 @@ describe("codex agent plugin", () => {
       "exec",
       "resume",
       "--json",
-      "--image",
-      "/tmp/a.png",
       "thread-1",
       "resume image",
+      "--image",
+      "/tmp/a.png",
     ]);
   });
 

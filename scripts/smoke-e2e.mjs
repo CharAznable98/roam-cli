@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
+import { deflateSync } from "node:zlib";
 import net from "node:net";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +14,15 @@ const workspace = resolve(process.env.ROAMCLI_SMOKE_WORKSPACE ?? repoRoot);
 const suppliedBaseUrl = process.env.ROAMCLI_SMOKE_BASE_URL;
 const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? 30_000);
 const runnerId = process.env.ROAMCLI_SMOKE_RUNNER_ID ?? `smoke-${process.pid}`;
+const smokeMaxImageBytes = 5 * 1024 * 1024;
+const smokeImageSizes = [1024, 512 * 1024, smokeMaxImageBytes];
+const crc32Table = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
 const logs = [];
 const children = [];
 const tempDirs = [];
@@ -123,6 +133,8 @@ async function runSmoke() {
     await waitForPersistedAssistantMessage(session.id, prompt);
     pass("assistant message persisted");
 
+    await imageAttachmentAssertionEntry(project.id, runner);
+
     const tree = await requestJson(
       `/v1/sessions/${session.id}/files?path=.&depth=2`,
     );
@@ -228,7 +240,7 @@ async function createProject(activeRunnerId) {
   return payload.project;
 }
 
-async function createSession(projectId, prompt) {
+async function createSession(projectId, prompt, attachments = []) {
   const payload = await requestJson("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -236,6 +248,7 @@ async function createSession(projectId, prompt) {
       agent: "codex",
       prompt,
       title: "Smoke E2E",
+      ...(attachments.length > 0 ? { attachments } : {}),
     }),
   });
   assert(
@@ -252,10 +265,33 @@ async function createFakeCodexCommand(label) {
   await writeFile(
     script,
     [
-      "const prompt = process.argv.at(-1) ?? '';",
-      "const resumed = process.argv.includes('resume');",
+      "import { readFileSync } from 'node:fs';",
+      "const valueOptions = new Set(['--color', '--model', '--profile', '--sandbox', '--cd', '--output-schema']);",
+      "const imagePaths = [];",
+      "const positional = [];",
+      "let resumed = false;",
+      "for (let index = 2; index < process.argv.length; index += 1) {",
+      "  const arg = process.argv[index];",
+      "  if (arg === 'resume') {",
+      "    resumed = true;",
+      "    continue;",
+      "  }",
+      "  if (arg === '--image') {",
+      "    imagePaths.push(process.argv[index + 1] ?? '');",
+      "    index += 1;",
+      "    continue;",
+      "  }",
+      "  if (arg.startsWith('-')) {",
+      "    if (valueOptions.has(arg)) index += 1;",
+      "    continue;",
+      "  }",
+      "  positional.push(arg);",
+      "}",
+      "const imageSizes = imagePaths.map((imagePath) => readFileSync(imagePath).byteLength);",
+      "const prompt = positional.at(-1) ?? '';",
       "console.log(JSON.stringify({ type: 'thread.started', thread_id: resumed ? 'codex-thread-resumed' : 'codex-thread-1' }));",
-      "console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: prompt } }));",
+      "const imageSummary = imageSizes.length > 0 ? ` image-bytes:${imageSizes.join(',')}` : '';",
+      "console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: `${prompt}${imageSummary}` } }));",
     ].join("\n"),
     "utf8",
   );
@@ -273,6 +309,123 @@ async function waitForPersistedAssistantMessage(sessionId, expected) {
     },
     `assistant message containing ${JSON.stringify(expected)} to persist`,
   );
+}
+
+async function imageAttachmentAssertionEntry(projectId, runner) {
+  const imageCapability = runner.capabilities?.find(
+    (capability) => capability.kind === "codex" && capability.supportsImages,
+  );
+  if (imageCapability === undefined) {
+    pass(
+      "image attachment assertion skipped: runner does not advertise images",
+    );
+    return;
+  }
+  if (imageCapability.maxImageBytes !== smokeMaxImageBytes) {
+    pass(
+      `image attachment assertion skipped: runner limit is ${imageCapability.maxImageBytes} bytes`,
+    );
+    return;
+  }
+
+  const prompt = `roamcli image smoke ${Date.now()}`;
+  const attachments = smokeImageSizes.map((size, index) =>
+    imageUploadFromBytes(
+      `smoke-${index + 1}-${size}.png`,
+      pngBytesOfSize(size),
+    ),
+  );
+  const session = await createSession(projectId, prompt, attachments);
+  await waitForPersistedAssistantMessage(
+    session.id,
+    `image-bytes:${smokeImageSizes.join(",")}`,
+  );
+  pass(`image attachments reached fake codex: ${smokeImageSizes.join(",")}`);
+
+  const oversized = await requestRaw("/v1/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId,
+      agent: "codex",
+      prompt: "reject oversized image",
+      title: "Smoke oversized image",
+      attachments: [
+        imageUploadFromBytes(
+          "smoke-too-large.png",
+          pngBytesOfSize(smokeMaxImageBytes + 1),
+        ),
+      ],
+    }),
+  });
+  assert(
+    oversized.status === 400 && oversized.payload?.error === "image_too_large",
+    `oversized image was not rejected by the image limit: ${JSON.stringify(oversized)}`,
+  );
+  pass("oversized image rejected at 5MB limit");
+}
+
+function imageUploadFromBytes(name, bytes) {
+  return {
+    name,
+    mimeType: "image/png",
+    size: bytes.byteLength,
+    contentBase64: bytes.toString("base64"),
+  };
+}
+
+function pngBytesOfSize(targetBytes) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0);
+  ihdr.writeUInt32BE(1, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const idat = deflateSync(Buffer.from([0, 0, 0, 0, 255]));
+  const chunks = [
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", idat),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ];
+  const base = Buffer.concat([pngSignature(), ...chunks]);
+  if (targetBytes === base.byteLength) {
+    return base;
+  }
+  const fillerLength = targetBytes - base.byteLength - 12;
+  assert(
+    fillerLength >= 0,
+    `target PNG size ${targetBytes} is too small for the generated image`,
+  );
+  return Buffer.concat([
+    pngSignature(),
+    chunks[0],
+    chunks[1],
+    pngChunk("ruNd", Buffer.alloc(fillerLength, 0x61)),
+    chunks[2],
+  ]);
+}
+
+function pngSignature() {
+  return Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+}
+
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.byteLength);
+  chunk.writeUInt32BE(data.byteLength, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(
+    crc32(Buffer.concat([typeBytes, data])),
+    8 + data.byteLength,
+  );
+  return chunk;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = crc32Table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function patchApplyAssertionEntry(sessionId) {

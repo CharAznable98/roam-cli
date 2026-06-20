@@ -1,4 +1,8 @@
-import type { RunnerRegistration, Session } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type RunnerRegistration,
+  type Session,
+} from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import {
   getProjectSessions,
@@ -25,7 +29,7 @@ const runner: RunnerRegistration = {
       supportsImages: false,
       supportedImageMimeTypes: [],
       maxImagesPerTurn: 0,
-      maxImageBytes: 10 * 1024 * 1024,
+      maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
     },
   ],
   version: "1.1.0",

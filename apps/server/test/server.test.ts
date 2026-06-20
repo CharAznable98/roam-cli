@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { RunnerRegistration, Session } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type RunnerRegistration,
+  type Session,
+} from "@roamcli/shared/protocol";
 import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -400,6 +404,101 @@ describe("server", () => {
     ).toEqual(["implement server", "done", " streamed"]);
 
     stream.close();
+    runner.close();
+  });
+
+  it("accepts 5MB image payloads and rejects larger images at the business limit", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(imageRunnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    createTestProject(app);
+
+    const withinLimitUpload = imageUploadOfSize(
+      DEFAULT_MAX_IMAGE_BYTES,
+      "five-mb.png",
+    );
+    const createdPromise = app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "describe five megabytes",
+        attachments: [withinLimitUpload],
+      }),
+    });
+    const writeCommand = await nextJson(runner);
+    expect(writeCommand).toMatchObject({
+      type: "writeSessionAttachments",
+      attachments: [
+        {
+          name: "five-mb.png",
+          mimeType: "image/png",
+          size: DEFAULT_MAX_IMAGE_BYTES,
+        },
+      ],
+    });
+    runner.send(
+      JSON.stringify({
+        type: "attachmentWriteResult",
+        result: {
+          requestId: writeCommand.requestId,
+          sessionId: writeCommand.sessionId,
+          attachments: [
+            runnerAttachmentForUpload(
+              writeCommand.sessionId,
+              withinLimitUpload,
+            ),
+          ],
+        },
+      }),
+    );
+
+    const created = await createdPromise;
+    expect(created.statusCode).toBe(201);
+    expect(created.json().attachments[0]).toMatchObject({
+      name: "five-mb.png",
+      size: DEFAULT_MAX_IMAGE_BYTES,
+    });
+    const startCommand = await nextJson(runner);
+    expect(startCommand).toMatchObject({
+      type: "startSession",
+      prompt: "describe five megabytes",
+      attachments: [
+        {
+          name: "five-mb.png",
+          size: DEFAULT_MAX_IMAGE_BYTES,
+        },
+      ],
+    });
+
+    const oversized = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "reject oversized image",
+        attachments: [
+          imageUploadOfSize(DEFAULT_MAX_IMAGE_BYTES + 1, "too-large.png"),
+        ],
+      }),
+    });
+    expect(oversized.statusCode).toBe(400);
+    expect(oversized.json()).toEqual({ error: "image_too_large" });
+
     runner.close();
   });
 
@@ -1239,6 +1338,48 @@ function runnerRegistration(
         supportsResume: options.supportsResume ?? false,
       },
     ],
+  };
+}
+
+function imageRunnerRegistration(): RunnerRegistration {
+  const runner = runnerRegistration({ agent: "codex", parser: "codex-json" });
+  return {
+    ...runner,
+    capabilities: [
+      {
+        ...runner.capabilities[0]!,
+        supportsImages: true,
+        supportedImageMimeTypes: ["image/png"],
+        maxImagesPerTurn: 5,
+        maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+      },
+    ],
+  };
+}
+
+function imageUploadOfSize(size: number, name: string) {
+  const content = Buffer.alloc(size, 0x61);
+  return {
+    name,
+    mimeType: "image/png",
+    size,
+    contentBase64: content.toString("base64"),
+  };
+}
+
+function runnerAttachmentForUpload(
+  sessionId: string,
+  upload: ReturnType<typeof imageUploadOfSize>,
+) {
+  const content = Buffer.from(upload.contentBase64, "base64");
+  return {
+    id: `attachment-${upload.name}`,
+    kind: "image",
+    name: upload.name,
+    mimeType: upload.mimeType,
+    size: upload.size,
+    sha256: hashPayload(content),
+    runnerStoragePath: `attachments/${sessionId}/attachment-${upload.name}/${upload.name}`,
   };
 }
 

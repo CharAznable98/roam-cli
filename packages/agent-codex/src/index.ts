@@ -9,14 +9,16 @@ import type {
   ApprovalRequestDraft,
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
-import type { RunnerCapability } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  DEFAULT_MAX_IMAGES_PER_TURN,
+  type RunnerCapability,
+} from "@roamcli/shared/protocol";
 
 const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
-const MAX_IMAGES_PER_TURN = 5;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ARGS = [
   "exec",
   "--json",
@@ -39,8 +41,8 @@ export const codexAgent: AgentDefinition = {
       supportsResume: true,
       supportsImages: true,
       supportedImageMimeTypes: SUPPORTED_IMAGE_MIME_TYPES,
-      maxImagesPerTurn: MAX_IMAGES_PER_TURN,
-      maxImageBytes: MAX_IMAGE_BYTES,
+      maxImagesPerTurn: DEFAULT_MAX_IMAGES_PER_TURN,
+      maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
       pluginName: PLUGIN_NAME,
       pluginVersion: PLUGIN_VERSION,
     };
@@ -132,7 +134,7 @@ export function codexJsonArgs(
 ): string[] {
   const imageArgs = images.flatMap((image) => ["--image", image]);
   if (resumeThreadId === undefined) {
-    return [...baseArgs, ...imageArgs, prompt];
+    return [...baseArgs, prompt, ...imageArgs];
   }
 
   const [subcommand, ...rest] = baseArgs;
@@ -140,9 +142,9 @@ export function codexJsonArgs(
     subcommand ?? "exec",
     "resume",
     ...withoutExecOnlyArgs(rest),
-    ...imageArgs,
     resumeThreadId,
     prompt,
+    ...imageArgs,
   ];
 }
 

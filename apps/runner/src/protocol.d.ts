@@ -44,6 +44,8 @@ declare module "@roamcli/shared/protocol" {
 
   export const RunnerProfileSchema: ParserSchema<RunnerProfile>;
   export const RunnerCommandSchema: ParserSchema<RunnerCommand>;
+  export const DEFAULT_MAX_IMAGES_PER_TURN: number;
+  export const DEFAULT_MAX_IMAGE_BYTES: number;
 
   export interface RunnerCapability {
     kind: AgentKind;

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { RunnerRegistration } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type RunnerRegistration,
+} from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectForm } from "./RunnerSidebar";
 
@@ -54,7 +57,7 @@ const runners: RunnerRegistration[] = [
         supportsImages: false,
         supportedImageMimeTypes: [],
         maxImagesPerTurn: 0,
-        maxImageBytes: 10 * 1024 * 1024,
+        maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
       },
     ],
     version: "1.1.0",
@@ -77,7 +80,7 @@ const runners: RunnerRegistration[] = [
         supportsImages: false,
         supportedImageMimeTypes: [],
         maxImagesPerTurn: 0,
-        maxImageBytes: 10 * 1024 * 1024,
+        maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
       },
     ],
     version: "1.1.0",

@@ -17,6 +17,8 @@ import {
   ApiUpdateProjectSchema,
   ApiUpdateSessionSchema,
   ApiWriteFileSchema,
+  DEFAULT_MAX_IMAGE_BYTES,
+  DEFAULT_MAX_IMAGES_PER_TURN,
   nowIso,
 } from "@roamcli/shared/protocol";
 import { newId } from "../infra/ids.js";
@@ -31,6 +33,10 @@ import {
   ProjectParamsSchema,
   SessionParamsSchema,
 } from "./schemas.js";
+
+const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
+  Math.ceil(DEFAULT_MAX_IMAGE_BYTES * DEFAULT_MAX_IMAGES_PER_TURN * (4 / 3)) +
+  1024 * 1024;
 
 export async function registerApiRoutes(
   app: FastifyInstance,
@@ -59,36 +65,40 @@ function registerSessionRoutes(
     sessions: context.store.listSessions(),
   }));
 
-  app.post("/v1/sessions", async (request, reply) => {
-    const parsed = ApiCreateSessionSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: "invalid_request", issues: parsed.error.issues });
-    }
+  app.post(
+    "/v1/sessions",
+    { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const parsed = ApiCreateSessionSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", issues: parsed.error.issues });
+      }
 
-    const result = await context.services.sessions.createSession(parsed.data);
-    if (!result.ok) {
-      if (result.error === "runner_offline") {
-        return reply.code(409).send({ error: "runner_offline" });
+      const result = await context.services.sessions.createSession(parsed.data);
+      if (!result.ok) {
+        if (result.error === "runner_offline") {
+          return reply.code(409).send({ error: "runner_offline" });
+        }
+        if (result.error === "runner_timeout") {
+          return reply.code(504).send({ error: "runner_timeout" });
+        }
+        if (result.error === "unsupported_agent") {
+          return reply.code(400).send({ error: "unsupported_agent" });
+        }
+        if (result.error === "project_not_found") {
+          return reply.code(404).send({ error: "project_not_found" });
+        }
+        if (result.error === "unsupported_execution_mode") {
+          return reply.code(400).send({ error: "unsupported_execution_mode" });
+        }
+        return reply.code(400).send({ error: result.error });
       }
-      if (result.error === "runner_timeout") {
-        return reply.code(504).send({ error: "runner_timeout" });
-      }
-      if (result.error === "unsupported_agent") {
-        return reply.code(400).send({ error: "unsupported_agent" });
-      }
-      if (result.error === "project_not_found") {
-        return reply.code(404).send({ error: "project_not_found" });
-      }
-      if (result.error === "unsupported_execution_mode") {
-        return reply.code(400).send({ error: "unsupported_execution_mode" });
-      }
-      return reply.code(400).send({ error: result.error });
-    }
 
-    return reply.code(201).send(result.value);
-  });
+      return reply.code(201).send(result.value);
+    },
+  );
 
   app.patch("/v1/sessions/:id", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
@@ -128,37 +138,41 @@ function registerSessionRoutes(
     };
   });
 
-  app.post("/v1/sessions/:id/messages", async (request, reply) => {
-    const params = SessionParamsSchema.parse(request.params);
-    const parsed = ApiCreateMessageSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: "invalid_request", issues: parsed.error.issues });
-    }
+  app.post(
+    "/v1/sessions/:id/messages",
+    { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const params = SessionParamsSchema.parse(request.params);
+      const parsed = ApiCreateMessageSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", issues: parsed.error.issues });
+      }
 
-    const result = await context.services.sessions.createUserMessage(
-      params.id,
-      parsed.data,
-    );
-    if (!result.ok) {
-      if (result.error === "session_not_found") {
-        return reply.code(404).send({ error: "session_not_found" });
+      const result = await context.services.sessions.createUserMessage(
+        params.id,
+        parsed.data,
+      );
+      if (!result.ok) {
+        if (result.error === "session_not_found") {
+          return reply.code(404).send({ error: "session_not_found" });
+        }
+        if (
+          result.error === "runner_offline" ||
+          result.error === "session_not_running" ||
+          result.error === "attachments_require_idle"
+        ) {
+          return reply.code(409).send({ error: result.error });
+        }
+        if (result.error === "runner_timeout") {
+          return reply.code(504).send({ error: "runner_timeout" });
+        }
+        return reply.code(400).send({ error: result.error });
       }
-      if (
-        result.error === "runner_offline" ||
-        result.error === "session_not_running" ||
-        result.error === "attachments_require_idle"
-      ) {
-        return reply.code(409).send({ error: result.error });
-      }
-      if (result.error === "runner_timeout") {
-        return reply.code(504).send({ error: "runner_timeout" });
-      }
-      return reply.code(400).send({ error: result.error });
-    }
-    return reply.code(201).send(result.value);
-  });
+      return reply.code(201).send(result.value);
+    },
+  );
 
   app.get(
     "/v1/sessions/:id/attachments/:attachmentId/content",

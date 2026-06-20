@@ -2,6 +2,7 @@ import {
   type AttachmentContentResult,
   type AttachmentWriteResult,
   type ApiCreateMessage,
+  DEFAULT_MAX_IMAGE_BYTES,
   nowIso,
   type ApiCreateSession,
   type ApiUpdateSession,
@@ -448,7 +449,7 @@ export class SessionCommandService {
     }
     const maxImagesPerTurn = capability.maxImagesPerTurn ?? 0;
     const supportedImageMimeTypes = capability.supportedImageMimeTypes ?? [];
-    const maxImageBytes = capability.maxImageBytes ?? 10 * 1024 * 1024;
+    const maxImageBytes = capability.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
     if (maxImagesPerTurn > 0 && attachments.length > maxImagesPerTurn) {
       return fail("too_many_images", {
         message: `A maximum of ${maxImagesPerTurn} images can be sent at once.`,

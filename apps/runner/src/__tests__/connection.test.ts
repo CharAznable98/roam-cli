@@ -1,7 +1,10 @@
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RunnerRegistration } from "@roamcli/shared/protocol";
+import {
+  DEFAULT_MAX_IMAGE_BYTES,
+  type RunnerRegistration,
+} from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { AuditLog } from "../persistence/audit.js";
 import { EventCache } from "../persistence/cache.js";
@@ -157,7 +160,7 @@ function testRegistration(workspaceRoot: string): RunnerRegistration {
         supportsImages: false,
         supportedImageMimeTypes: [],
         maxImagesPerTurn: 0,
-        maxImageBytes: 10 * 1024 * 1024,
+        maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
         pluginName: "@roamcli/agent-codex",
         pluginVersion: "1.1.0",
       },
