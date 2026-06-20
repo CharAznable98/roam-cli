@@ -158,6 +158,10 @@ function formatBrowserErrors(scenario, consoleErrors, browserHttpErrors) {
   return sections.join("\n\n");
 }
 
+function isExpectedBrowserCancellation(message) {
+  return message.trim() === "Canceled";
+}
+
 async function runUserJourney(browser, scenario) {
   const projectName = `Blackbox Project ${scenario.name} ${runNonce}`;
   const projectDir = resolve(
@@ -180,11 +184,16 @@ async function runUserJourney(browser, scenario) {
   const browserHttpErrors = [];
   const browserHttpErrorReads = new Set();
   page.on("console", (message) => {
-    if (message.type() === "error") {
-      consoleErrors.push(message.text());
+    const text = message.text();
+    if (message.type() === "error" && !isExpectedBrowserCancellation(text)) {
+      consoleErrors.push(text);
     }
   });
-  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  page.on("pageerror", (error) => {
+    if (!isExpectedBrowserCancellation(error.message)) {
+      consoleErrors.push(error.message);
+    }
+  });
   page.on("response", (response) => {
     if (response.status() < 400) {
       return;
@@ -251,6 +260,7 @@ async function runUserJourney(browser, scenario) {
       pass(`${scenario.name}: managed worktree execution folder`);
     }
 
+    await assertMobileTouchTargets(page, scenario);
     await assertSessionResume(page, scenario, session);
     pass(`${scenario.name}: resume completed session`);
     await waitForSessionStatus(session.id, "completed");
@@ -288,8 +298,7 @@ async function runUserJourney(browser, scenario) {
 
     await openTab(page, scenario, "files");
     await page.getByRole("treeitem", { name: fileName }).click();
-    const editor = page.getByLabel(`Edit ${fileName}`);
-    await editor.fill(`${editedValue}\n`);
+    await replaceEditorContent(page, fileName, `${editedValue}\n`);
     await page.getByRole("button", { name: "Save file" }).click();
     await expectFileContent(session.id, fileName, `${editedValue}\n`);
     await expectText(page, "Saved");
@@ -531,9 +540,72 @@ async function assertNoRunnerRequestFailed(page) {
   }
 }
 
+async function assertMobileTouchTargets(page, scenario) {
+  if (!scenario.mobile) {
+    return;
+  }
+  const conversation = page.getByRole("region", { name: "Conversation" });
+  await conversation.getByRole("button", { name: "Session actions" }).click();
+  await page.getByRole("menu", { name: "Session actions" }).waitFor();
+  const failures = await page.evaluate(() => {
+    const minSize = 44;
+    const targets = [
+      {
+        name: "Session actions button",
+        element: document.querySelector(
+          '.session-action-menu > button[aria-label="Session actions"]',
+        ),
+      },
+      {
+        name: "Send message button",
+        element: document.querySelector('button[aria-label="Send message"]'),
+      },
+      ...Array.from(
+        document.querySelectorAll(".session-action-menu-item"),
+      ).map((element, index) => ({
+        name: `Session action menu item ${index + 1}`,
+        element,
+      })),
+    ];
+    return targets
+      .map(({ name, element }) => {
+        if (!element) {
+          return { name, missing: true };
+        }
+        const rect = element.getBoundingClientRect();
+        return {
+          name,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          tooSmall: rect.width < minSize || rect.height < minSize,
+        };
+      })
+      .filter((target) => target.missing || target.tooSmall);
+  });
+  await page.keyboard.press("Escape");
+  if (failures.length > 0) {
+    throw new Error(
+      `mobile touch targets below 44px: ${JSON.stringify(failures)}`,
+    );
+  }
+}
+
+async function clickSessionAction(page, scenario, actionName) {
+  const conversation = page.getByRole("region", { name: "Conversation" });
+  if (scenario.mobile) {
+    await conversation.getByRole("button", { name: "Session actions" }).click();
+    await page
+      .getByRole("menu", { name: "Session actions" })
+      .getByRole("menuitem", { name: actionName })
+      .click();
+    return;
+  }
+  await conversation.getByRole("button", { name: actionName }).click();
+}
+
 async function assertResumeFromUi(page, scenario, session) {
   await openTab(page, scenario, "chat");
-  await page.getByRole("button", { name: "Resume session" }).click();
+  await clickSessionAction(page, scenario, "Resume session");
   await expectText(page, `Resume session ${session.id}`);
   await waitFor(async () => {
     const payload = await requestJson(`/v1/sessions/${session.id}`);
@@ -614,21 +686,24 @@ async function assertExecApprovals(page, scenario, sessionId) {
 
 async function assertSessionResume(page, scenario, session) {
   await openTab(page, scenario, "chat");
-  const conversation = page.getByRole("region", { name: "Conversation" });
   await expectText(page, "已结束");
-  await conversation.getByRole("button", { name: "Resume session" }).click();
+  await clickSessionAction(page, scenario, "Resume session");
   await expectText(page, `Resume session ${session.id}`);
 }
 
 async function assertMarkdownRendering(page, scenario, sessionId) {
   const heading = `Markdown browser ${scenario.name} ${Date.now()}`;
+  const longPath = `/workspace/${"nested-directory/".repeat(8)}ChatPanel.test.tsx`;
   const markdown = [
     `# ${heading}`,
     "",
     "- rendered list item",
+    `- long inline code \`${longPath}:123\` stays inside the message bubble`,
+    `- long file link [deep file](${longPath}:456) remains contained`,
     "",
     "```ts",
     "const rendered = true;",
+    `const veryLongPath = "${longPath}/${"segment-".repeat(18)}final.ts";`,
     "```",
     "",
     "<div>raw html remains text</div>",
@@ -957,6 +1032,17 @@ async function openTab(page, scenario, tab) {
     .getByRole("navigation", { name: "Tool tabs" })
     .getByRole("button", { name: titleCase(tab) })
     .click();
+}
+
+async function replaceEditorContent(page, fileName, value) {
+  const editor = page.getByLabel(`Edit ${fileName}`, { exact: true });
+  await waitFor(async () => (await editor.count()) > 0, `editor ${fileName}`);
+  await page
+    .locator(".monaco-file-editor")
+    .click({ position: { x: 24, y: 24 } });
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+A`);
+  await page.keyboard.insertText(value);
 }
 
 async function ensureRunnerOnline() {
@@ -1313,6 +1399,7 @@ function pass(message) {
 }
 
 async function captureScreenshot(page, scenario, label) {
+  await assertNoLayoutOverflow(page, scenario, label);
   await mkdir(artifactDir, { recursive: true });
   const sequence = String(screenshots.length + 1).padStart(2, "0");
   const name = `${sequence}-${slugify(scenario.name)}-${slugify(label)}.png`;
@@ -1323,6 +1410,88 @@ async function captureScreenshot(page, scenario, label) {
     label,
     relativePath: `./${name}`,
   });
+}
+
+async function assertNoLayoutOverflow(page, scenario, label) {
+  const metrics = await page.evaluate(() => {
+    const viewportWidth = window.innerWidth;
+    const documentWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body?.scrollWidth ?? 0,
+    );
+    const criticalSelectors = [
+      ".app-shell",
+      ".app-grid",
+      ".chat-column",
+      ".message-list",
+      ".composer",
+      ".bottom-tabs",
+      ".tablet-tabs",
+      ".left-column",
+      ".workspace-column",
+    ];
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none"
+      );
+    };
+    const serialize = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        selector:
+          element.className && typeof element.className === "string"
+            ? `.${element.className.trim().replace(/\s+/g, ".")}`
+            : element.tagName.toLowerCase(),
+        left: Math.round(rect.left * 100) / 100,
+        right: Math.round(rect.right * 100) / 100,
+        width: Math.round(rect.width * 100) / 100,
+      };
+    };
+    const critical = criticalSelectors.flatMap((selector) =>
+      Array.from(document.querySelectorAll(selector)).filter(isVisible).map(serialize),
+    );
+    const criticalOverflow = critical.filter(
+      (entry) =>
+        entry.left < -1 ||
+        entry.right > viewportWidth + 1 ||
+        entry.width > viewportWidth + 1,
+    );
+    const messageOverflow = Array.from(
+      document.querySelectorAll(".message-list *"),
+    )
+      .filter(isVisible)
+      .map(serialize)
+      .filter((entry) => entry.left < -1 || entry.right > viewportWidth + 1)
+      .slice(0, 8);
+
+    return {
+      viewportWidth,
+      documentWidth,
+      criticalOverflow,
+      messageOverflow,
+    };
+  });
+
+  if (metrics.documentWidth > metrics.viewportWidth + 1) {
+    throw new Error(
+      `${scenario.name}/${label} document overflow: ${JSON.stringify(metrics)}`,
+    );
+  }
+  if (
+    metrics.criticalOverflow.length > 0 ||
+    metrics.messageOverflow.length > 0
+  ) {
+    throw new Error(
+      `${scenario.name}/${label} visible layout overflow: ${JSON.stringify(
+        metrics,
+      )}`,
+    );
+  }
 }
 
 async function writeReport(status, error) {

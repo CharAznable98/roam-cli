@@ -10,6 +10,7 @@ import {
   CircleStop,
   ImagePlus,
   LoaderCircle,
+  MoreHorizontal,
   Pencil,
   Play,
   Send,
@@ -22,6 +23,7 @@ import {
   FormEvent,
   KeyboardEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -86,10 +88,13 @@ export function ChatPanel({
   const [renameDraft, setRenameDraft] = useState(session.title);
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const [renameError, setRenameError] = useState<string | undefined>();
+  const [sessionActionsOpen, setSessionActionsOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const sessionActionsRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const sessionActionMenuId = useId();
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
@@ -130,10 +135,39 @@ export function ChatPanel({
 
   useEffect(() => {
     setRenameDialogOpen(false);
+    setSessionActionsOpen(false);
     setRenameDraft(session.title);
     setRenameSubmitting(false);
     setRenameError(undefined);
   }, [session.id, session.title]);
+
+  useEffect(() => {
+    if (!sessionActionsOpen) {
+      return;
+    }
+
+    const closeOnOutsidePointer = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        !sessionActionsRef.current?.contains(target)
+      ) {
+        setSessionActionsOpen(false);
+      }
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSessionActionsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [sessionActionsOpen]);
 
   useEffect(() => {
     if (renameDialogOpen) {
@@ -263,6 +297,11 @@ export function ChatPanel({
     renameDraft.trim().length > 0 &&
     renameDraft.trim() !== session.title;
 
+  const runMenuAction = (action: () => void) => {
+    setSessionActionsOpen(false);
+    action();
+  };
+
   return (
     <section className="chat-column" aria-label="Conversation">
       <div className="chat-header">
@@ -290,9 +329,9 @@ export function ChatPanel({
             {session.agent} on {session.runnerId} · {session.cwd}
           </p>
         </button>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="session-header-actions" ref={sessionActionsRef}>
           <button
-            className="icon-button"
+            className="icon-button session-action-inline"
             type="button"
             aria-label="Rename session"
             title="Rename session"
@@ -302,7 +341,7 @@ export function ChatPanel({
             <Pencil size={17} />
           </button>
           <button
-            className="icon-button"
+            className="icon-button session-action-inline"
             type="button"
             aria-label="Resume session"
             title="Resume session"
@@ -312,7 +351,7 @@ export function ChatPanel({
             <Play size={17} />
           </button>
           <button
-            className="icon-button"
+            className="icon-button session-action-inline"
             type="button"
             aria-label="Stop session"
             title="Stop session"
@@ -322,7 +361,7 @@ export function ChatPanel({
             <CircleStop size={17} />
           </button>
           <button
-            className="icon-button"
+            className="icon-button session-action-inline"
             type="button"
             aria-label="Delete session"
             title="Delete session"
@@ -330,6 +369,72 @@ export function ChatPanel({
           >
             <Trash2 size={17} />
           </button>
+          <div className="session-action-menu">
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Session actions"
+              aria-controls={sessionActionMenuId}
+              aria-expanded={sessionActionsOpen}
+              aria-haspopup="menu"
+              title="Session actions"
+              onClick={() => setSessionActionsOpen((open) => !open)}
+            >
+              <MoreHorizontal size={17} />
+            </button>
+            {sessionActionsOpen ? (
+              <div
+                className="session-action-menu-panel"
+                id={sessionActionMenuId}
+                role="menu"
+                aria-label="Session actions"
+              >
+                <button
+                  className="session-action-menu-item"
+                  type="button"
+                  role="menuitem"
+                  aria-label="Rename session"
+                  disabled={!onRename}
+                  onClick={() => runMenuAction(openRenameDialog)}
+                >
+                  <Pencil size={16} />
+                  <span>Rename</span>
+                </button>
+                <button
+                  className="session-action-menu-item"
+                  type="button"
+                  role="menuitem"
+                  aria-label="Resume session"
+                  disabled={!canControl}
+                  onClick={() => runMenuAction(() => onControl?.("resume"))}
+                >
+                  <Play size={16} />
+                  <span>Resume</span>
+                </button>
+                <button
+                  className="session-action-menu-item"
+                  type="button"
+                  role="menuitem"
+                  aria-label="Stop session"
+                  disabled={!canControl}
+                  onClick={() => runMenuAction(() => onControl?.("stop"))}
+                >
+                  <CircleStop size={16} />
+                  <span>Stop</span>
+                </button>
+                <button
+                  className="session-action-menu-item danger"
+                  type="button"
+                  role="menuitem"
+                  aria-label="Delete session"
+                  onClick={() => runMenuAction(() => onDelete?.())}
+                >
+                  <Trash2 size={16} />
+                  <span>Delete</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
