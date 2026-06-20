@@ -257,6 +257,53 @@ describe("app reducer", () => {
     expect(next.messages[0]?.content).toBe("partial answer with newer token");
   });
 
+  it("does not let stale session details regress fresher session or approval state", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        sessions: [
+          {
+            ...makeSession("session-1", "project-1"),
+            status: "completed",
+            updatedAt: "2026-06-05T00:00:02.000Z",
+          },
+        ],
+        approvals: [
+          {
+            ...makePatchApproval(),
+            status: "approved",
+            resolvedAt: "2026-06-05T00:00:02.000Z",
+          },
+        ],
+        hunks: [makePatchHunk("hunk-1", "edited")],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+            updatedAt: "2026-06-05T00:00:01.000Z",
+          },
+          messages: [],
+          attachments: [],
+          approvals: [
+            {
+              ...makePatchApproval(),
+              payload: { hunks: [makePatchHunk("hunk-1", "pending")] },
+              status: "pending",
+            },
+          ],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.sessions[0]?.status).toBe("completed");
+    expect(next.approvals[0]?.status).toBe("approved");
+    expect(next.hunks[0]?.status).toBe("edited");
+  });
+
   it("cleans session-owned state when a session is deleted", () => {
     const state: AppState = {
       ...initialAppState,

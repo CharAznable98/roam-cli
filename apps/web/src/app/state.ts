@@ -427,26 +427,82 @@ function mergeSessionDetailState(
   const attachments = detail.attachments ?? [];
   const approvals = detail.approvals ?? [];
   const artifacts = detail.artifacts ?? [];
+  const mergedApprovals = approvals.reduce(
+    (items, approval) => upsertFreshApproval(items, approval),
+    state.approvals,
+  );
+  const detailApprovalIds = new Set(approvals.map((approval) => approval.id));
+  const freshDetailApprovals = mergedApprovals.filter((approval) =>
+    detailApprovalIds.has(approval.id),
+  );
   return {
     ...state,
-    sessions: upsertBy(state.sessions, detail.session, (item) => item.id),
+    sessions: upsertFreshSession(state.sessions, detail.session),
     messages: mergeDetailMessages(state.messages, detail.messages),
     messageAttachments: attachments.reduce(
       (items, attachment) => upsertBy(items, attachment, (item) => item.id),
       state.messageAttachments,
     ),
-    approvals: approvals.reduce(
-      (items, approval) => upsertBy(items, approval, (item) => item.id),
-      state.approvals,
-    ),
+    approvals: mergedApprovals,
     artifacts: artifacts.reduce(
       (items, artifact) => upsertBy(items, artifact, (item) => item.id),
       state.artifacts,
     ),
-    hunks: mergePatchHunks(state.hunks, extractPatchHunks(approvals)),
+    hunks: mergePatchHunks(
+      state.hunks,
+      extractPatchHunks(freshDetailApprovals),
+    ),
     selectedProjectId: state.selectedProjectId || detail.session.projectId,
     selectedSessionId: state.selectedSessionId || detail.session.id,
   };
+}
+
+function upsertFreshSession(items: Session[], next: Session): Session[] {
+  const exists = items.some((item) => item.id === next.id);
+  return exists
+    ? items.map((item) =>
+        item.id === next.id ? freshSession(item, next) : item,
+      )
+    : [next, ...items];
+}
+
+function freshSession(current: Session, next: Session): Session {
+  return Date.parse(next.updatedAt) < Date.parse(current.updatedAt)
+    ? current
+    : next;
+}
+
+function upsertFreshApproval(items: Approval[], next: Approval): Approval[] {
+  const exists = items.some((item) => item.id === next.id);
+  return exists
+    ? items.map((item) =>
+        item.id === next.id ? freshApproval(item, next) : item,
+      )
+    : [next, ...items];
+}
+
+function freshApproval(current: Approval, next: Approval): Approval {
+  if (current.status !== "pending" && next.status === "pending") {
+    return current;
+  }
+
+  const currentResolvedAt = current.resolvedAt
+    ? Date.parse(current.resolvedAt)
+    : undefined;
+  const nextResolvedAt = next.resolvedAt
+    ? Date.parse(next.resolvedAt)
+    : undefined;
+  if (currentResolvedAt !== undefined || nextResolvedAt !== undefined) {
+    if (nextResolvedAt === undefined) {
+      return current;
+    }
+    if (currentResolvedAt === undefined) {
+      return next;
+    }
+    return nextResolvedAt < currentResolvedAt ? current : next;
+  }
+
+  return next;
 }
 
 function mergeDetailMessages(
@@ -592,7 +648,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "session:created" || event.type === "session:updated") {
     return {
       ...state,
-      sessions: upsertBy(state.sessions, event.session, (item) => item.id),
+      sessions: upsertFreshSession(state.sessions, event.session),
       selectedProjectId: state.selectedProjectId || event.session.projectId,
       selectedSessionId: state.selectedSessionId || event.session.id,
     };
@@ -733,10 +789,14 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {
+  const approvals = upsertFreshApproval(state.approvals, approval);
+  const freshApproval = approvals.find((item) => item.id === approval.id);
   return {
     ...state,
-    approvals: upsertBy(state.approvals, approval, (item) => item.id),
-    hunks: mergePatchHunks(state.hunks, extractPatchHunks([approval])),
+    approvals,
+    hunks: freshApproval
+      ? mergePatchHunks(state.hunks, extractPatchHunks([freshApproval]))
+      : state.hunks,
   };
 }
 
