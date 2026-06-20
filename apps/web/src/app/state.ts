@@ -3,6 +3,7 @@ import type {
   Artifact,
   FileContentResult,
   FileNode,
+  Message,
   MessageAttachment,
   Project,
   RunnerRegistration,
@@ -429,10 +430,7 @@ function mergeSessionDetailState(
   return {
     ...state,
     sessions: upsertBy(state.sessions, detail.session, (item) => item.id),
-    messages: detail.messages.reduce(
-      (messages, message) => upsertMessage(messages, message),
-      state.messages,
-    ),
+    messages: mergeDetailMessages(state.messages, detail.messages),
     messageAttachments: attachments.reduce(
       (items, attachment) => upsertBy(items, attachment, (item) => item.id),
       state.messageAttachments,
@@ -449,6 +447,80 @@ function mergeSessionDetailState(
     selectedProjectId: state.selectedProjectId || detail.session.projectId,
     selectedSessionId: state.selectedSessionId || detail.session.id,
   };
+}
+
+function mergeDetailMessages(
+  currentMessages: UiMessage[],
+  detailMessages: Message[],
+): UiMessage[] {
+  return detailMessages.reduce((messages, message) => {
+    const { messages: reconciledMessages, message: reconciledMessage } =
+      reconcileStreamMessage(messages, message);
+    return upsertMessage(
+      reconciledMessages,
+      preserveLongerStreamContent(reconciledMessages, reconciledMessage),
+    );
+  }, currentMessages);
+}
+
+function reconcileStreamMessage(
+  messages: UiMessage[],
+  message: Message,
+): { messages: UiMessage[]; message: Message } {
+  if (!isPersistedStreamMessage(message)) {
+    return { messages, message };
+  }
+
+  const placeholderIndex = messages.findIndex((item) =>
+    isClientStreamPlaceholder(item, message.sessionId),
+  );
+  const placeholder = messages[placeholderIndex];
+  if (!placeholder) {
+    return { messages, message };
+  }
+
+  return {
+    messages: messages.filter((_, index) => index !== placeholderIndex),
+    message:
+      placeholder.content.length > message.content.length
+        ? { ...message, content: placeholder.content }
+        : message,
+  };
+}
+
+function preserveLongerStreamContent(
+  messages: UiMessage[],
+  message: Message,
+): Message {
+  if (!isPersistedStreamMessage(message)) {
+    return message;
+  }
+
+  const existingMessage = messages.find((item) => item.id === message.id);
+  if (
+    existingMessage &&
+    existingMessage.content.length > message.content.length
+  ) {
+    return { ...message, content: existingMessage.content };
+  }
+  return message;
+}
+
+function isPersistedStreamMessage(message: Message): boolean {
+  return (
+    message.role === "assistant" &&
+    message.id.startsWith(`stream_${message.sessionId}_`)
+  );
+}
+
+function isClientStreamPlaceholder(
+  message: UiMessage,
+  sessionId: string,
+): boolean {
+  return (
+    message.role === "assistant" &&
+    message.id.startsWith(`stream-${sessionId}-`)
+  );
 }
 
 function applyServerEvent(state: AppState, event: ServerEvent): AppState {

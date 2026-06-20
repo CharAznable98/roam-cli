@@ -16,11 +16,24 @@ export function mergePatchHunks(
     );
     if (existingIndex >= 0) {
       return items.map((item, index) =>
-        index === existingIndex ? hunk : item,
+        index === existingIndex ? preserveLocalPendingChoice(item, hunk) : item,
       );
     }
     return [...items, hunk];
   }, current);
+}
+
+function preserveLocalPendingChoice(
+  current: SessionPatchHunk,
+  next: SessionPatchHunk,
+): SessionPatchHunk {
+  if (
+    next.status === "pending" &&
+    (current.status === "accepted" || current.status === "rejected")
+  ) {
+    return { ...next, status: current.status };
+  }
+  return next;
 }
 
 export function extractPatchHunks(approvals: Approval[]): SessionPatchHunk[] {

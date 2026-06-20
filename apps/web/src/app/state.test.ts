@@ -91,6 +91,93 @@ describe("app reducer", () => {
     expect(withMessage.messages).toHaveLength(1);
   });
 
+  it("reconciles client stream placeholders when merging persisted session details", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "stream-session-1-100-0",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "partial answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:01.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "partial answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.id).toBe("stream_session-1_100");
+    expect(next.messages[0]?.content).toBe("partial answer with newer token");
+  });
+
+  it("keeps newer local stream content when later session details are shorter", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "stream_session-1_100",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "partial answer with newer token",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:01.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "running",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "partial answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.content).toBe("partial answer with newer token");
+  });
+
   it("cleans session-owned state when a session is deleted", () => {
     const state: AppState = {
       ...initialAppState,

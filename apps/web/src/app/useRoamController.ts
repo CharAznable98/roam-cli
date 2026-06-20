@@ -43,7 +43,8 @@ import { appReducer, initialAppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
-const ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS = 1_500;
+const ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS = 1_500;
+const ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS = 10_000;
 
 export type StreamReconnectInfo = {
   mode: "connecting" | "connected" | "waiting";
@@ -248,25 +249,24 @@ export function useRoamController() {
     let cancelled = false;
     let syncTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
-    const scheduleNextSync = () => {
+    const scheduleNextSync = (delayMs: number) => {
       if (cancelled) {
         return;
       }
-      syncTimer = globalThis.setTimeout(
-        syncStatus,
-        ACTIVE_SESSION_STATUS_SYNC_INTERVAL_MS,
-      );
+      syncTimer = globalThis.setTimeout(syncStatus, delayMs);
     };
 
     const syncStatus = () => {
       const api = apiRef.current;
       if (!api) {
-        scheduleNextSync();
+        scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
         return;
       }
+      let nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS;
       void api
         .fetchSessionDetail(sessionId)
         .then((detail) => {
+          nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS;
           if (!cancelled) {
             dispatch({ type: "sessionDetailMerged", detail });
           }
@@ -275,11 +275,11 @@ export function useRoamController() {
           // Manual status checks surface errors; this background sync only repairs missed events.
         })
         .finally(() => {
-          scheduleNextSync();
+          scheduleNextSync(nextDelayMs);
         });
     };
 
-    scheduleNextSync();
+    scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
     return () => {
       cancelled = true;
       if (syncTimer) {
