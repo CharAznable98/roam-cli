@@ -306,6 +306,7 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
+  let queuedRunnerResponses: Array<Deferred<Response>>;
   let failBootstrapRunners: boolean;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
@@ -333,6 +334,7 @@ describe("App", () => {
     deferredFileContent = new Map();
     deferredGitStatus = new Map();
     deferredGitBlame = new Map();
+    queuedRunnerResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -383,6 +385,10 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/runners") {
+          const queuedResponse = queuedRunnerResponses.shift();
+          if (queuedResponse) {
+            return queuedResponse.promise;
+          }
           if (failBootstrapRunners) {
             return jsonResponse({ message: "backend route unavailable" }, 503);
           }
@@ -858,6 +864,46 @@ describe("App", () => {
       fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
         .length,
     ).toBeGreaterThan(1);
+  });
+
+  it("ignores stale bootstrap failures after a later recovery succeeds", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+
+    failBootstrapRunners = false;
+    const staleFailure = deferred<Response>();
+    const successfulRetry = deferred<Response>();
+    queuedRunnerResponses.push(staleFailure, successfulRetry);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connection settings" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    const reconnectButton = within(dialog).getByRole("button", {
+      name: "Reconnect now",
+    });
+
+    fireEvent.click(reconnectButton);
+    fireEvent.click(reconnectButton);
+
+    await act(async () => {
+      successfulRetry.resolve(jsonResponse({ runners: [runner] }));
+      await successfulRetry.promise;
+    });
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+
+    await act(async () => {
+      staleFailure.resolve(
+        jsonResponse({ message: "stale backend failure" }, 503),
+      );
+      await staleFailure.promise;
+    });
+
+    expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+    expect(screen.queryByText("API connection failed")).not.toBeInTheDocument();
   });
 
   it("checks only the selected session status from the session actions menu", async () => {

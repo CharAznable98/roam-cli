@@ -93,20 +93,23 @@ export function useRoamController() {
     let retryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let retryAttempt = 0;
+    let remoteStateRequestId = 0;
 
     function loadRemoteState(failureMode: "bootstrap" | "notification") {
+      const requestId = ++remoteStateRequestId;
       if (failureMode === "bootstrap") {
         dispatch({ type: "bootstrapStarted" });
       }
       void api
         .loadInitialState()
         .then((remote) => {
-          if (!cancelled) {
-            dispatch({ type: "bootstrapSucceeded", remote });
+          if (cancelled || requestId !== remoteStateRequestId) {
+            return;
           }
+          dispatch({ type: "bootstrapSucceeded", remote });
         })
         .catch((loadError: unknown) => {
-          if (cancelled) {
+          if (cancelled || requestId !== remoteStateRequestId) {
             return;
           }
           const message = errorMessage(loadError);

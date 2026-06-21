@@ -150,6 +150,51 @@ describe("ProjectForm", () => {
     ).toBeInTheDocument();
   });
 
+  it("hides the runner data directory from the directory picker", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const onFetchRunnerDirectoryTree = vi.fn(async () => [
+      directoryNode(".roam-runner", ".roam-runner"),
+      directoryNode("custom-runtime", "custom-runtime"),
+      directoryNode("product", "product"),
+    ]);
+    const onCreateRunnerDirectory = vi.fn();
+
+    render(
+      <ProjectForm
+        runners={[{ ...runners[0]!, dataDir: "custom-runtime" }]}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    const picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+
+    expect(
+      within(picker).queryByRole("treeitem", { name: /custom-runtime/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      await within(picker).findByRole("treeitem", { name: /\.roam-runner/ }),
+    ).toBeInTheDocument();
+    expect(
+      await within(picker).findByRole("treeitem", { name: /product/ }),
+    ).toBeInTheDocument();
+
+    const folderInput = within(picker).getByLabelText("New folder name");
+    fireEvent.change(folderInput, { target: { value: "custom-runtime" } });
+    fireEvent.submit(folderInput.closest("form") as HTMLFormElement);
+
+    expect(
+      await within(picker).findByText(
+        "Folder name is reserved for RoamCli runtime data.",
+      ),
+    ).toBeInTheDocument();
+    expect(onCreateRunnerDirectory).not.toHaveBeenCalled();
+  });
+
   it("ignores stale directory picker loads after a forced reload", async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
     const rootLoads: Array<Deferred<FileNode[]>> = [];

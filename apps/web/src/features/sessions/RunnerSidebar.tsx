@@ -516,6 +516,10 @@ function DirectoryPickerModal({
   const [creating, setCreating] = useState(false);
   const activeLoadRequestsRef = useRef<Record<string, number>>({});
   const nextLoadRequestIdRef = useRef(0);
+  const hiddenDirectoryPaths = useMemo(
+    () => runtimeDirectoryPaths(runner),
+    [runner],
+  );
   const displayDirectory = composeProjectDirectory(
     runner.workspaceRoot,
     draftPath === "." ? "" : draftPath,
@@ -534,7 +538,11 @@ function DirectoryPickerModal({
           return;
         }
         setNodes((current) =>
-          replaceTreeChildren(current, path, filterPickerNodes(children)),
+          replaceTreeChildren(
+            current,
+            path,
+            filterPickerNodes(children, hiddenDirectoryPaths),
+          ),
         );
         setPathStates((current) => ({ ...current, [path]: "ready" }));
       })
@@ -559,7 +567,11 @@ function DirectoryPickerModal({
 
   const createFolder = async () => {
     const cleanName = folderName.trim();
-    const validation = validateFolderName(cleanName);
+    const validation = validateFolderName(
+      cleanName,
+      draftPath,
+      hiddenDirectoryPaths,
+    );
     if (validation) {
       setError(validation);
       return;
@@ -577,7 +589,7 @@ function DirectoryPickerModal({
       });
       if (parentLoaded) {
         setNodes((current) =>
-          shouldShowPickerNode(result.node)
+          shouldShowPickerNode(result.node, hiddenDirectoryPaths)
             ? upsertTreeChild(current, parentPath, result.node)
             : current,
         );
@@ -670,21 +682,34 @@ function DirectoryPickerModal({
   );
 }
 
-function filterPickerNodes(nodes: FileNode[]): FileNode[] {
+function filterPickerNodes(
+  nodes: FileNode[],
+  hiddenDirectoryPaths: Set<string>,
+): FileNode[] {
   return nodes
-    .filter(shouldShowPickerNode)
+    .filter((node) => shouldShowPickerNode(node, hiddenDirectoryPaths))
     .map((node) =>
       node.children
-        ? { ...node, children: filterPickerNodes(node.children) }
+        ? {
+            ...node,
+            children: filterPickerNodes(node.children, hiddenDirectoryPaths),
+          }
         : node,
     );
 }
 
-function shouldShowPickerNode(node: FileNode): boolean {
-  return node.name !== ".roam-runner";
+function shouldShowPickerNode(
+  node: FileNode,
+  hiddenDirectoryPaths: Set<string>,
+): boolean {
+  return !hiddenDirectoryPaths.has(normalizePickerPath(node.path));
 }
 
-function validateFolderName(name: string): string | undefined {
+function validateFolderName(
+  name: string,
+  parentPath: string,
+  hiddenDirectoryPaths: Set<string>,
+): string | undefined {
   if (
     name.length === 0 ||
     name === "." ||
@@ -694,10 +719,28 @@ function validateFolderName(name: string): string | undefined {
   ) {
     return "Folder name must be a single directory name.";
   }
-  if (name === ".roam-runner") {
+  if (hiddenDirectoryPaths.has(childPickerPath(parentPath, name))) {
     return "Folder name is reserved for RoamCli runtime data.";
   }
   return undefined;
+}
+
+function runtimeDirectoryPaths(runner: RunnerRegistration): Set<string> {
+  return new Set([normalizePickerPath(runner.dataDir ?? ".roam-runner")]);
+}
+
+function childPickerPath(parentPath: string, childName: string): string {
+  return normalizePickerPath(
+    parentPath === "." ? childName : `${parentPath}/${childName}`,
+  );
+}
+
+function normalizePickerPath(path: string): string {
+  const normalized = path
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+  return normalized || ".";
 }
 
 function errorMessage(error: unknown, fallback: string): string {
