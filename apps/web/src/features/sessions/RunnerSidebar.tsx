@@ -1,4 +1,6 @@
 import type {
+  DirectoryCreateResult,
+  FileNode,
   Project,
   RunnerRegistration,
   Session,
@@ -14,7 +16,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
 import type {
   AgentSkillFetcher,
@@ -25,6 +35,22 @@ import {
   projectDirectoryName,
 } from "./project-directory";
 import { StatusPill } from "../../shared/components/StatusPill";
+import { LazyFileTree, type TreePathStates } from "../files/LazyFileTree";
+import {
+  isTreeDirectoryLoaded,
+  replaceTreeChildren,
+  upsertTreeChild,
+} from "../files/tree-model";
+
+type FetchRunnerDirectoryTree = (
+  runnerId: string,
+  options?: { path?: string; depth?: number },
+) => Promise<FileNode[]>;
+
+type CreateRunnerDirectory = (
+  runnerId: string,
+  input: { parentPath: string; name: string },
+) => Promise<DirectoryCreateResult>;
 
 type RunnerSidebarProps = {
   projects: Project[];
@@ -39,6 +65,8 @@ type RunnerSidebarProps = {
     runnerId: string;
     directory: string;
   }) => void | Promise<void>;
+  onFetchRunnerDirectoryTree: FetchRunnerDirectoryTree;
+  onCreateRunnerDirectory: CreateRunnerDirectory;
   onArchiveProject: (projectId: string) => void;
   onCreateSession: (
     projectId: string,
@@ -57,6 +85,8 @@ export function RunnerSidebar({
   onSelectProject,
   onSelectSession,
   onCreateProject,
+  onFetchRunnerDirectoryTree,
+  onCreateRunnerDirectory,
   onArchiveProject,
   onCreateSession,
   onListAgentSkills,
@@ -237,6 +267,8 @@ export function RunnerSidebar({
           <ProjectForm
             runners={runners}
             onCreate={onCreateProject}
+            onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+            onCreateRunnerDirectory={onCreateRunnerDirectory}
             onCreated={() => setProjectModalOpen(false)}
           />
         </SidebarModal>
@@ -316,6 +348,8 @@ export function SidebarModal({
 export function ProjectForm({
   runners,
   onCreate,
+  onFetchRunnerDirectoryTree,
+  onCreateRunnerDirectory,
   onCreated,
 }: {
   runners: RunnerRegistration[];
@@ -324,17 +358,23 @@ export function ProjectForm({
     runnerId: string;
     directory: string;
   }) => void | Promise<void>;
+  onFetchRunnerDirectoryTree: FetchRunnerDirectoryTree;
+  onCreateRunnerDirectory: CreateRunnerDirectory;
   onCreated?: () => void;
 }) {
   const directoryLabelId = useId();
   const [name, setName] = useState("");
   const [runnerId, setRunnerId] = useState(runners[0]?.runnerId ?? "");
   const [directorySuffix, setDirectorySuffix] = useState("");
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const selectedRunner =
     runners.find((runner) => runner.runnerId === runnerId) ?? runners[0];
   const runnerBaseDirectory = selectedRunner?.workspaceRoot ?? "";
+  const directoryValue = selectedRunner
+    ? composeProjectDirectory(runnerBaseDirectory, directorySuffix)
+    : "";
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -375,77 +415,266 @@ export function ProjectForm({
   };
 
   return (
-    <form className="sidebar-project-form" onSubmit={submit}>
-      <label className="field">
-        <span>Name</span>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Optional project name"
-        />
-      </label>
-      <label className="field">
-        <span>Runner</span>
-        <select
-          value={runnerId}
-          onChange={(event) => {
-            const next = event.target.value;
-            setRunnerId(next);
-            setDirectorySuffix("");
+    <>
+      <form className="sidebar-project-form" onSubmit={submit}>
+        <label className="field">
+          <span>Name</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Optional project name"
+          />
+        </label>
+        <label className="field">
+          <span>Runner</span>
+          <select
+            value={runnerId}
+            onChange={(event) => {
+              const next = event.target.value;
+              setRunnerId(next);
+              setDirectorySuffix("");
+              setError("");
+            }}
+          >
+            {runners.map((runner) => (
+              <option key={runner.runnerId} value={runner.runnerId}>
+                {runner.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="field">
+          <span id={directoryLabelId}>Directory</span>
+          <button
+            className="directory-select-button"
+            type="button"
+            aria-labelledby={directoryLabelId}
+            disabled={!selectedRunner}
+            onClick={() => setDirectoryPickerOpen(true)}
+          >
+            <span className="truncate">
+              {directoryValue || "Choose a directory"}
+            </span>
+            <Folder size={15} />
+          </button>
+        </div>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="form-actions">
+          <button
+            className="primary-action-button"
+            type="submit"
+            title="Create project"
+            disabled={submitting}
+          >
+            <FolderPlus size={16} />
+            <span>{submitting ? "Creating project..." : "Create project"}</span>
+          </button>
+        </div>
+      </form>
+      {directoryPickerOpen && selectedRunner ? (
+        <DirectoryPickerModal
+          runner={selectedRunner}
+          selectedPath={directorySuffix || "."}
+          onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+          onCreateRunnerDirectory={onCreateRunnerDirectory}
+          onChoose={(path) => {
+            setDirectorySuffix(path === "." ? "" : path);
             setError("");
+            setDirectoryPickerOpen(false);
+          }}
+          onClose={() => setDirectoryPickerOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function DirectoryPickerModal({
+  runner,
+  selectedPath,
+  onFetchRunnerDirectoryTree,
+  onCreateRunnerDirectory,
+  onChoose,
+  onClose,
+}: {
+  runner: RunnerRegistration;
+  selectedPath: string;
+  onFetchRunnerDirectoryTree: FetchRunnerDirectoryTree;
+  onCreateRunnerDirectory: CreateRunnerDirectory;
+  onChoose: (path: string) => void;
+  onClose: () => void;
+}) {
+  const [nodes, setNodes] = useState<FileNode[]>([]);
+  const [pathStates, setPathStates] = useState<TreePathStates>({});
+  const [draftPath, setDraftPath] = useState(selectedPath || ".");
+  const [folderName, setFolderName] = useState("");
+  const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const activeLoadRequestsRef = useRef<Record<string, number>>({});
+  const nextLoadRequestIdRef = useRef(0);
+  const displayDirectory = composeProjectDirectory(
+    runner.workspaceRoot,
+    draftPath === "." ? "" : draftPath,
+  );
+
+  const loadDirectory = (path: string, options: { force?: boolean } = {}) => {
+    if (!options.force && pathStates[path] === "ready") {
+      return;
+    }
+    const requestId = ++nextLoadRequestIdRef.current;
+    activeLoadRequestsRef.current[path] = requestId;
+    setPathStates((current) => ({ ...current, [path]: "loading" }));
+    void onFetchRunnerDirectoryTree(runner.runnerId, { path, depth: 1 })
+      .then((children) => {
+        if (activeLoadRequestsRef.current[path] !== requestId) {
+          return;
+        }
+        setNodes((current) => replaceTreeChildren(current, path, children));
+        setPathStates((current) => ({ ...current, [path]: "ready" }));
+      })
+      .catch((loadError: unknown) => {
+        if (activeLoadRequestsRef.current[path] !== requestId) {
+          return;
+        }
+        setPathStates((current) => ({ ...current, [path]: "error" }));
+        setError(errorMessage(loadError, "Directory could not be loaded."));
+      });
+  };
+
+  useEffect(() => {
+    activeLoadRequestsRef.current = {};
+    setNodes([]);
+    setPathStates({});
+    setDraftPath(selectedPath || ".");
+    loadDirectory(".", { force: true });
+    // The modal is remounted when the runner changes; this effect initializes its tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runner.runnerId, selectedPath]);
+
+  const createFolder = async () => {
+    const cleanName = folderName.trim();
+    const validation = validateFolderName(cleanName);
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setCreating(true);
+    const parentPath = draftPath;
+    const parentLoaded =
+      parentPath === "."
+        ? pathStates[parentPath] === "ready"
+        : isTreeDirectoryLoaded(nodes, parentPath);
+    try {
+      const result = await onCreateRunnerDirectory(runner.runnerId, {
+        parentPath,
+        name: cleanName,
+      });
+      if (parentLoaded) {
+        setNodes((current) => upsertTreeChild(current, parentPath, result.node));
+      } else {
+        loadDirectory(parentPath, { force: true });
+      }
+      setPathStates((current) => ({
+        ...current,
+        ...(parentLoaded ? { [parentPath]: "ready" as const } : {}),
+        [result.path]: "ready",
+      }));
+      setDraftPath(result.path);
+      setFolderName("");
+      setError("");
+    } catch (createError: unknown) {
+      setError(errorMessage(createError, "Directory was not created."));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <SidebarModal title="Choose directory" onClose={onClose}>
+      <div className="directory-picker">
+        <div className="directory-picker-current">
+          <span>{runner.displayName}</span>
+          <strong>{displayDirectory}</strong>
+        </div>
+        <div className="directory-picker-tree" role="tree">
+          <button
+            className={`tree-row ${draftPath === "." ? "is-selected" : ""}`}
+            type="button"
+            role="treeitem"
+            aria-expanded
+            onClick={() => setDraftPath(".")}
+          >
+            <Folder size={15} />
+            <span className="truncate">{runner.workspaceRoot}</span>
+          </button>
+          <LazyFileTree
+            nodes={nodes}
+            selectedDirectoryPath={draftPath}
+            pathStates={pathStates}
+            onSelectDirectory={setDraftPath}
+            onLoadDirectory={loadDirectory}
+            resetKey={runner.runnerId}
+          />
+        </div>
+        <form
+          className="directory-create-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void createFolder();
           }}
         >
-          {runners.map((runner) => (
-            <option key={runner.runnerId} value={runner.runnerId}>
-              {runner.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="field">
-        <span id={directoryLabelId}>Directory</span>
-        <div className="directory-prefix-field">
           <input
-            className="directory-base-input"
-            aria-label="Runner base"
-            value={runnerBaseDirectory}
-            readOnly
-            tabIndex={-1}
-          />
-          <span className="directory-separator" aria-hidden="true">
-            {runnerBaseDirectory === "/" ? "" : "/"}
-          </span>
-          <input
-            className="directory-suffix-input"
-            aria-labelledby={directoryLabelId}
-            value={directorySuffix}
-            aria-invalid={error ? true : undefined}
-            placeholder="project"
+            value={folderName}
+            aria-label="New folder name"
+            placeholder="New folder"
             onChange={(event) => {
-              setDirectorySuffix(event.target.value);
+              setFolderName(event.target.value);
               setError("");
             }}
           />
+          <button className="small-button" type="submit" disabled={creating}>
+            <FolderPlus size={15} />
+            <span>{creating ? "Creating..." : "New folder"}</span>
+          </button>
+        </form>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="form-actions">
+          <button className="small-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="primary-action-button"
+            type="button"
+            onClick={() => onChoose(draftPath)}
+          >
+            <Folder size={16} />
+            <span>Choose</span>
+          </button>
         </div>
       </div>
-      {error ? (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <div className="form-actions">
-        <button
-          className="primary-action-button"
-          type="submit"
-          title="Create project"
-          disabled={submitting}
-        >
-          <FolderPlus size={16} />
-          <span>{submitting ? "Creating project..." : "Create project"}</span>
-        </button>
-      </div>
-    </form>
+    </SidebarModal>
   );
+}
+
+function validateFolderName(name: string): string | undefined {
+  if (
+    name.length === 0 ||
+    name === "." ||
+    name === ".." ||
+    name.includes("/") ||
+    name.includes("\\")
+  ) {
+    return "Folder name must be a single directory name.";
+  }
+  return undefined;
 }
 
 function errorMessage(error: unknown, fallback: string): string {

@@ -3,6 +3,7 @@ import type {
   Artifact,
   FileContentResult,
   FileNode,
+  FileTreeResult,
   Message,
   MessageAttachment,
   Project,
@@ -28,6 +29,7 @@ import type {
   SessionDetailPayload,
 } from "../api/contracts";
 import type { WorkspaceTab } from "./navigation";
+import { replaceTreeChildren } from "../features/files/tree-model";
 
 export type LoadState = "loading" | "ready" | "error";
 export type ConnectionState = "open" | "closed" | "error";
@@ -51,6 +53,9 @@ export interface AppState {
   hunks: SessionPatchHunk[];
   filesBySession: Record<string, FileNode[]>;
   fileTreeState: Record<string, AsyncState>;
+  fileTreePathState: Record<string, Record<string, AsyncState>>;
+  fileTreeRequestIds: Record<string, Record<string, string>>;
+  staleFileTreeRequestIds: Record<string, true>;
   selectedFilePath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
@@ -78,6 +83,9 @@ export const initialAppState: AppState = {
   hunks: [],
   filesBySession: {},
   fileTreeState: {},
+  fileTreePathState: {},
+  fileTreeRequestIds: {},
+  staleFileTreeRequestIds: {},
   selectedFilePath: "",
   fileContent: undefined,
   editorContent: "",
@@ -131,9 +139,29 @@ export type AppAction =
       type: "sessionWorkspaceLoading";
       sessionId: string;
       resetSelection: boolean;
+      requestId?: string;
     }
-  | { type: "fileTreeLoaded"; sessionId: string; files: FileNode[] }
-  | { type: "fileTreeFailed"; sessionId: string; message: string }
+  | {
+      type: "fileTreePathLoading";
+      sessionId: string;
+      path: string;
+      resetTree?: boolean;
+      requestId?: string;
+    }
+  | {
+      type: "fileTreeLoaded";
+      sessionId: string;
+      path: string;
+      files: FileNode[];
+      requestId?: string;
+    }
+  | {
+      type: "fileTreeFailed";
+      sessionId: string;
+      path: string;
+      message: string;
+      requestId?: string;
+    }
   | { type: "fileContentLoading"; path: string }
   | { type: "fileContentLoaded"; result: FileContentResult }
   | { type: "fileContentFailed"; message: string }
@@ -258,7 +286,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         fileContentState: "idle",
         fileSaveState: "idle",
       };
-    case "sessionWorkspaceUnavailable":
+    case "sessionWorkspaceUnavailable": {
+      const removedRequestIds = action.resetSelection
+        ? Object.values(state.fileTreeRequestIds[action.sessionId] ?? {})
+        : [];
       return {
         ...state,
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
@@ -275,7 +306,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state.fileTreeState,
           [action.sessionId]: "idle",
         },
+        fileTreePathState: action.resetSelection
+          ? omitKey(state.fileTreePathState, action.sessionId)
+          : state.fileTreePathState,
+        fileTreeRequestIds: action.resetSelection
+          ? omitKey(state.fileTreeRequestIds, action.sessionId)
+          : state.fileTreeRequestIds,
+        staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+          state.staleFileTreeRequestIds,
+          removedRequestIds,
+        ),
       };
+    }
     case "approvalUpserted":
       return upsertApprovalState(state, action.approval);
     case "hunkResolved":
@@ -335,27 +377,102 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ...state.fileTreeState,
           [action.sessionId]: "loading",
         },
+        fileTreePathState: {
+          ...state.fileTreePathState,
+          [action.sessionId]: { ".": "loading" },
+        },
+        ...nextFileTreeRequestTracking(
+          state,
+          action.sessionId,
+          ".",
+          action.requestId,
+          true,
+        ),
       };
-    case "fileTreeLoaded":
+    case "fileTreePathLoading":
       return {
         ...state,
-        filesBySession: {
-          ...state.filesBySession,
-          [action.sessionId]: action.files,
-        },
+        filesBySession: action.resetTree
+          ? omitKey(state.filesBySession, action.sessionId)
+          : state.filesBySession,
         fileTreeState: {
           ...state.fileTreeState,
-          [action.sessionId]: "ready",
+          [action.sessionId]:
+            action.path === "."
+              ? "loading"
+              : (state.fileTreeState[action.sessionId] ?? "ready"),
         },
+        fileTreePathState: {
+          ...state.fileTreePathState,
+          [action.sessionId]: {
+            ...(action.resetTree
+              ? {}
+              : state.fileTreePathState[action.sessionId]),
+            [action.path]: "loading",
+          },
+        },
+        ...nextFileTreeRequestTracking(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+          action.resetTree === true,
+        ),
       };
+    case "fileTreeLoaded":
+      if (
+        !isCurrentFileTreeRequest(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+        )
+      ) {
+        return state;
+      }
+      return applyLoadedFileTree(
+        state,
+        action.sessionId,
+        action.path,
+        action.files,
+      );
     case "fileTreeFailed":
+      if (
+        !isCurrentFileTreeRequest(
+          state,
+          action.sessionId,
+          action.path,
+          action.requestId,
+        )
+      ) {
+        return state;
+      }
       return pushNotification(
         {
           ...state,
           fileTreeState: {
             ...state.fileTreeState,
-            [action.sessionId]: "error",
+            [action.sessionId]:
+              action.path === "."
+                ? "error"
+                : (state.fileTreeState[action.sessionId] ?? "ready"),
           },
+          fileTreePathState: {
+            ...state.fileTreePathState,
+            [action.sessionId]: {
+              ...state.fileTreePathState[action.sessionId],
+              [action.path]: "error",
+            },
+          },
+          fileTreeRequestIds: removeFileTreeRequestId(
+            state.fileTreeRequestIds,
+            action.sessionId,
+            action.path,
+          ),
+          staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+            state.staleFileTreeRequestIds,
+            action.requestId === undefined ? [] : [action.requestId],
+          ),
         },
         "File tree request failed",
         action.message,
@@ -375,7 +492,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ? {
             ...state,
             fileContent: action.result,
-            editorContent: action.result.content,
+            editorContent:
+              action.result.kind === undefined || action.result.kind === "text"
+                ? action.result.content
+                : "",
             fileContentState: "ready",
           }
         : state;
@@ -728,19 +848,31 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     };
   }
   if (event.type === "file:tree") {
-    return {
-      ...state,
-      filesBySession: {
-        ...state.filesBySession,
-        [event.result.sessionId]: event.result.root.children ?? [
-          event.result.root,
-        ],
+    const path = event.result.root.path;
+    const requestId = fileTreeRequestGeneration(event.result);
+    if (
+      !shouldApplyFileTreeEvent(
+        state,
+        event.result.sessionId,
+        path,
+        requestId,
+      )
+    ) {
+      return state;
+    }
+    return applyLoadedFileTree(
+      state,
+      event.result.sessionId,
+      path,
+      event.result.root.children ?? [],
+      {
+        staleAncestorRequests: !isTrackedFileTreeRequest(
+          state,
+          event.result.sessionId,
+          requestId,
+        ),
       },
-      fileTreeState: {
-        ...state.fileTreeState,
-        [event.result.sessionId]: "ready",
-      },
-    };
+    );
   }
   if (
     event.type === "file:content" &&
@@ -750,7 +882,10 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       fileContent: event.result,
-      editorContent: event.result.content,
+      editorContent:
+        event.result.kind === undefined || event.result.kind === "text"
+          ? event.result.content
+          : "",
       fileContentState: "ready",
     };
   }
@@ -818,7 +953,262 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     hunks: state.hunks.filter((hunk) => hunk.sessionId !== sessionId),
     filesBySession: omitKey(state.filesBySession, sessionId),
     fileTreeState: omitKey(state.fileTreeState, sessionId),
+    fileTreePathState: omitKey(state.fileTreePathState, sessionId),
+    fileTreeRequestIds: omitKey(state.fileTreeRequestIds, sessionId),
   };
+}
+
+function isCurrentFileTreeRequest(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string | undefined,
+): boolean {
+  if (requestId === undefined) {
+    return state.fileTreePathState[sessionId]?.[path] === "loading";
+  }
+  if (state.staleFileTreeRequestIds[requestId]) {
+    return false;
+  }
+  return state.fileTreeRequestIds[sessionId]?.[path] === requestId;
+}
+
+function isTrackedFileTreeRequest(
+  state: AppState,
+  sessionId: string,
+  requestId: string,
+): boolean {
+  return Object.values(state.fileTreeRequestIds[sessionId] ?? {}).includes(
+    requestId,
+  );
+}
+
+function fileTreeRequestGeneration(result: FileTreeResult): string {
+  return result.clientRequestId ?? result.requestId;
+}
+
+function shouldApplyFileTreeEvent(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string,
+): boolean {
+  if (state.staleFileTreeRequestIds[requestId]) {
+    return false;
+  }
+  if (path !== "." && state.fileTreePathState[sessionId]?.["."] === "loading") {
+    return false;
+  }
+  // Broadcasts that survive the stale/root guards may supersede pending local
+  // loads; applyLoadedFileTree prunes the covered request ids.
+  return true;
+}
+
+function isFileTreePathLoading(
+  state: AppState,
+  sessionId: string,
+  path: string,
+): boolean {
+  return state.fileTreePathState[sessionId]?.[path] === "loading";
+}
+
+type PrunePathEntries = <T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+) => Record<string, T>;
+
+function applyLoadedFileTree(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  files: FileNode[],
+  options: { staleAncestorRequests?: boolean } = {},
+): AppState {
+  const requestIdsByPath = state.fileTreeRequestIds[sessionId] ?? {};
+  const pruneCoveredPathEntries: PrunePathEntries =
+    options.staleAncestorRequests
+      ? pruneOverlappingPathEntries
+      : pruneDescendantPathEntries;
+  const removedRequestIds = options.staleAncestorRequests
+    ? overlappingPathEntryValues(requestIdsByPath, path)
+    : descendantPathEntryValues(requestIdsByPath, path);
+  return {
+    ...state,
+    filesBySession: {
+      ...state.filesBySession,
+      [sessionId]: replaceTreeChildren(
+        state.filesBySession[sessionId] ?? [],
+        path,
+        files,
+      ),
+    },
+    fileTreeState: {
+      ...state.fileTreeState,
+      [sessionId]: "ready",
+    },
+    fileTreePathState: {
+      ...state.fileTreePathState,
+      [sessionId]: {
+        ...pruneCoveredPathEntries(
+          state.fileTreePathState[sessionId] ?? {},
+          path,
+        ),
+        [path]: "ready",
+      },
+    },
+    fileTreeRequestIds: pruneFileTreeRequestIds(
+      state.fileTreeRequestIds,
+      sessionId,
+      path,
+      pruneCoveredPathEntries,
+    ),
+    staleFileTreeRequestIds: markStaleFileTreeRequestIds(
+      state.staleFileTreeRequestIds,
+      removedRequestIds,
+    ),
+  };
+}
+
+function nextFileTreeRequestTracking(
+  state: AppState,
+  sessionId: string,
+  path: string,
+  requestId: string | undefined,
+  resetTree: boolean,
+): Pick<AppState, "fileTreeRequestIds" | "staleFileTreeRequestIds"> {
+  if (requestId === undefined) {
+    return {
+      fileTreeRequestIds: state.fileTreeRequestIds,
+      staleFileTreeRequestIds: state.staleFileTreeRequestIds,
+    };
+  }
+
+  const currentSessionRequests = state.fileTreeRequestIds[sessionId] ?? {};
+  const replacedRequestIds = resetTree
+    ? Object.values(currentSessionRequests)
+    : [currentSessionRequests[path]].filter(
+        (value): value is string => value !== undefined,
+      );
+  const staleFileTreeRequestIds = markStaleFileTreeRequestIds(
+    state.staleFileTreeRequestIds,
+    replacedRequestIds.filter((value) => value !== requestId),
+  );
+  return {
+    fileTreeRequestIds: {
+      ...state.fileTreeRequestIds,
+      [sessionId]: {
+        ...(resetTree ? {} : currentSessionRequests),
+        [path]: requestId,
+      },
+    },
+    staleFileTreeRequestIds,
+  };
+}
+
+function markStaleFileTreeRequestIds(
+  current: Record<string, true>,
+  requestIds: string[],
+): Record<string, true> {
+  if (requestIds.length === 0) {
+    return current;
+  }
+  return {
+    ...current,
+    ...Object.fromEntries(requestIds.map((requestId) => [requestId, true])),
+  };
+}
+
+function removeFileTreeRequestId(
+  requestIdsBySession: Record<string, Record<string, string>>,
+  sessionId: string,
+  path: string,
+): Record<string, Record<string, string>> {
+  return pruneFileTreeRequestIds(requestIdsBySession, sessionId, path);
+}
+
+function pruneFileTreeRequestIds(
+  requestIdsBySession: Record<string, Record<string, string>>,
+  sessionId: string,
+  path: string,
+  prunePathEntries: PrunePathEntries = pruneDescendantPathEntries,
+): Record<string, Record<string, string>> {
+  const sessionRequestIds = requestIdsBySession[sessionId];
+  if (!sessionRequestIds) {
+    return requestIdsBySession;
+  }
+  const nextSessionRequestIds = prunePathEntries(sessionRequestIds, path);
+  if (Object.keys(nextSessionRequestIds).length === 0) {
+    return omitKey(requestIdsBySession, sessionId);
+  }
+  return {
+    ...requestIdsBySession,
+    [sessionId]: nextSessionRequestIds,
+  };
+}
+
+function pruneDescendantPathEntries<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): Record<string, T> {
+  if (path === ".") {
+    return {};
+  }
+  const prefix = `${path}/`;
+  return Object.fromEntries(
+    Object.entries(entriesByPath).filter(([candidate]) => {
+      return candidate !== path && !candidate.startsWith(prefix);
+    }),
+  );
+}
+
+function pruneOverlappingPathEntries<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): Record<string, T> {
+  if (path === ".") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(entriesByPath).filter(([candidate]) => {
+      return !isOverlappingTreePath(candidate, path);
+    }),
+  );
+}
+
+function descendantPathEntryValues<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): T[] {
+  if (path === ".") {
+    return Object.values(entriesByPath);
+  }
+  const prefix = `${path}/`;
+  return Object.entries(entriesByPath)
+    .filter(([candidate]) => candidate === path || candidate.startsWith(prefix))
+    .map(([, value]) => value);
+}
+
+function overlappingPathEntryValues<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): T[] {
+  if (path === ".") {
+    return Object.values(entriesByPath);
+  }
+  return Object.entries(entriesByPath)
+    .filter(([candidate]) => isOverlappingTreePath(candidate, path))
+    .map(([, value]) => value);
+}
+
+function isOverlappingTreePath(candidate: string, path: string): boolean {
+  if (candidate === ".") {
+    return false;
+  }
+  return (
+    candidate === path ||
+    candidate.startsWith(`${path}/`) ||
+    path.startsWith(`${candidate}/`)
+  );
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {

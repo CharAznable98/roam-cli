@@ -166,6 +166,7 @@ describe("protocol schemas", () => {
     expect(
       FileTreeResultSchema.parse({
         requestId: "req-1",
+        clientRequestId: "client-req-1",
         sessionId: "s1",
         root: {
           path: ".",
@@ -175,19 +176,39 @@ describe("protocol schemas", () => {
             { path: "README.md", name: "README.md", type: "file", size: 42 },
           ],
         },
-      }).root.children?.[0]?.name,
-    ).toBe("README.md");
+      }),
+    ).toMatchObject({
+      clientRequestId: "client-req-1",
+      root: { children: [{ name: "README.md" }] },
+    });
+
+    const textContent = FileContentResultSchema.parse({
+      requestId: "req-2",
+      sessionId: "s1",
+      path: "README.md",
+      kind: "text",
+      content: "hello",
+      truncated: false,
+      encoding: "utf8",
+    });
+    expect(textContent.kind).toBe("text");
+    if (textContent.kind === "text") {
+      expect(textContent.content).toBe("hello");
+    }
 
     expect(
       FileContentResultSchema.parse({
-        requestId: "req-2",
+        requestId: "req-2-image",
         sessionId: "s1",
-        path: "README.md",
-        content: "hello",
+        path: "screen.png",
+        kind: "image",
+        contentBase64: "aGVsbG8=",
+        mimeType: "image/png",
+        size: 5,
         truncated: false,
-        encoding: "utf8",
-      }).content,
-    ).toBe("hello");
+        encoding: "base64",
+      }).kind,
+    ).toBe("image");
 
     expect(
       FileWriteResultSchema.parse({

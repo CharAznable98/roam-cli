@@ -3,6 +3,7 @@ import type {
   AttachmentContentResult,
   AttachmentDeleteResult,
   AttachmentWriteResult,
+  DirectoryCreateResult,
   FileContentResult,
   FileTreeResult,
   FileWriteResult,
@@ -24,6 +25,7 @@ type RunnerRpcResult =
   | AttachmentWriteResult
   | AttachmentContentResult
   | AttachmentDeleteResult
+  | DirectoryCreateResult
   | FileTreeResult
   | FileContentResult
   | FileWriteResult
@@ -44,6 +46,7 @@ export type RunnerRpcCommand = Extract<
       | "readFileTree"
       | "readFileContent"
       | "writeFileContent"
+      | "createDirectory"
       | "listAgentSkills"
       | "searchWorkspacePaths"
       | "checkSessionStatus"

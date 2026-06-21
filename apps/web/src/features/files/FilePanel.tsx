@@ -1,45 +1,53 @@
 import { Editor, type OnMount } from "@monaco-editor/react";
-import type { FileNode } from "@roamcli/shared/protocol";
-import { ChevronRight, FileCode2, Folder, Pencil, Save } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import type { FileContentResult, FileNode } from "@roamcli/shared/protocol";
+import { Pencil, RefreshCw, Save } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { LazyFileTree, type TreePathStates } from "./LazyFileTree";
 
 type FilePanelProps = {
   files: FileNode[];
   treeState: "idle" | "loading" | "ready" | "error";
+  treePathStates: TreePathStates;
   selectedPath: string;
-  fileContent:
-    | {
-        path: string;
-        content: string;
-        truncated: boolean;
-        encoding: string;
-      }
-    | undefined;
+  fileContent: FileContentResult | undefined;
   editorContent: string;
   contentState: "idle" | "loading" | "ready" | "error";
   saveState: "idle" | "loading" | "ready" | "error";
   onSelectFile: (path: string) => void;
+  onLoadDirectory: (path: string) => void;
+  onRefreshTree: () => void;
   onChangeContent: (content: string) => void;
   onSaveFile: () => void;
+  treeId?: string | undefined;
 };
 
 export function FilePanel({
   files,
   treeState,
+  treePathStates,
   selectedPath,
   fileContent,
   editorContent,
   contentState,
   saveState,
   onSelectFile,
+  onLoadDirectory,
+  onRefreshTree,
   onChangeContent,
   onSaveFile,
+  treeId,
 }: FilePanelProps) {
   const visibleContent =
     fileContent?.path === selectedPath ? fileContent : undefined;
+  const visibleTextContent =
+    visibleContent && isTextContent(visibleContent)
+      ? visibleContent
+      : undefined;
   const isDirty =
-    visibleContent !== undefined && editorContent !== visibleContent.content;
-  const canEdit = visibleContent !== undefined && !visibleContent.truncated;
+    visibleTextContent !== undefined &&
+    editorContent !== visibleTextContent.content;
+  const canEdit =
+    visibleTextContent !== undefined && !visibleTextContent.truncated;
   const canSave = canEdit && isDirty && saveState !== "loading";
   const canSaveRef = useRef(canSave);
   const onSaveFileRef = useRef(onSaveFile);
@@ -61,7 +69,19 @@ export function FilePanel({
     <section className="tool-panel" aria-label="Files">
       <div className="tool-panel-header">
         <h2 className="panel-title">Files</h2>
-        <span className={`stream-status ${treeState}`}>tree {treeState}</span>
+        <div className="tool-panel-header-actions">
+          <span className={`stream-status ${treeState}`}>tree {treeState}</span>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Refresh file tree"
+            title="Refresh file tree"
+            disabled={treeState === "loading"}
+            onClick={onRefreshTree}
+          >
+            <RefreshCw size={15} />
+          </button>
+        </div>
       </div>
       <div className="file-grid">
         <div className="file-tree" role="tree">
@@ -78,14 +98,14 @@ export function FilePanel({
               No files returned for this session.
             </div>
           ) : null}
-          {files.map((node) => (
-            <TreeNode
-              key={node.path}
-              node={node}
-              selectedPath={selectedPath}
-              onSelect={onSelectFile}
-            />
-          ))}
+          <LazyFileTree
+            nodes={files}
+            selectedFilePath={selectedPath}
+            pathStates={treePathStates}
+            onSelectFile={onSelectFile}
+            onLoadDirectory={onLoadDirectory}
+            resetKey={treeId}
+          />
         </div>
         <div className="editor-placeholder">
           <div>
@@ -137,28 +157,38 @@ export function FilePanel({
               <>
                 <p className="text-xs text-ink-500">
                   {visibleContent.encoding}
+                  {"mimeType" in visibleContent
+                    ? ` · ${visibleContent.mimeType}`
+                    : ""}
+                  {"size" in visibleContent
+                    ? ` · ${formatBytes(visibleContent.size)}`
+                    : ""}
                   {visibleContent.truncated ? " · truncated" : ""}
                 </p>
-                <Editor
-                  className="monaco-file-editor"
-                  height="100%"
-                  language={languageForPath(visibleContent.path)}
-                  path={editorModelPath(visibleContent.path)}
-                  value={editorContent}
-                  onChange={(value) => onChangeContent(value ?? "")}
-                  onMount={handleEditorMount}
-                  wrapperProps={{
-                    "aria-label": `File editor for ${visibleContent.path}`,
-                  }}
-                  options={{
-                    ariaLabel: `Edit ${visibleContent.path}`,
-                    readOnly: !canEdit || saveState === "loading",
-                    minimap: { enabled: false },
-                    automaticLayout: true,
-                    scrollBeyondLastLine: false,
-                    tabSize: 2,
-                  }}
-                />
+                {isTextContent(visibleContent) ? (
+                  <Editor
+                    className="monaco-file-editor"
+                    height="100%"
+                    language={languageForPath(visibleContent.path)}
+                    path={editorModelPath(visibleContent.path)}
+                    value={editorContent}
+                    onChange={(value) => onChangeContent(value ?? "")}
+                    onMount={handleEditorMount}
+                    wrapperProps={{
+                      "aria-label": `File editor for ${visibleContent.path}`,
+                    }}
+                    options={{
+                      ariaLabel: `Edit ${visibleContent.path}`,
+                      readOnly: !canEdit || saveState === "loading",
+                      minimap: { enabled: false },
+                      automaticLayout: true,
+                      scrollBeyondLastLine: false,
+                      tabSize: 2,
+                    }}
+                  />
+                ) : (
+                  <FilePreview content={visibleContent} />
+                )}
               </>
             ) : (
               <pre>{contentMessage(selectedPath, contentState)}</pre>
@@ -168,6 +198,38 @@ export function FilePanel({
       </div>
     </section>
   );
+}
+
+function FilePreview({
+  content,
+}: {
+  content: Exclude<FileContentResult, { kind: "text" }>;
+}) {
+  if (content.kind === "image") {
+    if (content.truncated || !content.contentBase64) {
+      return (
+        <div className="file-preview-empty">Image is too large to preview.</div>
+      );
+    }
+    return (
+      <div className="file-image-preview">
+        <img
+          src={`data:${content.mimeType};base64,${content.contentBase64}`}
+          alt={`Preview ${content.path}`}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="file-preview-empty">Binary file cannot be previewed.</div>
+  );
+}
+
+function isTextContent(
+  content: FileContentResult,
+): content is Extract<FileContentResult, { kind: "text" }> {
+  const kind = (content as { kind?: string }).kind;
+  return kind === undefined || kind === "text";
 }
 
 function contentMessage(
@@ -210,56 +272,8 @@ function editorModelPath(path: string): string {
   return `roam-file:///${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function TreeNode({
-  node,
-  selectedPath,
-  onSelect,
-  depth = 0,
-}: {
-  node: FileNode;
-  selectedPath: string;
-  onSelect: (path: string) => void;
-  depth?: number;
-}) {
-  const [isOpen, setIsOpen] = useState(depth < 1);
-  const isDirectory = node.type === "directory";
-  const isSelected = selectedPath === node.path;
-
-  return (
-    <div>
-      <button
-        type="button"
-        role="treeitem"
-        aria-expanded={isDirectory ? isOpen : undefined}
-        className={`tree-row ${isSelected ? "is-selected" : ""}`}
-        style={{ paddingLeft: `${depth * 14 + 8}px` }}
-        onClick={() => {
-          if (isDirectory) {
-            setIsOpen((value) => !value);
-          } else {
-            onSelect(node.path);
-          }
-        }}
-      >
-        {isDirectory ? (
-          <ChevronRight className={isOpen ? "rotate-90" : ""} size={15} />
-        ) : (
-          <FileCode2 size={15} />
-        )}
-        {isDirectory ? <Folder size={15} /> : null}
-        <span className="truncate">{node.name}</span>
-      </button>
-      {isDirectory &&
-        isOpen &&
-        node.children?.map((child) => (
-          <TreeNode
-            key={child.path}
-            node={child}
-            selectedPath={selectedPath}
-            onSelect={onSelect}
-            depth={depth + 1}
-          />
-        ))}
-    </div>
-  );
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

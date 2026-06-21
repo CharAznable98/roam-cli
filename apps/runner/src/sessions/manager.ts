@@ -168,6 +168,9 @@ export class SessionManager {
       case "writeFileContent":
         await this.#workspaceCommands.writeFileContent(command);
         return;
+      case "createDirectory":
+        await this.#workspaceCommands.createDirectory(command);
+        return;
       case "applyPatch":
         await this.#workspaceCommands.applyPatch(command);
         return;

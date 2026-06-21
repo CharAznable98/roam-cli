@@ -28,17 +28,38 @@ import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js"
 import type { AppContext } from "../server/context.js";
 import { sendRunnerRpcError } from "./errors.js";
 import type { ServiceResult } from "../modules/result.js";
+import type { FileTreeQuery } from "../modules/workspace/workspace-service.js";
 import {
   ApprovalParamsSchema,
+  DirectoryCreateBodySchema,
   FileContentQuerySchema,
   FileTreeQuerySchema,
   ProjectParamsSchema,
+  RunnerParamsSchema,
   SessionParamsSchema,
 } from "./schemas.js";
 
 const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
   Math.ceil(DEFAULT_MAX_IMAGE_BYTES * DEFAULT_MAX_IMAGES_PER_TURN * (4 / 3)) +
   1024 * 1024;
+
+function toFileTreeQuery(parsed: {
+  path: string;
+  depth: number;
+  requestId?: string | undefined;
+}): FileTreeQuery {
+  if (parsed.requestId) {
+    return {
+      path: parsed.path,
+      depth: parsed.depth,
+      clientRequestId: parsed.requestId,
+    };
+  }
+  return {
+    path: parsed.path,
+    depth: parsed.depth,
+  };
+}
 
 export async function registerApiRoutes(
   app: FastifyInstance,
@@ -57,6 +78,64 @@ function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
   app.get("/v1/runners", async () => ({
     runners: context.hub.listOnlineRunners(),
   }));
+
+  app.get("/v1/runners/:id/directories", async (request, reply) => {
+    const params = RunnerParamsSchema.parse(request.params);
+    const parsed = FileTreeQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    if (!context.hub.isRunnerOnline(params.id)) {
+      return reply.code(409).send({ error: "runner_offline" });
+    }
+
+    try {
+      const result = await context.services.workspace.readRunnerDirectoryTree(
+        params.id,
+        toFileTreeQuery(parsed.data),
+      );
+      if (!result.ok) {
+        if (result.error === "runner_not_found") {
+          return reply.code(404).send({ error: "runner_not_found" });
+        }
+        return reply.code(400).send({ error: result.error });
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/runners/:id/directories", async (request, reply) => {
+    const params = RunnerParamsSchema.parse(request.params);
+    const parsed = DirectoryCreateBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    if (!context.hub.isRunnerOnline(params.id)) {
+      return reply.code(409).send({ error: "runner_offline" });
+    }
+
+    try {
+      const result = await context.services.workspace.createRunnerDirectory(
+        params.id,
+        parsed.data,
+      );
+      if (!result.ok) {
+        if (result.error === "runner_not_found") {
+          return reply.code(404).send({ error: "runner_not_found" });
+        }
+        return reply.code(400).send({ error: result.error });
+      }
+      return reply.code(201).send(result.value);
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
 }
 
 function registerSessionRoutes(
@@ -400,7 +479,7 @@ function registerWorkspaceRoutes(
     try {
       const result = await context.services.workspace.readFileTree(
         params.id,
-        parsed.data,
+        toFileTreeQuery(parsed.data),
       );
       if (!result.ok) {
         return sendServiceError(reply, result);

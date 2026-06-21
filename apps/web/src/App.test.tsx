@@ -273,6 +273,27 @@ function openSessionSwitcher(name: RegExp = /Real session|Created session/) {
   return within(screen.getByRole("dialog", { name: "Switch Session" }));
 }
 
+async function findSessionFile(name: RegExp) {
+  const src = await screen.findByRole("treeitem", { name: /src/ });
+  if (src.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(src);
+  }
+  return screen.findByRole("treeitem", { name });
+}
+
+function isSessionFileTreeRequest(
+  url: string,
+  path: string,
+  depth = "1",
+): boolean {
+  const requestUrl = new URL(url);
+  return (
+    requestUrl.pathname === "/v1/sessions/session-1/files" &&
+    requestUrl.searchParams.get("path") === path &&
+    requestUrl.searchParams.get("depth") === depth
+  );
+}
+
 function openSessionActions() {
   fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
   return within(screen.getByRole("menu", { name: "Session actions" }));
@@ -358,6 +379,55 @@ describe("App", () => {
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: runnerOnline ? [runner] : [] });
+        }
+        if (requestUrl.pathname === "/v1/runners/real-runner/directories") {
+          if (init?.method === "POST") {
+            const body = JSON.parse(String(init.body ?? "{}")) as {
+              parentPath?: string;
+              name?: string;
+            };
+            const parentPath = body.parentPath || ".";
+            const path =
+              parentPath === "."
+                ? body.name || "created"
+                : `${parentPath}/${body.name || "created"}`;
+            return jsonResponse(
+              {
+                result: {
+                  requestId: "directory-create-1",
+                  path,
+                  node: {
+                    path,
+                    name: body.name || "created",
+                    type: "directory",
+                    children: [],
+                  },
+                },
+              },
+              201,
+            );
+          }
+          const requestedPath = requestUrl.searchParams.get("path") ?? ".";
+          return jsonResponse({
+            result: {
+              root: {
+                path: requestedPath,
+                name: requestedPath === "." ? "workspace" : requestedPath,
+                type: "directory",
+                children:
+                  requestedPath === "."
+                    ? [
+                        {
+                          path: "mobile",
+                          name: "mobile",
+                          type: "directory",
+                          children: [],
+                        },
+                      ]
+                    : [],
+              },
+            },
+          });
         }
         if (requestUrl.pathname === "/v1/projects" && init?.method === "POST") {
           if (failNextProjectCreate) {
@@ -497,6 +567,42 @@ describe("App", () => {
           return jsonResponse({ message, attachments: [] }, 201);
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files") {
+          const requestedPath = requestUrl.searchParams.get("path") ?? ".";
+          if (requestedPath === "src") {
+            return jsonResponse({
+              root: {
+                path: "src",
+                name: "src",
+                type: "directory",
+                children: [
+                  {
+                    path: "src/App.tsx",
+                    name: "App.tsx",
+                    type: "file",
+                    size: 42,
+                  },
+                  {
+                    path: "src/Slow.tsx",
+                    name: "Slow.tsx",
+                    type: "file",
+                    size: 12,
+                  },
+                  {
+                    path: "src/Fast.tsx",
+                    name: "Fast.tsx",
+                    type: "file",
+                    size: 12,
+                  },
+                  {
+                    path: "src/logo.png",
+                    name: "logo.png",
+                    type: "file",
+                    size: 11,
+                  },
+                ],
+              },
+            });
+          }
           return jsonResponse({
             root: {
               path: ".",
@@ -507,26 +613,6 @@ describe("App", () => {
                   path: "src",
                   name: "src",
                   type: "directory",
-                  children: [
-                    {
-                      path: "src/App.tsx",
-                      name: "App.tsx",
-                      type: "file",
-                      size: 42,
-                    },
-                    {
-                      path: "src/Slow.tsx",
-                      name: "Slow.tsx",
-                      type: "file",
-                      size: 12,
-                    },
-                    {
-                      path: "src/Fast.tsx",
-                      name: "Fast.tsx",
-                      type: "file",
-                      size: 12,
-                    },
-                  ],
                 },
               ],
             },
@@ -554,12 +640,21 @@ describe("App", () => {
               requestId: "file-content-1",
               sessionId: "session-1",
               path: requestedPath,
-              content:
-                requestedPath === "src/App.tsx"
-                  ? "export function RealContent() { return null; }"
-                  : `export const file = ${JSON.stringify(requestedPath)};`,
+              kind: requestedPath.endsWith(".png") ? "image" : "text",
+              ...(requestedPath.endsWith(".png")
+                ? {
+                    contentBase64: "aW1hZ2UtYnl0ZXM=",
+                    mimeType: "image/png",
+                    size: 11,
+                  }
+                : {
+                    content:
+                      requestedPath === "src/App.tsx"
+                        ? "export function RealContent() { return null; }"
+                        : `export const file = ${JSON.stringify(requestedPath)};`,
+                  }),
               truncated: false,
-              encoding: "utf8",
+              encoding: requestedPath.endsWith(".png") ? "base64" : "utf8",
             },
           });
         }
@@ -747,7 +842,7 @@ describe("App", () => {
     remoteSessionStatus = "pending";
     render(<App />);
     await screen.findByText("Loaded from API");
-    expect(screen.getByText("待执行")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
 
     const countSessionDetailReads = () =>
       fetchCalls.filter((call) => {
@@ -774,7 +869,7 @@ describe("App", () => {
           call.init?.method === "POST",
       ),
     ).toBe(false);
-    expect(await screen.findByText("已结束")).toBeInTheDocument();
+    expect(await screen.findByText("Completed")).toBeInTheDocument();
   });
 
   it("merges missed session detail payloads during passive status repair", async () => {
@@ -1464,7 +1559,7 @@ describe("App", () => {
   it("reconnects closed streams with increasing retry delays", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
-    fireEvent.click(await screen.findByRole("treeitem", { name: /App\.tsx/ }));
+    fireEvent.click(await findSessionFile(/App\.tsx/));
     const editor = await screen.findByRole("textbox", {
       name: "Edit src/App.tsx",
     });
@@ -1721,25 +1816,27 @@ describe("App", () => {
 
     fireEvent.click(sidebar.getByRole("button", { name: "New project" }));
     const projectDialog = screen.getByRole("dialog", { name: "New Project" });
-    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
-      "/workspace",
-    );
-    expect(within(projectDialog).getByLabelText("Runner base")).toHaveAttribute(
-      "readonly",
-    );
-    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
-      target: { value: "../outside" },
+    fireEvent.click(within(projectDialog).getByLabelText("Directory"));
+    const directoryDialog = await screen.findByRole("dialog", {
+      name: "Choose directory",
     });
-    fireEvent.click(
-      within(projectDialog).getByRole("button", { name: "Create project" }),
+    fireEvent.change(
+      within(directoryDialog).getByLabelText("New folder name"),
+      {
+        target: { value: "../outside" },
+      },
     );
-    expect(within(projectDialog).getByRole("alert")).toHaveTextContent(
-      "Directory must stay under the runner base.",
+    fireEvent.click(
+      within(directoryDialog).getByRole("button", { name: "New folder" }),
+    );
+    expect(within(directoryDialog).getByRole("alert")).toHaveTextContent(
+      "Folder name must be a single directory name.",
     );
     expect(
       fetchCalls.some(
         (call) =>
-          call.url.endsWith("/v1/projects") && call.init?.method === "POST",
+          call.url.endsWith("/v1/runners/real-runner/directories") &&
+          call.init?.method === "POST",
       ),
     ).toBe(false);
   });
@@ -1816,10 +1913,9 @@ describe("App", () => {
     expect(within(projectDialog).getByLabelText("Name")).toHaveValue(
       "Duplicate Project",
     );
-    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
+    expect(within(projectDialog).getByLabelText("Directory")).toHaveTextContent(
       "/workspace",
     );
-    expect(within(projectDialog).getByLabelText("Directory")).toHaveValue("");
   });
 
   it("archives the selected project and leaves the workspace in an empty state", async () => {
@@ -1909,12 +2005,14 @@ describe("App", () => {
     fireEvent.change(within(projectDialog).getByLabelText("Name"), {
       target: { value: "Mobile Project" },
     });
-    expect(within(projectDialog).getByLabelText("Runner base")).toHaveValue(
-      "/workspace",
-    );
-    fireEvent.change(within(projectDialog).getByLabelText("Directory"), {
-      target: { value: "mobile" },
+    fireEvent.click(within(projectDialog).getByLabelText("Directory"));
+    const directoryDialog = await screen.findByRole("dialog", {
+      name: "Choose directory",
     });
+    fireEvent.click(await screen.findByRole("treeitem", { name: /mobile/ }));
+    fireEvent.click(
+      within(directoryDialog).getByRole("button", { name: "Choose" }),
+    );
     fireEvent.click(
       within(projectDialog).getByRole("button", { name: "Create project" }),
     );
@@ -2083,13 +2181,12 @@ describe("App", () => {
   it("loads the selected session file tree and displays real file content", async () => {
     render(<App />);
 
-    const fileButton = await screen.findByRole("treeitem", {
-      name: /App\.tsx/,
-    });
+    const fileButton = await findSessionFile(/App\.tsx/);
     expect(
-      fetchRequests.some((url) =>
-        url.includes("/v1/sessions/session-1/files?path=.&depth=3"),
-      ),
+      fetchRequests.some((url) => isSessionFileTreeRequest(url, ".")),
+    ).toBe(true);
+    expect(
+      fetchRequests.some((url) => isSessionFileTreeRequest(url, "src")),
     ).toBe(true);
 
     fireEvent.click(fileButton);
@@ -2111,6 +2208,53 @@ describe("App", () => {
     expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
       "src/App.tsx",
     );
+  });
+
+  it("resets expanded directories after refreshing the root file tree", async () => {
+    render(<App />);
+
+    await findSessionFile(/App\.tsx/);
+    const srcRequestsBeforeRefresh = fetchRequests.filter((url) =>
+      isSessionFileTreeRequest(url, "src"),
+    ).length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh file tree" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("treeitem", { name: /src/ }));
+    expect(
+      await screen.findByRole("treeitem", { name: /App\.tsx/ }),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        fetchRequests.filter((url) => isSessionFileTreeRequest(url, "src"))
+          .length,
+      ).toBe(srcRequestsBeforeRefresh + 1);
+    });
+  });
+
+  it("renders image files as image previews", async () => {
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/logo\.png/));
+
+    const image = await screen.findByRole("img", {
+      name: "Preview src/logo.png",
+    });
+    expect(image).toHaveAttribute(
+      "src",
+      "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
+    );
+    expect(screen.getByText("Read-only")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Edit src/logo.png" }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens runner-local markdown file links in the file panel", async () => {
@@ -2154,6 +2298,52 @@ describe("App", () => {
     );
   });
 
+  it("refreshes the nearest visible parent after saving a linked deep file", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    await screen.findByRole("treeitem", { name: /src/ });
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-deep-file-link",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "Open [Button](/workspace/src/components/Button.tsx).",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
+          }),
+        }),
+      );
+    });
+
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    fireEvent.click(
+      await within(conversation).findByRole("button", { name: "Button" }),
+    );
+    const editor = await screen.findByRole("textbox", {
+      name: "Edit src/components/Button.tsx",
+    });
+    fireEvent.change(editor, {
+      target: { value: "export const button = true;\n" },
+    });
+
+    const requestCountBeforeSave = fetchRequests.length;
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    const refreshedFileTreePaths = fetchRequests
+      .slice(requestCountBeforeSave)
+      .filter((url) => new URL(url).pathname === "/v1/sessions/session-1/files")
+      .map((url) => new URL(url).searchParams.get("path"));
+    expect(refreshedFileTreePaths).toContain("src");
+    expect(refreshedFileTreePaths).not.toContain("src/components");
+  });
+
   it("keeps the currently selected file when an older file response finishes later", async () => {
     const slowContent = deferred<Response>();
     const fastContent = deferred<Response>();
@@ -2161,8 +2351,8 @@ describe("App", () => {
     deferredFileContent.set("src/Fast.tsx", fastContent);
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("treeitem", { name: /Slow\.tsx/ }));
-    fireEvent.click(await screen.findByRole("treeitem", { name: /Fast\.tsx/ }));
+    fireEvent.click(await findSessionFile(/Slow\.tsx/));
+    fireEvent.click(await findSessionFile(/Fast\.tsx/));
 
     fastContent.resolve(
       jsonResponse({
@@ -2170,6 +2360,7 @@ describe("App", () => {
           requestId: "fast-content",
           sessionId: "session-1",
           path: "src/Fast.tsx",
+          kind: "text",
           content: "export const fast = true;",
           truncated: false,
           encoding: "utf8",
@@ -2187,6 +2378,7 @@ describe("App", () => {
           requestId: "slow-content",
           sessionId: "session-1",
           path: "src/Slow.tsx",
+          kind: "text",
           content: "export const slow = true;",
           truncated: false,
           encoding: "utf8",
@@ -2204,7 +2396,7 @@ describe("App", () => {
   it("edits and saves real file content through the API", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("treeitem", { name: /App\.tsx/ }));
+    fireEvent.click(await findSessionFile(/App\.tsx/));
     const editor = await screen.findByRole("textbox", {
       name: "Edit src/App.tsx",
     });
@@ -2294,6 +2486,65 @@ describe("App", () => {
       call.url.includes("/v1/approvals/approval-1"),
     );
     expect(approvalCall?.init?.method).toBe("POST");
+  });
+
+  it("refreshes the nearest visible parent after patching a new nested directory", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    await screen.findByRole("treeitem", { name: /src/ });
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "approval:requested",
+            approval: {
+              ...patchApproval,
+              id: "approval-new-dir",
+              payload: {
+                hunks: [
+                  {
+                    ...patchHunk,
+                    id: "hunk-new-dir",
+                    filePath: "src/new/file.ts",
+                  },
+                ],
+              },
+            },
+          }),
+        }),
+      );
+    });
+
+    const patchCard = await screen
+      .findByText("src/new/file.ts")
+      .then((element) => element.closest("article"));
+    expect(patchCard).not.toBeNull();
+    fireEvent.click(
+      within(patchCard as HTMLElement).getByRole("button", {
+        name: "Accept patch hunk hunk-new-dir",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        within(patchCard as HTMLElement).getByText("accepted"),
+      ).toBeInTheDocument(),
+    );
+    const requestCountBeforeApply = fetchRequests.length;
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+
+    const refreshedFileTreePaths = () =>
+      fetchRequests
+        .slice(requestCountBeforeApply)
+        .filter(
+          (url) => new URL(url).pathname === "/v1/sessions/session-1/files",
+        )
+        .map((url) => new URL(url).searchParams.get("path"));
+    await waitFor(() => {
+      expect(refreshedFileTreePaths()).toContain("src");
+    });
+    expect(refreshedFileTreePaths()).not.toContain("src/new");
   });
 
   it("hides resolved approval actions after approve or reject", async () => {

@@ -476,20 +476,49 @@ export type FileContentRequest = z.infer<typeof FileContentRequestSchema>;
 
 export const FileTreeResultSchema = z.object({
   requestId: z.string().min(1),
+  clientRequestId: z.string().min(1).optional(),
   sessionId: z.string().min(1),
   root: FileNodeSchema,
 });
 export type FileTreeResult = z.infer<typeof FileTreeResultSchema>;
 
-export const FileContentResultSchema = z.object({
+const FileContentBaseSchema = z.object({
   requestId: z.string().min(1),
   sessionId: z.string().min(1),
   path: z.string().min(1),
-  content: z.string(),
-  truncated: z.boolean(),
-  encoding: z.literal("utf8"),
 });
+
+export const FileContentResultSchema = z.union([
+  FileContentBaseSchema.extend({
+    kind: z.literal("text").default("text"),
+    content: z.string(),
+    truncated: z.boolean(),
+    encoding: z.literal("utf8"),
+  }),
+  FileContentBaseSchema.extend({
+    kind: z.literal("image"),
+    contentBase64: Base64PayloadSchema.optional(),
+    mimeType: z.string().min(1),
+    size: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    encoding: z.literal("base64"),
+  }),
+  FileContentBaseSchema.extend({
+    kind: z.literal("binary"),
+    mimeType: z.string().min(1).default("application/octet-stream"),
+    size: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    encoding: z.literal("binary"),
+  }),
+]);
 export type FileContentResult = z.infer<typeof FileContentResultSchema>;
+
+export const DirectoryCreateResultSchema = z.object({
+  requestId: z.string().min(1),
+  path: z.string().min(1),
+  node: FileNodeSchema,
+});
+export type DirectoryCreateResult = z.infer<typeof DirectoryCreateResultSchema>;
 
 export const FileWriteRequestSchema = z.object({
   requestId: z.string().min(1),
@@ -642,10 +671,12 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("readFileTree"),
     requestId: z.string().min(1),
+    clientRequestId: z.string().min(1).optional(),
     sessionId: z.string().min(1),
     cwd: z.string().min(1).optional(),
     path: z.string().default("."),
     depth: z.number().int().min(0).max(8).default(3),
+    includeFiles: z.boolean().default(true),
   }),
   z.object({
     type: z.literal("readFileContent"),
@@ -668,6 +699,13 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     path: z.string().min(1),
     content: z.string(),
     encoding: z.literal("utf8").default("utf8"),
+  }),
+  z.object({
+    type: z.literal("createDirectory"),
+    requestId: z.string().min(1),
+    cwd: z.string().min(1),
+    parentPath: z.string().default("."),
+    name: z.string().min(1),
   }),
   z.object({
     type: z.literal("applyPatch"),
@@ -888,6 +926,10 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("fileWriteResult"),
     result: FileWriteResultSchema,
+  }),
+  z.object({
+    type: z.literal("directoryCreateResult"),
+    result: DirectoryCreateResultSchema,
   }),
   z.object({
     type: z.literal("attachmentWriteResult"),

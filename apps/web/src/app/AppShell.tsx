@@ -56,6 +56,7 @@ export function AppShell({ controller }: AppShellProps) {
     sessionHunks,
     sessionFiles,
     sessionFileTreeState,
+    sessionFileTreePathState,
     runnerCommand,
     selectProject,
     createProject,
@@ -69,8 +70,12 @@ export function AppShell({ controller }: AppShellProps) {
     sendControl,
     deleteSelectedSession,
     selectFile,
+    loadSelectedDirectory,
+    refreshSelectedFileTree,
     saveSelectedFile,
     fetchMessageAttachmentContent,
+    fetchRunnerDirectoryTree,
+    createRunnerDirectory,
     listAgentSkills,
     searchWorkspacePaths,
     fetchGitStatus,
@@ -241,6 +246,8 @@ export function AppShell({ controller }: AppShellProps) {
               onSelectProject={selectProject}
               onSelectSession={setSelectedSessionId}
               onCreateProject={createProject}
+              onFetchRunnerDirectoryTree={fetchRunnerDirectoryTree}
+              onCreateRunnerDirectory={createRunnerDirectory}
               onArchiveProject={archiveProject}
               onCreateSession={createSession}
               onListAgentSkills={listAgentSkills}
@@ -311,16 +318,20 @@ export function AppShell({ controller }: AppShellProps) {
                   <FilePanel
                     files={sessionFiles}
                     treeState={sessionFileTreeState}
+                    treePathStates={sessionFileTreePathState}
                     selectedPath={state.selectedFilePath}
                     fileContent={state.fileContent}
                     editorContent={state.editorContent}
                     contentState={state.fileContentState}
                     saveState={state.fileSaveState}
                     onSelectFile={selectFile}
+                    onLoadDirectory={loadSelectedDirectory}
+                    onRefreshTree={refreshSelectedFileTree}
                     onChangeContent={(content) =>
                       dispatch({ type: "editorContentChanged", content })
                     }
                     onSaveFile={saveSelectedFile}
+                    treeId={`${selectedSession?.id ?? "none"}:${sessionFileTreeState}`}
                   />
                 </div>
                 <div className="workspace-surface git-surface">
@@ -422,6 +433,8 @@ export function AppShell({ controller }: AppShellProps) {
               <ProjectForm
                 runners={state.runners}
                 onCreate={createProject}
+                onFetchRunnerDirectoryTree={fetchRunnerDirectoryTree}
+                onCreateRunnerDirectory={createRunnerDirectory}
                 onCreated={() => setMobileProjectModalOpen(false)}
               />
             </SidebarModal>

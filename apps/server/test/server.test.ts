@@ -906,20 +906,23 @@ describe("server", () => {
 
     const treePromise = app.inject({
       method: "GET",
-      url: `/v1/sessions/${sessionId}/files?path=src&depth=2`,
+      url: `/v1/sessions/${sessionId}/files?requestId=client-tree-1&path=src&depth=2`,
       headers: { authorization: `Bearer ${token}` },
     });
     const treeCommand = await nextJson(runner);
     expect(treeCommand).toMatchObject({
       type: "readFileTree",
+      clientRequestId: "client-tree-1",
       sessionId,
       cwd: "/workspace",
       path: "src",
       depth: 2,
     });
+    expect(treeCommand.requestId).toMatch(/^file_tree_/);
 
     const treeResult = {
       requestId: treeCommand.requestId,
+      clientRequestId: treeCommand.clientRequestId,
       sessionId,
       root: {
         path: "src",
@@ -938,7 +941,8 @@ describe("server", () => {
       stream,
       (event) =>
         event.type === "file:tree" &&
-        event.result.requestId === treeCommand.requestId,
+        event.result.requestId === treeCommand.requestId &&
+        event.result.clientRequestId === "client-tree-1",
     );
 
     const contentPromise = app.inject({
@@ -959,6 +963,7 @@ describe("server", () => {
       requestId: contentCommand.requestId,
       sessionId,
       path: "src/index.ts",
+      kind: "text",
       content: "console.log('hello');\n",
       truncated: false,
       encoding: "utf8",
@@ -1016,6 +1021,225 @@ describe("server", () => {
     );
 
     stream.close();
+    runner.close();
+  });
+
+  it("lists and creates runner workspace directories", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "runner:online" && event.runner.runnerId === "runner-1",
+    );
+    const streamEvents: Array<Record<string, any>> = [];
+    stream.on("message", (data) => {
+      streamEvents.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=.&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: ".",
+      depth: 1,
+      includeFiles: false,
+    });
+    expect(listCommand.sessionId).toBe("runner-directory-runner-1");
+    runner.send(
+      JSON.stringify({
+        type: "fileTreeResult",
+        result: {
+          requestId: listCommand.requestId,
+          sessionId: listCommand.sessionId,
+          root: {
+            path: ".",
+            name: "workspace",
+            type: "directory",
+            children: [
+              { path: "api", name: "api", type: "directory", children: [] },
+              { path: "README.md", name: "README.md", type: "file", size: 42 },
+            ],
+          },
+        },
+      }),
+    );
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json().result.root.children).toEqual([
+      { path: "api", name: "api", type: "directory", children: [] },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(streamEvents.some((event) => event.type === "file:tree")).toBe(
+      false,
+    );
+
+    const createPromise = app.inject({
+      method: "POST",
+      url: "/v1/runners/runner-1/directories",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { parentPath: "api", name: "web" },
+    });
+    const createCommand = await nextJson(runner);
+    expect(createCommand).toMatchObject({
+      type: "createDirectory",
+      cwd: "/workspace",
+      parentPath: "api",
+      name: "web",
+    });
+    const createResult = {
+      requestId: createCommand.requestId,
+      path: "api/web",
+      node: {
+        path: "api/web",
+        name: "web",
+        type: "directory",
+        children: [],
+      },
+    };
+    runner.send(
+      JSON.stringify({ type: "directoryCreateResult", result: createResult }),
+    );
+    const createResponse = await createPromise;
+    expect(createResponse.statusCode).toBe(201);
+    expect(createResponse.json()).toEqual({ result: createResult });
+
+    stream.close();
+    runner.close();
+  });
+
+  it("rejects file roots from runner directory listings", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=src&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: "src",
+      depth: 1,
+      includeFiles: false,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "fileTreeResult",
+        result: {
+          requestId: listCommand.requestId,
+          sessionId: listCommand.sessionId,
+          root: {
+            path: "src",
+            name: "src",
+            type: "file",
+            size: 12,
+          },
+        },
+      }),
+    );
+
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(400);
+    expect(listResponse.json()).toEqual({ error: "invalid_directory" });
+
+    runner.close();
+  });
+
+  it("returns bad requests for runner directory creation failures", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const createPromise = app.inject({
+      method: "POST",
+      url: "/v1/runners/runner-1/directories",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { parentPath: ".", name: "../outside" },
+    });
+    const createCommand = await nextJson(runner);
+    expect(createCommand).toMatchObject({
+      type: "createDirectory",
+      cwd: "/workspace",
+      parentPath: ".",
+      name: "../outside",
+    });
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: createCommand.requestId,
+        message: "Invalid directory name: ../outside",
+        code: "DIRECTORY_CREATE_ERROR",
+      }),
+    );
+
+    const createResponse = await createPromise;
+    expect(createResponse.statusCode).toBe(400);
+    expect(createResponse.json()).toEqual({
+      error: "runner_error",
+      code: "DIRECTORY_CREATE_ERROR",
+      message: "Invalid directory name: ../outside",
+    });
+
+    runner.close();
+  });
+
+  it("returns bad requests for stale runner directory listing paths", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=missing&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: "missing",
+      depth: 1,
+      includeFiles: false,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "error",
+        requestId: listCommand.requestId,
+        message: "Path does not exist: missing",
+        code: "FILE_TREE_ERROR",
+      }),
+    );
+
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(400);
+    expect(listResponse.json()).toEqual({
+      error: "runner_error",
+      code: "FILE_TREE_ERROR",
+      message: "Path does not exist: missing",
+    });
+
     runner.close();
   });
 

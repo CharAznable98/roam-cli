@@ -18,6 +18,7 @@ import type {
   ApiUpdateSession,
   Approval,
   ClientCommand,
+  DirectoryCreateResult,
   ExecutionMode,
   FileContentResult,
   FileNode,
@@ -50,6 +51,14 @@ export interface RoamApiOptions {
 
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
+  fetchRunnerDirectoryTree(
+    runnerId: string,
+    options?: { path?: string; depth?: number },
+  ): Promise<FileNode[]>;
+  createRunnerDirectory(
+    runnerId: string,
+    input: { parentPath: string; name: string },
+  ): Promise<DirectoryCreateResult>;
   createProject(input: ApiCreateProject): Promise<Project>;
   updateProject(projectId: string, input: ApiUpdateProject): Promise<Project>;
   archiveProject(projectId: string): Promise<Project>;
@@ -78,7 +87,7 @@ export interface RoamApiClient {
   ): Promise<Blob>;
   fetchFileTree(
     sessionId: string,
-    options?: { path?: string; depth?: number },
+    options?: { path?: string; depth?: number; requestId?: string },
   ): Promise<FileNode[]>;
   fetchFileContent(
     sessionId: string,
@@ -153,6 +162,10 @@ interface FileTreeResponse {
   result?: {
     root: FileNode;
   };
+}
+
+interface DirectoryCreateResponse {
+  result: DirectoryCreateResult;
 }
 
 interface FileContentResponse {
@@ -288,6 +301,28 @@ export function createRoamApiClient(
       };
     },
 
+    async fetchRunnerDirectoryTree(runnerId, options = {}) {
+      const query = new URLSearchParams();
+      query.set("path", options.path ?? ".");
+      query.set("depth", String(options.depth ?? 1));
+      const payload = await request<FileTreeResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories?${query.toString()}`,
+      );
+      const root = payload.result?.root ?? payload.root;
+      return payload.files ?? root?.children ?? (root ? [root] : []);
+    },
+
+    async createRunnerDirectory(runnerId, input) {
+      const { result } = await request<DirectoryCreateResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
+    },
+
     async createProject(input) {
       const { project } = await request<ProjectResponse>("/v1/projects", {
         method: "POST",
@@ -407,6 +442,9 @@ export function createRoamApiClient(
 
     async fetchFileTree(sessionId, options = {}) {
       const query = new URLSearchParams();
+      if (options.requestId) {
+        query.set("requestId", options.requestId);
+      }
       query.set("path", options.path ?? ".");
       query.set("depth", String(options.depth ?? 3));
       const payload = await request<FileTreeResponse>(
