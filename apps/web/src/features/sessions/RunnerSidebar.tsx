@@ -10,7 +10,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  FormEvent,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
 import {
   composeProjectDirectory,

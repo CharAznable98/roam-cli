@@ -18,6 +18,7 @@ import type { UiMessage } from "./model";
 
 const originalCreateObjectUrl = URL.createObjectURL;
 const originalRevokeObjectUrl = URL.revokeObjectURL;
+const originalInnerWidth = window.innerWidth;
 
 const baseSession: Session = {
   id: "session-1",
@@ -67,6 +68,10 @@ describe("ChatPanel", () => {
       configurable: true,
       value: originalRevokeObjectUrl,
     });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+    });
   });
 
   it("submits the composer with Command+Enter", async () => {
@@ -87,6 +92,20 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("run tests", []));
     expect(composer).toHaveValue("");
+  });
+
+  it("uses a short composer placeholder on mobile widths", () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+
+    render(<ChatPanel session={baseSession} messages={[]} onSend={vi.fn()} />);
+
+    expect(screen.getByRole("textbox", { name: "Chat composer" })).toHaveAttribute(
+      "placeholder",
+      "Message the active session",
+    );
   });
 
   it("submits the composer with Ctrl+Enter", async () => {

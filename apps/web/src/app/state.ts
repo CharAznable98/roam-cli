@@ -150,34 +150,49 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "bootstrapStarted":
       return { ...state, loadState: "loading" };
     case "bootstrapSucceeded": {
-      const onlineRunnerIds = new Set(
-        action.remote.runners.map((runner) => runner.runnerId),
+      const activeProjects = action.remote.projects.filter(
+        (project) => !project.archivedAt,
+      );
+      const activeSessions = action.remote.sessions.filter(
+        (session) => !session.archivedAt,
+      );
+      const cachedProject = activeProjects.find(
+        (project) => project.id === state.selectedProjectId,
+      );
+      const cachedSession = cachedProject
+        ? activeSessions.find(
+            (session) =>
+              session.id === state.selectedSessionId &&
+              session.projectId === cachedProject.id,
+          )
+        : undefined;
+      const cachedSessionMissing =
+        Boolean(state.selectedSessionId) && !cachedSession;
+      const defaultSelection = selectDefaultProjectSession(
+        {
+          ...state,
+          runners: action.remote.runners,
+          sessions: action.remote.sessions,
+        },
+        activeProjects,
       );
       const selectedProjectId =
-        action.remote.projects.find(
-          (project) =>
-            project.id === state.selectedProjectId && !project.archivedAt,
-        )?.id ??
-        action.remote.projects.find(
-          (project) =>
-            !project.archivedAt && onlineRunnerIds.has(project.runnerId),
-        )?.id ??
-        action.remote.projects.find((project) => !project.archivedAt)?.id ??
-        "";
+        cachedProject && !cachedSessionMissing
+          ? cachedProject.id
+          : defaultSelection.selectedProjectId;
       const selectedSessionId =
-        action.remote.sessions.find(
-          (session) =>
-            session.id === state.selectedSessionId &&
-            session.projectId === selectedProjectId &&
-            !session.archivedAt,
-        )?.id ??
-        action.remote.sessions.find(
-          (session) =>
-            session.projectId === selectedProjectId && !session.archivedAt,
-        )?.id ??
-        "";
+        cachedProject && !cachedSessionMissing
+          ? (cachedSession?.id ??
+            activeSessions.find(
+              (session) => session.projectId === cachedProject.id,
+            )?.id ??
+            "")
+          : defaultSelection.selectedSessionId;
       const selectedProject = action.remote.projects.find(
         (project) => project.id === selectedProjectId,
+      );
+      const onlineRunnerIds = new Set(
+        action.remote.runners.map((runner) => runner.runnerId),
       );
       const selectedRunnerId = action.remote.runners.some(
         (runner) => runner.runnerId === state.selectedRunnerId,
@@ -231,8 +246,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedRunnerId: action.runnerId,
         selectedSessionId: action.nextSessionId,
       };
-    case "sessionSelected":
-      return { ...state, selectedSessionId: action.sessionId };
+    case "sessionSelected": {
+      const session = state.sessions.find(
+        (item) => item.id === action.sessionId && !item.archivedAt,
+      );
+      return session
+        ? {
+            ...state,
+            selectedProjectId: session.projectId,
+            selectedSessionId: session.id,
+          }
+        : state;
+    }
     case "sessionCreated":
       return {
         ...state,
@@ -545,21 +570,49 @@ function updateProjectState(state: AppState, project: Project): AppState {
   const projects = project.archivedAt
     ? state.projects.filter((item) => item.id !== project.id)
     : upsertBy(state.projects, project, (item) => item.id);
-  const selectedProjectId = project.archivedAt
-    ? state.selectedProjectId === project.id
-      ? ""
-      : state.selectedProjectId
-    : state.selectedProjectId || projects[0]?.id || "";
-  const selectedSessionId =
-    state.selectedProjectId === project.id && project.archivedAt
-      ? ""
-      : state.selectedSessionId;
+  const archivedSelectedProject =
+    Boolean(project.archivedAt) && state.selectedProjectId === project.id;
+  const fallbackSelection = archivedSelectedProject
+    ? selectDefaultProjectSession(state, projects)
+    : undefined;
+  const selectedProjectId = fallbackSelection
+    ? fallbackSelection.selectedProjectId
+    : project.archivedAt
+      ? state.selectedProjectId
+      : state.selectedProjectId || projects[0]?.id || "";
+  const selectedSessionId = fallbackSelection
+    ? fallbackSelection.selectedSessionId
+    : state.selectedSessionId;
   return {
     ...state,
     projects,
     selectedProjectId,
     selectedSessionId,
   };
+}
+
+function selectDefaultProjectSession(
+  state: AppState,
+  projects: Project[],
+): Pick<AppState, "selectedProjectId" | "selectedSessionId"> {
+  const onlineRunnerIds = new Set(
+    state.runners.map((runner) => runner.runnerId),
+  );
+  const activeSessions = state.sessions.filter((session) => !session.archivedAt);
+  const hasActiveSession = (project: Project) =>
+    activeSessions.some((session) => session.projectId === project.id);
+  const selectedProjectId =
+    projects.find(
+      (project) => onlineRunnerIds.has(project.runnerId) && hasActiveSession(project),
+    )?.id ??
+    projects.find(hasActiveSession)?.id ??
+    projects.find((project) => onlineRunnerIds.has(project.runnerId))?.id ??
+    projects[0]?.id ??
+    "";
+  const selectedSessionId =
+    activeSessions.find((session) => session.projectId === selectedProjectId)
+      ?.id ?? "";
+  return { selectedProjectId, selectedSessionId };
 }
 
 function removeSessionState(state: AppState, sessionId: string): AppState {

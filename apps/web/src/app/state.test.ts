@@ -10,6 +10,40 @@ import type { SessionPatchHunk } from "../features/approvals/model";
 import { appReducer, initialAppState, type AppState } from "./state";
 
 describe("app reducer", () => {
+  it("bootstraps a previous project and session selection when both are active", () => {
+    const projects: Project[] = [
+      makeProject("project-1"),
+      makeProject("project-2"),
+    ];
+    const sessions: Session[] = [
+      makeSession("session-1", "project-1"),
+      makeSession("session-2", "project-2"),
+    ];
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedProjectId: "project-2",
+        selectedSessionId: "session-2",
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects,
+          runners: [runner],
+          sessions,
+          messages: [],
+          messageAttachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
   it("bootstraps a selected session from the selected project only", () => {
     const projects: Project[] = [
       makeProject("project-1"),
@@ -44,6 +78,71 @@ describe("app reducer", () => {
     expect(next.selectedSessionId).toBe("session-1");
   });
 
+  it("falls back to the default project when the previous project is archived", () => {
+    const projects: Project[] = [
+      { ...makeProject("project-1"), archivedAt: "2026-06-05T01:00:00.000Z" },
+      makeProject("project-2"),
+    ];
+    const sessions: Session[] = [
+      makeSession("session-1", "project-1"),
+      makeSession("session-2", "project-2"),
+    ];
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects,
+          runners: [runner],
+          sessions,
+          messages: [],
+          messageAttachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
+  it("falls back to the default valid session when the previous session is missing", () => {
+    const projects: Project[] = [
+      makeProject("project-1"),
+      makeProject("project-2"),
+    ];
+    const sessions: Session[] = [makeSession("session-2", "project-2")];
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects,
+          runners: [runner],
+          sessions,
+          messages: [],
+          messageAttachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
   it("prefers an online runner project when no previous project is selected", () => {
     const projects: Project[] = [
       makeProject("offline-project", "offline-runner"),
@@ -70,6 +169,47 @@ describe("app reducer", () => {
     expect(next.selectedProjectId).toBe("online-project");
     expect(next.selectedSessionId).toBe("online-session");
     expect(next.selectedRunnerId).toBe("runner-1");
+  });
+
+  it("selects the session project when switching directly to a session", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        projects: [makeProject("project-1"), makeProject("project-2")],
+        sessions: [
+          makeSession("session-1", "project-1"),
+          makeSession("session-2", "project-2"),
+        ],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      { type: "sessionSelected", sessionId: "session-2" },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
+  it("ignores direct switches to archived sessions", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        projects: [makeProject("project-1"), makeProject("project-2")],
+        sessions: [
+          makeSession("session-1", "project-1"),
+          {
+            ...makeSession("session-2", "project-2"),
+            archivedAt: "2026-06-05T01:00:00.000Z",
+          },
+        ],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      { type: "sessionSelected", sessionId: "session-2" },
+    );
+
+    expect(next.selectedProjectId).toBe("project-1");
+    expect(next.selectedSessionId).toBe("session-1");
   });
 
   it("applies message server events", () => {
@@ -201,10 +341,11 @@ describe("app reducer", () => {
     ]);
   });
 
-  it("clears the current selection when the selected project is archived", () => {
+  it("falls back when the selected project is archived", () => {
     const next = appReducer(
       {
         ...initialAppState,
+        runners: [runner],
         projects: [makeProject("project-1"), makeProject("project-2")],
         sessions: [
           makeSession("session-1", "project-1"),
@@ -223,6 +364,30 @@ describe("app reducer", () => {
     );
 
     expect(next.projects.map((project) => project.id)).toEqual(["project-2"]);
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
+  it("clears the current selection when the last active project is archived", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        runners: [runner],
+        projects: [makeProject("project-1")],
+        sessions: [makeSession("session-1", "project-1")],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "projectUpdated",
+        project: {
+          ...makeProject("project-1"),
+          archivedAt: "2026-06-05T01:00:00.000Z",
+        },
+      },
+    );
+
+    expect(next.projects).toEqual([]);
     expect(next.selectedProjectId).toBe("");
     expect(next.selectedSessionId).toBe("");
   });

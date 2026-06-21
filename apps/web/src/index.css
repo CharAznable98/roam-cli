@@ -2205,6 +2205,11 @@
     padding-left: 8px;
     padding-right: 8px;
   }
+
+  .composer textarea {
+    min-height: 64px;
+    padding-bottom: 16px;
+  }
 }
 
 @keyframes roam-spin {
