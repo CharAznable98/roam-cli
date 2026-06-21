@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -114,6 +115,76 @@ describe("ProjectForm", () => {
         name: "web",
       });
     });
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale directory picker loads after a forced reload", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const rootLoads: Array<Deferred<FileNode[]>> = [];
+    const onFetchRunnerDirectoryTree = vi.fn(
+      (_runnerId: string, options?: { path?: string }) => {
+        if (options?.path !== ".") {
+          return Promise.resolve([]);
+        }
+        const load = deferred<FileNode[]>();
+        rootLoads.push(load);
+        return load.promise;
+      },
+    );
+    const onCreateRunnerDirectory = vi.fn(
+      async (
+        _runnerId: string,
+        input: { parentPath: string; name: string },
+      ) => ({
+        requestId: "directory-create-mobile",
+        path: input.name,
+        node: directoryNode(input.name, input.name, []),
+      }),
+    );
+    render(
+      <ProjectForm
+        runners={runners}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    const picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+    await waitFor(() => expect(rootLoads).toHaveLength(1));
+
+    const folderInput = within(picker).getByLabelText("New folder name");
+    fireEvent.change(folderInput, { target: { value: "mobile" } });
+    fireEvent.submit(folderInput.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(onCreateRunnerDirectory).toHaveBeenCalledWith("runner-1", {
+        parentPath: ".",
+        name: "mobile",
+      });
+    });
+    await waitFor(() => expect(rootLoads).toHaveLength(2));
+    const staleRootLoad = rootLoads[0]!;
+    const reloadedRootLoad = rootLoads[1]!;
+
+    await act(async () => {
+      reloadedRootLoad.resolve([directoryNode("mobile", "mobile")]);
+      await reloadedRootLoad.promise;
+    });
+    expect(
+      await within(picker).findByRole("treeitem", { name: /mobile/ }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      staleRootLoad.resolve([]);
+      await staleRootLoad.promise;
+    });
+    expect(
+      within(picker).getByRole("treeitem", { name: /mobile/ }),
+    ).toBeInTheDocument();
     expect(onCreate).not.toHaveBeenCalled();
   });
 
@@ -281,4 +352,17 @@ function directoryNode(
     type: "directory",
     ...(children === undefined ? {} : { children }),
   };
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }

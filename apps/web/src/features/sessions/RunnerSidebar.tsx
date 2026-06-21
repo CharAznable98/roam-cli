@@ -21,6 +21,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -513,6 +514,8 @@ function DirectoryPickerModal({
   const [folderName, setFolderName] = useState("");
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const activeLoadRequestsRef = useRef<Record<string, number>>({});
+  const nextLoadRequestIdRef = useRef(0);
   const displayDirectory = composeProjectDirectory(
     runner.workspaceRoot,
     draftPath === "." ? "" : draftPath,
@@ -522,19 +525,28 @@ function DirectoryPickerModal({
     if (!options.force && pathStates[path] === "ready") {
       return;
     }
+    const requestId = ++nextLoadRequestIdRef.current;
+    activeLoadRequestsRef.current[path] = requestId;
     setPathStates((current) => ({ ...current, [path]: "loading" }));
     void onFetchRunnerDirectoryTree(runner.runnerId, { path, depth: 1 })
       .then((children) => {
+        if (activeLoadRequestsRef.current[path] !== requestId) {
+          return;
+        }
         setNodes((current) => replaceTreeChildren(current, path, children));
         setPathStates((current) => ({ ...current, [path]: "ready" }));
       })
       .catch((loadError: unknown) => {
+        if (activeLoadRequestsRef.current[path] !== requestId) {
+          return;
+        }
         setPathStates((current) => ({ ...current, [path]: "error" }));
         setError(errorMessage(loadError, "Directory could not be loaded."));
       });
   };
 
   useEffect(() => {
+    activeLoadRequestsRef.current = {};
     setNodes([]);
     setPathStates({});
     setDraftPath(selectedPath || ".");
