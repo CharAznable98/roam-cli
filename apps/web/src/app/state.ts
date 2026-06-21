@@ -969,13 +969,7 @@ function selectDefaultProjectSession(
     state.runners.map((runner) => runner.runnerId),
   );
   const activeSessions = state.sessions.filter((session) => !session.archivedAt);
-  const hasActiveSession = (project: Project) =>
-    activeSessions.some((session) => session.projectId === project.id);
   const selectedProjectId =
-    projects.find(
-      (project) => onlineRunnerIds.has(project.runnerId) && hasActiveSession(project),
-    )?.id ??
-    projects.find(hasActiveSession)?.id ??
     projects.find((project) => onlineRunnerIds.has(project.runnerId))?.id ??
     projects[0]?.id ??
     "";

@@ -113,7 +113,7 @@ describe("app reducer", () => {
     expect(next.selectedSessionId).toBe("session-2");
   });
 
-  it("falls back to the default valid session when the previous session is missing", () => {
+  it("keeps online project order when the previous session is missing", () => {
     const projects: Project[] = [
       makeProject("project-1"),
       makeProject("project-2"),
@@ -140,8 +140,8 @@ describe("app reducer", () => {
       },
     );
 
-    expect(next.selectedProjectId).toBe("project-2");
-    expect(next.selectedSessionId).toBe("session-2");
+    expect(next.selectedProjectId).toBe("project-1");
+    expect(next.selectedSessionId).toBe("");
   });
 
   it("prefers an online runner project when no previous project is selected", () => {
@@ -169,6 +169,33 @@ describe("app reducer", () => {
 
     expect(next.selectedProjectId).toBe("online-project");
     expect(next.selectedSessionId).toBe("online-session");
+    expect(next.selectedRunnerId).toBe("runner-1");
+  });
+
+  it("prefers an online empty project over an offline project with a session", () => {
+    const projects: Project[] = [
+      makeProject("online-project", "runner-1"),
+      makeProject("offline-project", "offline-runner"),
+    ];
+    const sessions: Session[] = [
+      makeSession("offline-session", "offline-project", "offline-runner"),
+    ];
+
+    const next = appReducer(initialAppState, {
+      type: "bootstrapSucceeded",
+      remote: {
+        projects,
+        runners: [runner],
+        sessions,
+        messages: [],
+        messageAttachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(next.selectedProjectId).toBe("online-project");
+    expect(next.selectedSessionId).toBe("");
     expect(next.selectedRunnerId).toBe("runner-1");
   });
 
