@@ -135,10 +135,13 @@ export function GitPanel({
     diff !== undefined &&
     diff.path === selectedChange.path &&
     diff.mode === selectedMode;
-  const showTextDiff =
-    hasCurrentDiff && !diff.binary && !diff.tooLarge;
-  const diffLanguage = showTextDiff ? (diff.language ?? "plaintext") : "plaintext";
+  const showTextDiff = hasCurrentDiff && !diff.binary && !diff.tooLarge;
+  const diffLanguage = showTextDiff
+    ? (diff.language ?? "plaintext")
+    : "plaintext";
   const canInit = Boolean(selectedContext && isNonGitError(statusError));
+  const selectedChangeIsStaged = selectedChange?.staged === true;
+  const fileActionBusy = jobState === "loading";
 
   useLayoutEffect(() => {
     statusContextKeyRef.current = selectedContextIdentity;
@@ -184,13 +187,7 @@ export function GitPanel({
     return () => {
       cancelled = true;
     };
-  }, [
-    onFetchStatus,
-    active,
-    project,
-    runnerOnline,
-    selectedContext,
-  ]);
+  }, [onFetchStatus, active, project, runnerOnline, selectedContext]);
 
   useEffect(() => {
     if (!active || !selectedContext || !selectedChange) {
@@ -508,9 +505,10 @@ export function GitPanel({
                     "Remove this worktree from disk? The branch will not be deleted.",
                   )
                 ) {
-                  void runJob(() =>
-                    onRemoveWorktree({ context: selectedContext }),
-                  projectContext).then(() =>
+                  void runJob(
+                    () => onRemoveWorktree({ context: selectedContext }),
+                    projectContext,
+                  ).then(() =>
                     setSelectedContextKey(contextKey(projectContext)),
                   );
                 }
@@ -545,6 +543,12 @@ export function GitPanel({
                 <button
                   type="button"
                   className="small-button"
+                  disabled={selectedChangeIsStaged || fileActionBusy}
+                  title={
+                    selectedChangeIsStaged
+                      ? "This file is already staged"
+                      : "Stage file"
+                  }
                   onClick={() =>
                     void runJob(() =>
                       onStagePaths({
@@ -560,6 +564,12 @@ export function GitPanel({
                 <button
                   type="button"
                   className="small-button"
+                  disabled={!selectedChangeIsStaged || fileActionBusy}
+                  title={
+                    selectedChangeIsStaged
+                      ? "Unstage file"
+                      : "This file is not staged"
+                  }
                   onClick={() =>
                     void runJob(() =>
                       onUnstagePaths({
@@ -575,6 +585,12 @@ export function GitPanel({
                 <button
                   type="button"
                   className="small-button"
+                  disabled={selectedChangeIsStaged || fileActionBusy}
+                  title={
+                    selectedChangeIsStaged
+                      ? "Unstage before discarding"
+                      : "Discard working tree changes"
+                  }
                   onClick={() => {
                     if (
                       window.confirm(

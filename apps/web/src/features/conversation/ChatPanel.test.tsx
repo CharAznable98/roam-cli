@@ -102,10 +102,22 @@ describe("ChatPanel", () => {
 
     render(<ChatPanel session={baseSession} messages={[]} onSend={vi.fn()} />);
 
-    expect(screen.getByRole("textbox", { name: "Chat composer" })).toHaveAttribute(
-      "placeholder",
-      "Message the active session",
+    expect(
+      screen.getByRole("textbox", { name: "Chat composer" }),
+    ).toHaveAttribute("placeholder", "Message the active session");
+  });
+
+  it("shows recovery guidance for failed sessions", () => {
+    render(
+      <ChatPanel
+        session={{ ...baseSession, status: "failed" }}
+        messages={[]}
+        onSend={vi.fn()}
+      />,
     );
+
+    expect(screen.getByText("Session failed")).toBeInTheDocument();
+    expect(screen.getByText(/Check status to refresh/)).toBeInTheDocument();
   });
 
   it("submits the composer with Ctrl+Enter", async () => {

@@ -15,19 +15,19 @@ export default {
           600: "#586a80",
           700: "#465568",
           800: "#2e3a49",
-          900: "#1f2937"
+          900: "#1f2937",
         },
         signal: {
-          green: "#0f9f6e",
-          amber: "#d88913",
-          red: "#d04444",
-          cyan: "#138fbd"
-        }
+          green: "#087451",
+          amber: "#8a5200",
+          red: "#b42318",
+          cyan: "#0b6f98",
+        },
       },
       boxShadow: {
-        panel: "0 1px 2px rgba(15, 23, 42, 0.08)"
-      }
-    }
+        panel: "0 1px 2px rgba(15, 23, 42, 0.08)",
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 } satisfies Config;

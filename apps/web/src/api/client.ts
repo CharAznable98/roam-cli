@@ -717,7 +717,54 @@ function formatHttpError(
       "Check the API origin, reverse proxy, or WebSocket/API routing configuration.",
     ].join(" ");
   }
-  return `${status}${body ? `: ${body}` : ""}`;
+  const detail = formatHttpErrorBody(body);
+  return `RoamCli API request ${path} failed with ${status}${detail ? `: ${detail}` : ""}.`;
+}
+
+function formatHttpErrorBody(body: string): string {
+  const trimmedBody = body.trim();
+  if (!trimmedBody) {
+    return "";
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmedBody);
+    if (isRecord(parsed)) {
+      const message = firstStringValue(parsed, ["message", "error", "detail"]);
+      if (message) {
+        return message;
+      }
+      const nestedError = parsed.error;
+      if (isRecord(nestedError)) {
+        const nestedMessage = firstStringValue(nestedError, [
+          "message",
+          "detail",
+        ]);
+        if (nestedMessage) {
+          return nestedMessage;
+        }
+      }
+    }
+  } catch {
+    return trimmedBody;
+  }
+  return "The server returned an error response without a readable message";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstStringValue(
+  record: Record<string, unknown>,
+  keys: string[],
+): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
 }
 
 function isHtmlResponse(contentType: string, body: string): boolean {

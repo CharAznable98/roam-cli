@@ -45,10 +45,7 @@ import {
   getSelectedSession,
 } from "../features/sessions/model";
 import { buildRunnerCommand } from "./runner-command";
-import {
-  loadLastSelection,
-  saveLastSelection,
-} from "./selection-storage";
+import { loadLastSelection, saveLastSelection } from "./selection-storage";
 import { appReducer, initialAppState, type AppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
@@ -88,7 +85,6 @@ export function useRoamController() {
 
   useEffect(() => {
     localStorage.setItem("roamcli.token", token);
-    dispatch({ type: "bootstrapStarted" });
     const api = createRoamApiClient({ token });
     apiRef.current = api;
     let cancelled = false;
@@ -97,22 +93,63 @@ export function useRoamController() {
     let retryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let retryAttempt = 0;
+    let nextRemoteStateRequestId = 0;
+    let latestBootstrapRequestId = 0;
+    let latestNotificationRequestId = 0;
+    let pendingBootstrapRequestId: number | undefined;
+    let bootstrapReady = false;
 
     function loadRemoteState(failureMode: "bootstrap" | "notification") {
+      const requestId = ++nextRemoteStateRequestId;
+      const isBootstrap = failureMode === "bootstrap";
+      if (isBootstrap) {
+        latestBootstrapRequestId = requestId;
+        pendingBootstrapRequestId = requestId;
+        bootstrapReady = false;
+      } else {
+        latestNotificationRequestId = requestId;
+      }
+      if (failureMode === "bootstrap") {
+        dispatch({ type: "bootstrapStarted" });
+      }
       void api
         .loadInitialState()
         .then((remote) => {
-          if (!cancelled) {
-            dispatch({ type: "bootstrapSucceeded", remote });
+          if (cancelled) {
+            return;
           }
+          if (isBootstrap) {
+            if (requestId !== latestBootstrapRequestId) {
+              return;
+            }
+            pendingBootstrapRequestId = undefined;
+            bootstrapReady = true;
+            dispatch({ type: "bootstrapSucceeded", remote });
+            return;
+          }
+          if (
+            pendingBootstrapRequestId !== undefined ||
+            requestId !== latestNotificationRequestId
+          ) {
+            return;
+          }
+          dispatch({ type: "bootstrapSucceeded", remote });
         })
         .catch((loadError: unknown) => {
           if (cancelled) {
             return;
           }
           const message = errorMessage(loadError);
-          if (failureMode === "bootstrap") {
+          if (isBootstrap) {
+            if (requestId !== latestBootstrapRequestId) {
+              return;
+            }
+            pendingBootstrapRequestId = undefined;
+            bootstrapReady = false;
             dispatch({ type: "bootstrapFailed", message });
+            return;
+          }
+          if (!bootstrapReady || requestId !== latestNotificationRequestId) {
             return;
           }
           dispatch({
@@ -210,6 +247,7 @@ export function useRoamController() {
     reconnectStreamRef.current = () => {
       retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
       retryAttempt = 0;
+      loadRemoteState("bootstrap");
       connectStream();
     };
     connectStream();

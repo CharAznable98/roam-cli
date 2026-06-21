@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-06-17
+- Last refreshed: 2026-06-21
 - Primary product surfaces:
   - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
   - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
@@ -22,6 +22,7 @@
   - `apps/web/src/features/sessions/NewSessionForm.tsx`: current direct / managed worktree session creation UI.
   - `apps/web/src/features/files/FilePanel.tsx`: current lightweight file tree and text editor surface.
   - `apps/web/src/index.css` and `apps/web/tailwind.config.ts`: responsive shell, restrained operational palette, and component styling.
+  - 2026-06-21 Web redesign pass: `apps/web/src/app/AppShell.tsx` and `apps/web/src/index.css` reviewed for shell hierarchy, panel rhythm, mobile touch targets, and operational status visibility.
 
 ## Brand
 
@@ -38,6 +39,7 @@
   - Hidden platform magic.
   - Ambiguous Git actions whose target repo, branch, worktree, or file is unclear.
   - GitHub/GitLab/Bitbucket platform features in the Git tab scope.
+  - Marketing-page visual devices in the product shell, including hero copy, decorative image panels, logo walls, and ornamental gradients.
 
 ## Product goals
 
@@ -142,6 +144,7 @@
 - Color:
   - Continue the existing muted operational palette from `tailwind.config.ts`: ink neutrals plus signal green/amber/red/cyan.
   - Avoid one-hue surfaces and large decorative gradients.
+  - Web shell redesign uses a light operational theme with cool neutral surfaces, one cyan accent, semantic green/amber/red states, and no mid-page theme inversion.
   - Git statuses use concise, consistent signal tones:
     - clean/success: signal green
     - warning/diverged/conflict risk: signal amber
@@ -150,12 +153,15 @@
 - Typography:
   - Continue system sans-serif with compact operational hierarchy.
   - Use monospace only for code, refs, SHAs, paths, and command output.
+  - Prefer system UI over a branded display face; this is a repeated-use control plane, not a landing page.
 - Spacing/layout rhythm:
   - Dense but readable. Git views are work surfaces, not marketing panels.
   - Keep fixed toolbar and row heights where possible to prevent diff/status reflow.
+  - Desktop shell uses framed work panes with small gutters; mobile keeps full-width panes and bottom navigation.
 - Shape/radius/elevation:
   - Match existing restrained 7-8px radius and light panel shadows.
   - Do not nest decorative cards inside cards.
+  - Radius system: 8px controls, 10px work panes, full-pill badges only.
 - Motion:
   - Use minimal motion for loading/progress only.
   - Respect reduced-motion preference.

@@ -306,6 +306,8 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
+  let queuedRunnerResponses: Array<Deferred<Response>>;
+  let failBootstrapRunners: boolean;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
@@ -332,6 +334,8 @@ describe("App", () => {
     deferredFileContent = new Map();
     deferredGitStatus = new Map();
     deferredGitBlame = new Map();
+    queuedRunnerResponses = [];
+    failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
     failNextSessionRename = false;
@@ -381,6 +385,13 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/runners") {
+          const queuedResponse = queuedRunnerResponses.shift();
+          if (queuedResponse) {
+            return queuedResponse.promise;
+          }
+          if (failBootstrapRunners) {
+            return jsonResponse({ message: "backend route unavailable" }, 503);
+          }
           return jsonResponse({ runners: runnerOnline ? [runner] : [] });
         }
         if (requestUrl.pathname === "/v1/runners/real-runner/directories") {
@@ -827,6 +838,116 @@ describe("App", () => {
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
       ).toEqual({ projectId: "project-1", sessionId: "session-1" });
     });
+  });
+
+  it("retries the bootstrap API from connection recovery", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loaded from API")).not.toBeInTheDocument();
+
+    failBootstrapRunners = false;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connection settings" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reconnect now" }),
+    );
+
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+    expect(screen.queryByText("API connection failed")).not.toBeInTheDocument();
+    expect(
+      fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
+        .length,
+    ).toBeGreaterThan(1);
+  });
+
+  it("ignores stale bootstrap failures after a later recovery succeeds", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+
+    failBootstrapRunners = false;
+    const staleFailure = deferred<Response>();
+    const successfulRetry = deferred<Response>();
+    queuedRunnerResponses.push(staleFailure, successfulRetry);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connection settings" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    const reconnectButton = within(dialog).getByRole("button", {
+      name: "Reconnect now",
+    });
+
+    fireEvent.click(reconnectButton);
+    fireEvent.click(reconnectButton);
+
+    await act(async () => {
+      successfulRetry.resolve(jsonResponse({ runners: [runner] }));
+      await successfulRetry.promise;
+    });
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+
+    await act(async () => {
+      staleFailure.resolve(
+        jsonResponse({ message: "stale backend failure" }, 503),
+      );
+      await staleFailure.promise;
+    });
+
+    expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+    expect(screen.queryByText("API connection failed")).not.toBeInTheDocument();
+  });
+
+  it("keeps the initial bootstrap authoritative while missed-events sync is pending", async () => {
+    const initialBootstrap = deferred<Response>();
+    const missedEventsSync = deferred<Response>();
+    queuedRunnerResponses.push(initialBootstrap, missedEventsSync);
+
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      expect(sockets).toHaveLength(1);
+
+      act(() => {
+        sockets[0]?.dispatchEvent(new Event("close"));
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(sockets).toHaveLength(2);
+
+      act(() => {
+        sockets[1]?.dispatchEvent(new Event("open"));
+      });
+
+      await act(async () => {
+        missedEventsSync.resolve(
+          jsonResponse({ message: "temporary sync failure" }, 503),
+        );
+        await missedEventsSync.promise;
+      });
+
+      await act(async () => {
+        initialBootstrap.resolve(jsonResponse({ runners: [runner] }));
+        await initialBootstrap.promise;
+      });
+
+      expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+      expect(
+        screen.queryByText("API connection failed"),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("checks only the selected session status from the session actions menu", async () => {
@@ -1756,7 +1877,7 @@ describe("App", () => {
     );
 
     expect(
-      mobileTabs.getByRole("button", { name: "Conversation" }),
+      mobileTabs.getByRole("button", { name: "Chat" }),
     ).toBeInTheDocument();
     expect(
       mobileTabs.getByRole("button", { name: "Files" }),
@@ -2906,8 +3027,9 @@ describe("App", () => {
       );
     });
 
-    const intermediate =
-      await within(conversation).findByText("Intermediate output (2)");
+    const intermediate = await within(conversation).findByText(
+      "Intermediate output (2)",
+    );
     const group = intermediate.closest("details");
     expect(group).not.toHaveAttribute("open");
     expect(group).not.toBeNull();

@@ -122,6 +122,7 @@ export function AppShell({ controller }: AppShellProps) {
     state.loadState === "ready" &&
     state.runners.length === 0 &&
     !hasWorkspaceData;
+  const showApiErrorEmpty = state.loadState === "error";
   const showWorkspace =
     state.loadState === "ready" &&
     (state.runners.length > 0 || hasWorkspaceData);
@@ -132,6 +133,11 @@ export function AppShell({ controller }: AppShellProps) {
     state.loadState,
     streamReconnect.mode,
   );
+  const topbarContext = selectedProject
+    ? selectedSession
+      ? `${selectedProject.name} / ${selectedSession.title}`
+      : `${selectedProject.name} / No session selected`
+    : "Runner-backed coding sessions";
   const CompactStatusIcon =
     state.connectionState === "open" && state.loadState !== "error"
       ? Wifi
@@ -145,14 +151,15 @@ export function AppShell({ controller }: AppShellProps) {
     <div className={`app-shell active-${state.activeTab}`}>
       <header className="topbar">
         <div className="topbar-title">
-          <p className="text-xs font-medium uppercase text-ink-500">RoamCli</p>
+          <p className="topbar-kicker">RoamCli</p>
           <h1 className="truncate text-lg font-semibold text-ink-900">
             Remote Agent Control
           </h1>
+          <p className="topbar-context">{topbarContext}</p>
         </div>
         <div className="topbar-actions topbar-actions-desktop">
           <span
-            className={`rounded px-2 py-1 text-xs font-medium ${state.connectionState === "open" ? "bg-emerald-50 text-signal-green" : "bg-amber-50 text-signal-amber"}`}
+            className={`topbar-status ${state.connectionState === "open" ? "success" : "warning"}`}
           >
             {state.connectionState === "open"
               ? "stream connected"
@@ -167,10 +174,8 @@ export function AppShell({ controller }: AppShellProps) {
             />
           </label>
           <span
-            className={`rounded px-2 py-1 text-xs font-medium ${
-              state.loadState === "error"
-                ? "bg-red-50 text-signal-red"
-                : "bg-emerald-50 text-signal-green"
+            className={`topbar-status ${
+              state.loadState === "error" ? "error" : "success"
             }`}
           >
             {state.loadState === "error"
@@ -210,6 +215,25 @@ export function AppShell({ controller }: AppShellProps) {
               resume sessions.
             </p>
             <pre>{runnerCommand}</pre>
+          </div>
+        </div>
+      ) : null}
+
+      {showApiErrorEmpty ? (
+        <div className="empty-state app-error-state" role="alert">
+          <div>
+            <h2>API connection failed</h2>
+            <p>
+              Check the API token or backend route, then reconnect the stream.
+            </p>
+            <button
+              className="primary-action-button"
+              type="button"
+              onClick={() => setMobileStatusModalOpen(true)}
+            >
+              <WifiOff size={16} />
+              Connection settings
+            </button>
           </div>
         </div>
       ) : null}
@@ -281,7 +305,7 @@ export function AppShell({ controller }: AppShellProps) {
                   <button
                     className="small-button"
                     type="button"
-                    aria-label="Switch Session"
+                    aria-label="Choose session"
                     onClick={() => setMobileSessionSwitcherOpen(true)}
                   >
                     Choose session
@@ -368,24 +392,6 @@ export function AppShell({ controller }: AppShellProps) {
 
           <BottomTabs activeTab={state.activeTab} onChange={setActiveTab} />
 
-          {mobileStatusModalOpen ? (
-            <SidebarModal
-              title="Connection"
-              variant="sheet"
-              onClose={() => setMobileStatusModalOpen(false)}
-            >
-              <MobileStatusSheet
-                token={token}
-                onTokenChange={setToken}
-                connectionState={state.connectionState}
-                loadState={state.loadState}
-                runnerCount={state.runners.length}
-                streamReconnect={streamReconnect}
-                onReconnect={reconnectStream}
-              />
-            </SidebarModal>
-          ) : null}
-
           {mobileSessionSwitcherOpen ? (
             <SidebarModal
               title="Switch Session"
@@ -456,6 +462,24 @@ export function AppShell({ controller }: AppShellProps) {
             </SidebarModal>
           ) : null}
         </>
+      ) : null}
+
+      {mobileStatusModalOpen ? (
+        <SidebarModal
+          title="Connection"
+          variant="sheet"
+          onClose={() => setMobileStatusModalOpen(false)}
+        >
+          <MobileStatusSheet
+            token={token}
+            onTokenChange={setToken}
+            connectionState={state.connectionState}
+            loadState={state.loadState}
+            runnerCount={state.runners.length}
+            streamReconnect={streamReconnect}
+            onReconnect={reconnectStream}
+          />
+        </SidebarModal>
       ) : null}
     </div>
   );

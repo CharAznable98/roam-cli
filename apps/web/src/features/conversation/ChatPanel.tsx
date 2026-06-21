@@ -317,6 +317,7 @@ export function ChatPanel({
     (session.status === "pending" ||
       session.status === "running" ||
       session.status === "waiting_approval");
+  const showFailureNotice = session.status === "failed";
 
   return (
     <section className="chat-column" aria-label="Conversation">
@@ -536,6 +537,15 @@ export function ChatPanel({
         ref={messageListRef}
         onScroll={handleMessageListScroll}
       >
+        {showFailureNotice ? (
+          <div className="session-failure-notice" role="status">
+            <strong>Session failed</strong>
+            <span>
+              Check status to refresh the terminal state, or resume the session
+              to continue from the last recorded context.
+            </span>
+          </div>
+        ) : null}
         {messages.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.

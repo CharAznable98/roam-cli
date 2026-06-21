@@ -6,7 +6,7 @@ const tabs: Array<{
   label: string;
   icon: typeof MessageSquare;
 }> = [
-  { id: "chat", label: "Conversation", icon: MessageSquare },
+  { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "files", label: "Files", icon: Files },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "approvals", label: "Approvals", icon: Bell },
