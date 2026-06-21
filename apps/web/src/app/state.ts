@@ -849,12 +849,13 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   }
   if (event.type === "file:tree") {
     const path = event.result.root.path;
+    const requestId = fileTreeRequestGeneration(event.result);
     if (
       !shouldApplyFileTreeEvent(
         state,
         event.result.sessionId,
         path,
-        fileTreeRequestGeneration(event.result),
+        requestId,
       )
     ) {
       return state;
@@ -864,6 +865,13 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       event.result.sessionId,
       path,
       event.result.root.children ?? [],
+      {
+        staleAncestorRequests: !isTrackedFileTreeRequest(
+          state,
+          event.result.sessionId,
+          requestId,
+        ),
+      },
     );
   }
   if (
@@ -965,6 +973,16 @@ function isCurrentFileTreeRequest(
   return state.fileTreeRequestIds[sessionId]?.[path] === requestId;
 }
 
+function isTrackedFileTreeRequest(
+  state: AppState,
+  sessionId: string,
+  requestId: string,
+): boolean {
+  return Object.values(state.fileTreeRequestIds[sessionId] ?? {}).includes(
+    requestId,
+  );
+}
+
 function fileTreeRequestGeneration(result: FileTreeResult): string {
   return result.clientRequestId ?? result.requestId;
 }
@@ -981,8 +999,8 @@ function shouldApplyFileTreeEvent(
   if (path !== "." && state.fileTreePathState[sessionId]?.["."] === "loading") {
     return false;
   }
-  // Same-path broadcasts from other clients should supersede pending local loads.
-  // Applying the event prunes those local request ids and marks them stale.
+  // Broadcasts that survive the stale/root guards may supersede pending local
+  // loads; applyLoadedFileTree prunes the covered request ids.
   return true;
 }
 
@@ -994,16 +1012,26 @@ function isFileTreePathLoading(
   return state.fileTreePathState[sessionId]?.[path] === "loading";
 }
 
+type PrunePathEntries = <T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+) => Record<string, T>;
+
 function applyLoadedFileTree(
   state: AppState,
   sessionId: string,
   path: string,
   files: FileNode[],
+  options: { staleAncestorRequests?: boolean } = {},
 ): AppState {
-  const removedRequestIds = descendantPathEntryValues(
-    state.fileTreeRequestIds[sessionId] ?? {},
-    path,
-  );
+  const requestIdsByPath = state.fileTreeRequestIds[sessionId] ?? {};
+  const pruneCoveredPathEntries: PrunePathEntries =
+    options.staleAncestorRequests
+      ? pruneOverlappingPathEntries
+      : pruneDescendantPathEntries;
+  const removedRequestIds = options.staleAncestorRequests
+    ? overlappingPathEntryValues(requestIdsByPath, path)
+    : descendantPathEntryValues(requestIdsByPath, path);
   return {
     ...state,
     filesBySession: {
@@ -1021,7 +1049,7 @@ function applyLoadedFileTree(
     fileTreePathState: {
       ...state.fileTreePathState,
       [sessionId]: {
-        ...pruneDescendantPathStates(
+        ...pruneCoveredPathEntries(
           state.fileTreePathState[sessionId] ?? {},
           path,
         ),
@@ -1032,6 +1060,7 @@ function applyLoadedFileTree(
       state.fileTreeRequestIds,
       sessionId,
       path,
+      pruneCoveredPathEntries,
     ),
     staleFileTreeRequestIds: markStaleFileTreeRequestIds(
       state.staleFileTreeRequestIds,
@@ -1101,15 +1130,13 @@ function pruneFileTreeRequestIds(
   requestIdsBySession: Record<string, Record<string, string>>,
   sessionId: string,
   path: string,
+  prunePathEntries: PrunePathEntries = pruneDescendantPathEntries,
 ): Record<string, Record<string, string>> {
   const sessionRequestIds = requestIdsBySession[sessionId];
   if (!sessionRequestIds) {
     return requestIdsBySession;
   }
-  const nextSessionRequestIds = pruneDescendantPathEntries(
-    sessionRequestIds,
-    path,
-  );
+  const nextSessionRequestIds = prunePathEntries(sessionRequestIds, path);
   if (Object.keys(nextSessionRequestIds).length === 0) {
     return omitKey(requestIdsBySession, sessionId);
   }
@@ -1117,13 +1144,6 @@ function pruneFileTreeRequestIds(
     ...requestIdsBySession,
     [sessionId]: nextSessionRequestIds,
   };
-}
-
-function pruneDescendantPathStates(
-  pathStates: Record<string, AsyncState>,
-  path: string,
-): Record<string, AsyncState> {
-  return pruneDescendantPathEntries(pathStates, path);
 }
 
 function pruneDescendantPathEntries<T>(
@@ -1141,6 +1161,20 @@ function pruneDescendantPathEntries<T>(
   );
 }
 
+function pruneOverlappingPathEntries<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): Record<string, T> {
+  if (path === ".") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(entriesByPath).filter(([candidate]) => {
+      return !isOverlappingTreePath(candidate, path);
+    }),
+  );
+}
+
 function descendantPathEntryValues<T>(
   entriesByPath: Record<string, T>,
   path: string,
@@ -1152,6 +1186,29 @@ function descendantPathEntryValues<T>(
   return Object.entries(entriesByPath)
     .filter(([candidate]) => candidate === path || candidate.startsWith(prefix))
     .map(([, value]) => value);
+}
+
+function overlappingPathEntryValues<T>(
+  entriesByPath: Record<string, T>,
+  path: string,
+): T[] {
+  if (path === ".") {
+    return Object.values(entriesByPath);
+  }
+  return Object.entries(entriesByPath)
+    .filter(([candidate]) => isOverlappingTreePath(candidate, path))
+    .map(([, value]) => value);
+}
+
+function isOverlappingTreePath(candidate: string, path: string): boolean {
+  if (candidate === ".") {
+    return false;
+  }
+  return (
+    candidate === path ||
+    candidate.startsWith(`${path}/`) ||
+    path.startsWith(`${candidate}/`)
+  );
 }
 
 function upsertApprovalState(state: AppState, approval: Approval): AppState {

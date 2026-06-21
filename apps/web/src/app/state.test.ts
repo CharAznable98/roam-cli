@@ -874,6 +874,107 @@ describe("app reducer", () => {
     expect(staleLocal).toBe(broadcastApplied);
   });
 
+  it("marks pending ancestor file tree loads stale after child broadcasts", () => {
+    const loadingParent = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-1": [
+            {
+              path: "src",
+              name: "src",
+              type: "directory",
+              children: [
+                {
+                  path: "src/components",
+                  name: "components",
+                  type: "directory",
+                  children: [
+                    {
+                      path: "src/components/Old.tsx",
+                      name: "Old.tsx",
+                      type: "file",
+                      size: 1,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        fileTreePathState: {
+          "session-1": {
+            src: "ready",
+            "src/components": "ready",
+          },
+        },
+      },
+      {
+        type: "fileTreePathLoading",
+        sessionId: "session-1",
+        path: "src",
+        requestId: "parent-tree",
+      },
+    );
+    const childBroadcast: ServerEvent = {
+      type: "file:tree",
+      result: {
+        requestId: "child-broadcast",
+        sessionId: "session-1",
+        root: {
+          path: "src/components",
+          name: "components",
+          type: "directory",
+          children: [
+            {
+              path: "src/components/Updated.tsx",
+              name: "Updated.tsx",
+              type: "file",
+              size: 42,
+            },
+          ],
+        },
+      },
+    };
+
+    const broadcastApplied = appReducer(loadingParent, {
+      type: "serverEventReceived",
+      event: childBroadcast,
+    });
+    const staleParent = appReducer(broadcastApplied, {
+      type: "fileTreeLoaded",
+      sessionId: "session-1",
+      path: "src",
+      requestId: "parent-tree",
+      files: [
+        {
+          path: "src/Stale.tsx",
+          name: "Stale.tsx",
+          type: "file",
+          size: 1,
+        },
+      ],
+    });
+
+    expect(
+      broadcastApplied.filesBySession["session-1"]?.[0],
+    ).toMatchObject({
+      path: "src",
+      children: [
+        {
+          path: "src/components",
+          children: [{ path: "src/components/Updated.tsx" }],
+        },
+      ],
+    });
+    expect(broadcastApplied.fileTreeRequestIds["session-1"]).toBeUndefined();
+    expect(broadcastApplied.fileTreePathState["session-1"]).toEqual({
+      "src/components": "ready",
+    });
+    expect(broadcastApplied.staleFileTreeRequestIds["parent-tree"]).toBe(true);
+    expect(staleParent).toBe(broadcastApplied);
+  });
+
   it("treats streamed depth-zero directory updates as empty child lists", () => {
     const event: ServerEvent = {
       type: "file:tree",
