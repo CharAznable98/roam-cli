@@ -1,4 +1,8 @@
-import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
+import type {
+  AgentSkillSummary,
+  RunnerCapability,
+  RunnerProfile,
+} from "@roamcli/shared/protocol";
 
 export type PromptDelivery = "argument" | "stdin";
 
@@ -11,6 +15,11 @@ export interface AgentLaunchContext extends AgentPluginContext {
   prompt: string;
   resumeThreadId?: string;
   attachments?: readonly AgentLaunchAttachment[];
+}
+
+export interface AgentSkillListContext extends AgentPluginContext {
+  workspace: string;
+  basePath: string;
 }
 
 export interface AgentLaunchAttachment {
@@ -58,6 +67,9 @@ export interface AgentDefinition {
   buildCapability(context: AgentPluginContext): RunnerCapability;
   buildLaunch(context: AgentLaunchContext): AgentLaunch;
   createParser(): AgentOutputParser;
+  listSkills?(
+    context: AgentSkillListContext,
+  ): Promise<readonly AgentSkillSummary[]>;
 }
 
 export interface AgentPlugin {

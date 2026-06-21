@@ -6,10 +6,10 @@ const tabs: Array<{
   label: string;
   icon: typeof MessageSquare;
 }> = [
-  { id: "chat", label: "对话", icon: MessageSquare },
-  { id: "files", label: "文件", icon: Files },
+  { id: "chat", label: "Conversation", icon: MessageSquare },
+  { id: "files", label: "Files", icon: Files },
   { id: "git", label: "Git", icon: GitBranch },
-  { id: "approvals", label: "审批", icon: Bell },
+  { id: "approvals", label: "Approvals", icon: Bell },
 ];
 
 export function BottomTabs({

@@ -353,6 +353,9 @@ describe("ChatPanel", () => {
     const menu = screen.getByRole("menu", { name: "Session actions" });
 
     expect(
+      within(menu).getByRole("menuitem", { name: /Skill list/ }),
+    ).toHaveTextContent(/^Skill list$/);
+    expect(
       within(menu).getByRole("menuitem", { name: /Rename/ }),
     ).toHaveTextContent(/^Rename$/);
     expect(
@@ -397,6 +400,50 @@ describe("ChatPanel", () => {
     expect(onCheckStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("opens a read-only skill list from the session menu", async () => {
+    const onListAgentSkills = vi.fn(async () => ({
+      requestId: "skills-1",
+      agent: "codex",
+      basePath: "/workspace",
+      queriedAt: "2026-06-20T00:00:00.000Z",
+      skills: [
+        {
+          name: "plan",
+          description: "Plan work",
+          sourceType: "project" as const,
+          sourcePath: "/workspace/.codex/skills/plan",
+        },
+      ],
+    }));
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        onListAgentSkills={onListAgentSkills}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
+    fireEvent.click(
+      within(screen.getByRole("menu", { name: "Session actions" })).getByRole(
+        "menuitem",
+        { name: /Skill list/ },
+      ),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Skill list" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("$plan")).toBeInTheDocument();
+    expect(screen.getByText("Plan work")).toBeInTheDocument();
+    expect(onListAgentSkills).toHaveBeenCalledWith({
+      runnerId: "runner-1",
+      agent: "codex",
+      basePath: "/workspace",
+    });
+  });
+
   it("disables stop for inactive sessions while keeping resume available", () => {
     render(
       <ChatPanel
@@ -416,9 +463,7 @@ describe("ChatPanel", () => {
     expect(
       within(menu).getByRole("menuitem", { name: /Resume/ }),
     ).not.toBeDisabled();
-    expect(
-      within(menu).getByRole("menuitem", { name: /Stop/ }),
-    ).toBeDisabled();
+    expect(within(menu).getByRole("menuitem", { name: /Stop/ })).toBeDisabled();
   });
 
   it("disables runner control actions when the selected runner is offline", () => {
@@ -444,9 +489,7 @@ describe("ChatPanel", () => {
     expect(
       within(menu).getByRole("menuitem", { name: /Resume/ }),
     ).toBeDisabled();
-    expect(
-      within(menu).getByRole("menuitem", { name: /Stop/ }),
-    ).toBeDisabled();
+    expect(within(menu).getByRole("menuitem", { name: /Stop/ })).toBeDisabled();
   });
 });
 

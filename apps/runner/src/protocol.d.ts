@@ -197,19 +197,85 @@ declare module "@roamcli/shared/protocol" {
     children?: FileNode[];
   }
 
+  export type AgentSkillSourceType = "project" | "global";
+
+  export interface AgentSkillSummary {
+    name: string;
+    description?: string;
+    sourceType: AgentSkillSourceType;
+    sourcePath: string;
+  }
+
+  export interface AgentSkillListResult {
+    requestId: string;
+    agent: AgentKind;
+    basePath: string;
+    queriedAt: string;
+    skills: AgentSkillSummary[];
+  }
+
+  export interface PathSearchEntry {
+    path: string;
+    name: string;
+    type: "file" | "directory";
+  }
+
+  export interface PathSearchResult {
+    requestId: string;
+    basePath: string;
+    query: string;
+    entries: PathSearchEntry[];
+  }
+
   export interface FileTreeResult {
     requestId: string;
+    clientRequestId?: string;
     sessionId: string;
     root: FileNode;
   }
 
-  export interface FileContentResult {
+  export interface TextFileContentResult {
     requestId: string;
     sessionId: string;
     path: string;
+    kind: "text";
     content: string;
     truncated: boolean;
     encoding: "utf8";
+  }
+
+  export interface ImageFileContentResult {
+    requestId: string;
+    sessionId: string;
+    path: string;
+    kind: "image";
+    contentBase64?: string;
+    mimeType: string;
+    size: number;
+    truncated: boolean;
+    encoding: "base64";
+  }
+
+  export interface BinaryFileContentResult {
+    requestId: string;
+    sessionId: string;
+    path: string;
+    kind: "binary";
+    mimeType: string;
+    size: number;
+    truncated: boolean;
+    encoding: "binary";
+  }
+
+  export type FileContentResult =
+    | TextFileContentResult
+    | ImageFileContentResult
+    | BinaryFileContentResult;
+
+  export interface DirectoryCreateResult {
+    requestId: string;
+    path: string;
+    node: FileNode;
   }
 
   export interface FileWriteResult {
@@ -373,6 +439,19 @@ declare module "@roamcli/shared/protocol" {
         sessionId: string;
       }
     | {
+        type: "listAgentSkills";
+        requestId: string;
+        agent: AgentKind;
+        basePath: string;
+      }
+    | {
+        type: "searchWorkspacePaths";
+        requestId: string;
+        basePath: string;
+        query: string;
+        limit: number;
+      }
+    | {
         type: "writeSessionAttachments";
         requestId: string;
         sessionId: string;
@@ -395,10 +474,12 @@ declare module "@roamcli/shared/protocol" {
     | {
         type: "readFileTree";
         requestId: string;
+        clientRequestId?: string;
         sessionId: string;
         cwd?: string;
         path?: string;
         depth?: number;
+        includeFiles?: boolean;
       }
     | {
         type: "readFileContent";
@@ -416,6 +497,13 @@ declare module "@roamcli/shared/protocol" {
         path: string;
         content: string;
         encoding?: "utf8";
+      }
+    | {
+        type: "createDirectory";
+        requestId: string;
+        cwd: string;
+        parentPath?: string;
+        name: string;
       }
     | {
         type: "applyPatch";
@@ -471,6 +559,8 @@ declare module "@roamcli/shared/protocol" {
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
     | { type: "sessionThread"; sessionId: string; threadId: string }
     | { type: "sessionStatusCheckResult"; result: SessionStatusCheckResult }
+    | { type: "agentSkillListResult"; result: AgentSkillListResult }
+    | { type: "pathSearchResult"; result: PathSearchResult }
     | {
         type: "assistantMessage";
         sessionId: string;
@@ -481,6 +571,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "fileTreeResult"; result: FileTreeResult }
     | { type: "fileContentResult"; result: FileContentResult }
     | { type: "fileWriteResult"; result: FileWriteResult }
+    | { type: "directoryCreateResult"; result: DirectoryCreateResult }
     | { type: "attachmentWriteResult"; result: AttachmentWriteResult }
     | { type: "attachmentContentResult"; result: AttachmentContentResult }
     | { type: "attachmentDeleteResult"; result: AttachmentDeleteResult }

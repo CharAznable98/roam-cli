@@ -1,5 +1,7 @@
 import type {
+  AgentSkillListResult,
   AgentKind,
+  ApiAgentSkillList,
   ApiCreateProject,
   ApiCreateSession,
   ApiGitBlameQuery,
@@ -11,10 +13,12 @@ import type {
   ApiGitPaths,
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
+  ApiPathSearch,
   ApiUpdateProject,
   ApiUpdateSession,
   Approval,
   ClientCommand,
+  DirectoryCreateResult,
   ExecutionMode,
   FileContentResult,
   FileNode,
@@ -29,6 +33,7 @@ import type {
   Message,
   MessageAttachment,
   PatchApplyResult,
+  PathSearchResult,
   Project,
   RunnerRegistration,
   ServerEvent,
@@ -46,6 +51,14 @@ export interface RoamApiOptions {
 
 export interface RoamApiClient {
   loadInitialState(): Promise<InitialRemoteState>;
+  fetchRunnerDirectoryTree(
+    runnerId: string,
+    options?: { path?: string; depth?: number },
+  ): Promise<FileNode[]>;
+  createRunnerDirectory(
+    runnerId: string,
+    input: { parentPath: string; name: string },
+  ): Promise<DirectoryCreateResult>;
   createProject(input: ApiCreateProject): Promise<Project>;
   updateProject(projectId: string, input: ApiUpdateProject): Promise<Project>;
   archiveProject(projectId: string): Promise<Project>;
@@ -64,6 +77,7 @@ export interface RoamApiClient {
     sessionId: string,
     input: { content: string; attachments?: ImageAttachmentUpload[] },
   ): Promise<{ message: Message; attachments: MessageAttachment[] }>;
+  fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   checkSessionStatus(sessionId: string): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
@@ -73,7 +87,7 @@ export interface RoamApiClient {
   ): Promise<Blob>;
   fetchFileTree(
     sessionId: string,
-    options?: { path?: string; depth?: number },
+    options?: { path?: string; depth?: number; requestId?: string },
   ): Promise<FileNode[]>;
   fetchFileContent(
     sessionId: string,
@@ -86,6 +100,8 @@ export interface RoamApiClient {
     content: string,
   ): Promise<FileWriteResult>;
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
+  listAgentSkills(input: ApiAgentSkillList): Promise<AgentSkillListResult>;
+  searchWorkspacePaths(input: ApiPathSearch): Promise<PathSearchResult>;
   fetchGitStatus(context: ApiGitContext): Promise<GitStatus>;
   fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
   fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
@@ -148,6 +164,10 @@ interface FileTreeResponse {
   };
 }
 
+interface DirectoryCreateResponse {
+  result: DirectoryCreateResult;
+}
+
 interface FileContentResponse {
   result: FileContentResult;
 }
@@ -158,6 +178,14 @@ interface FileWriteResponse {
 
 interface PatchApplyResponse {
   result: PatchApplyResult;
+}
+
+interface AgentSkillListResponse {
+  result: AgentSkillListResult;
+}
+
+interface PathSearchResponse {
+  result: PathSearchResult;
 }
 
 interface GitStatusResponse {
@@ -240,6 +268,14 @@ export function createRoamApiClient(
     return response.blob();
   }
 
+  function fetchSessionDetail(
+    sessionId: string,
+  ): Promise<SessionDetailPayload> {
+    return request<SessionDetailPayload>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
   return {
     async loadInitialState() {
       const [{ runners }, { projects }, { sessions }] = await Promise.all([
@@ -248,9 +284,7 @@ export function createRoamApiClient(
         request<SessionsResponse>("/v1/sessions"),
       ]);
       const details = await Promise.all(
-        sessions.map((session) =>
-          request<SessionDetailPayload>(`/v1/sessions/${session.id}`),
-        ),
+        sessions.map((session) => fetchSessionDetail(session.id)),
       );
       return {
         projects,
@@ -265,6 +299,28 @@ export function createRoamApiClient(
         approvals: details.flatMap((detail) => detail.approvals),
         artifacts: details.flatMap((detail) => detail.artifacts),
       };
+    },
+
+    async fetchRunnerDirectoryTree(runnerId, options = {}) {
+      const query = new URLSearchParams();
+      query.set("path", options.path ?? ".");
+      query.set("depth", String(options.depth ?? 1));
+      const payload = await request<FileTreeResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories?${query.toString()}`,
+      );
+      const root = payload.result?.root ?? payload.root;
+      return payload.files ?? root?.children ?? (root ? [root] : []);
+    },
+
+    async createRunnerDirectory(runnerId, input) {
+      const { result } = await request<DirectoryCreateResponse>(
+        `/v1/runners/${encodeURIComponent(runnerId)}/directories`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
     },
 
     async createProject(input) {
@@ -351,6 +407,8 @@ export function createRoamApiClient(
       );
     },
 
+    fetchSessionDetail,
+
     async updateSession(sessionId, input) {
       const { session } = await request<CreateSessionResponse>(
         `/v1/sessions/${encodeURIComponent(sessionId)}`,
@@ -384,6 +442,9 @@ export function createRoamApiClient(
 
     async fetchFileTree(sessionId, options = {}) {
       const query = new URLSearchParams();
+      if (options.requestId) {
+        query.set("requestId", options.requestId);
+      }
       query.set("path", options.path ?? ".");
       query.set("depth", String(options.depth ?? 3));
       const payload = await request<FileTreeResponse>(
@@ -427,6 +488,28 @@ export function createRoamApiClient(
         {
           method: "POST",
           body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
+        },
+      );
+      return result;
+    },
+
+    async listAgentSkills(input) {
+      const { result } = await request<AgentSkillListResponse>(
+        "/v1/agent/skills",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
+    },
+
+    async searchWorkspacePaths(input) {
+      const { result } = await request<PathSearchResponse>(
+        "/v1/workspace/path-search",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
         },
       );
       return result;

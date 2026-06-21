@@ -1,5 +1,6 @@
 import type {
   AgentKind,
+  ApiAgentSkillList,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitContext,
@@ -9,8 +10,10 @@ import type {
   ApiGitPaths,
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
+  ApiPathSearch,
   ExecutionMode,
   ImageAttachmentUpload,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
   useCallback,
@@ -31,6 +34,10 @@ import {
 } from "../features/approvals/model";
 import { toUiMessage } from "../features/conversation/model";
 import {
+  nearestTreeDirectoryPath,
+  parentDirectory,
+} from "../features/files/tree-model";
+import {
   getRunnerSessions,
   getProjectSessions,
   getSelectedProject,
@@ -46,6 +53,9 @@ import { appReducer, initialAppState, type AppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS = 1_500;
+const ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS = 10_000;
+let fileTreeRequestSequence = 0;
 
 export type StreamReconnectInfo = {
   mode: "connecting" | "connected" | "waiting";
@@ -257,6 +267,56 @@ export function useRoamController() {
         : undefined,
     );
   }, [selectedProject, selectedSession, state.loadState]);
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    const status = selectedSession?.status;
+    if (!sessionId || !status || !isActiveSessionStatus(status)) {
+      return;
+    }
+
+    let cancelled = false;
+    let syncTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+    const scheduleNextSync = (delayMs: number) => {
+      if (cancelled) {
+        return;
+      }
+      syncTimer = globalThis.setTimeout(syncStatus, delayMs);
+    };
+
+    const syncStatus = () => {
+      const api = apiRef.current;
+      if (!api) {
+        scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
+        return;
+      }
+      let nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS;
+      void api
+        .fetchSessionDetail(sessionId)
+        .then((detail) => {
+          nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS;
+          if (!cancelled) {
+            dispatch({ type: "sessionDetailMerged", detail });
+          }
+        })
+        .catch(() => {
+          // Manual status checks surface errors; this background sync only repairs missed events.
+        })
+        .finally(() => {
+          scheduleNextSync(nextDelayMs);
+        });
+    };
+
+    scheduleNextSync(ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS);
+    return () => {
+      cancelled = true;
+      if (syncTimer) {
+        globalThis.clearTimeout(syncTimer);
+      }
+    };
+  }, [selectedSession?.id, selectedSession?.status]);
+
   const selectedGitContext = useMemo<ApiGitContext | undefined>(() => {
     if (
       selectedSession?.executionMode === "managed_worktree" &&
@@ -308,13 +368,25 @@ export function useRoamController() {
       });
       return;
     }
-    dispatch({ type: "sessionWorkspaceLoading", sessionId, resetSelection });
+    const requestId = nextFileTreeRequestId();
+    dispatch({
+      type: "sessionWorkspaceLoading",
+      sessionId,
+      resetSelection,
+      requestId,
+    });
 
     void apiRef.current
-      .fetchFileTree(sessionId)
+      .fetchFileTree(sessionId, { path: ".", depth: 1, requestId })
       .then((fileTree) => {
         if (!cancelled) {
-          dispatch({ type: "fileTreeLoaded", sessionId, files: fileTree });
+          dispatch({
+            type: "fileTreeLoaded",
+            sessionId,
+            path: ".",
+            files: fileTree,
+            requestId,
+          });
         }
       })
       .catch((fileError: unknown) => {
@@ -322,7 +394,9 @@ export function useRoamController() {
           dispatch({
             type: "fileTreeFailed",
             sessionId,
+            path: ".",
             message: errorMessage(fileError),
+            requestId,
           });
         }
       });
@@ -555,6 +629,21 @@ export function useRoamController() {
         if (openPath) {
           loadFileContent(sessionId, openPath);
         }
+        if (result.applied) {
+          const fileTree = state.filesBySession[sessionId] ?? [];
+          for (const path of new Set(
+            sessionHunks
+              .filter((hunk) => hunk.status === "accepted")
+              .map((hunk) =>
+                nearestTreeDirectoryPath(
+                  fileTree,
+                  parentDirectory(hunk.filePath),
+                ),
+              ),
+          )) {
+            loadFileTreePath(sessionId, path, { force: true });
+          }
+        }
       })
       .catch((patchError: unknown) =>
         dispatch({
@@ -604,6 +693,16 @@ export function useRoamController() {
     loadFileContent(selectedSession.id, path);
   };
 
+  const loadSelectedDirectory = (path: string) => {
+    if (!selectedSession || !apiRef.current) return;
+    loadFileTreePath(selectedSession.id, path, { force: true });
+  };
+
+  const refreshSelectedFileTree = () => {
+    if (!selectedSession || !apiRef.current) return;
+    loadFileTreePath(selectedSession.id, ".", { force: true, resetTree: true });
+  };
+
   const saveSelectedFile = () => {
     if (!selectedSession || !state.selectedFilePath || !apiRef.current) return;
     const sessionId = selectedSession.id;
@@ -614,6 +713,14 @@ export function useRoamController() {
       .then(() => {
         dispatch({ type: "fileSaveSucceeded" });
         loadFileContent(sessionId, path);
+        loadFileTreePath(
+          sessionId,
+          nearestTreeDirectoryPath(
+            state.filesBySession[sessionId] ?? [],
+            parentDirectory(path),
+          ),
+          { force: true },
+        );
       })
       .catch((saveError: unknown) =>
         dispatch({
@@ -633,6 +740,50 @@ export function useRoamController() {
         dispatch({
           type: "fileContentFailed",
           message: errorMessage(fileError),
+        }),
+      );
+  };
+
+  const loadFileTreePath = (
+    sessionId: string,
+    path: string,
+    options: { force?: boolean; resetTree?: boolean } = {},
+  ) => {
+    if (!apiRef.current) return;
+    if (
+      !options.force &&
+      state.fileTreePathState[sessionId]?.[path] === "ready"
+    ) {
+      return;
+    }
+    const requestId = nextFileTreeRequestId();
+    dispatch({
+      type: "fileTreePathLoading",
+      sessionId,
+      path,
+      requestId,
+      ...(options.resetTree === undefined
+        ? {}
+        : { resetTree: options.resetTree }),
+    });
+    void apiRef.current
+      .fetchFileTree(sessionId, { path, depth: 1, requestId })
+      .then((fileTree) =>
+        dispatch({
+          type: "fileTreeLoaded",
+          sessionId,
+          path,
+          files: fileTree,
+          requestId,
+        }),
+      )
+      .catch((fileError: unknown) =>
+        dispatch({
+          type: "fileTreeFailed",
+          sessionId,
+          path,
+          message: errorMessage(fileError),
+          requestId,
         }),
       );
   };
@@ -675,6 +826,32 @@ export function useRoamController() {
         sessionId,
         attachmentId,
       );
+    },
+    [requireApiClient],
+  );
+
+  const fetchRunnerDirectoryTree = useCallback(
+    async (runnerId: string, options: { path?: string; depth?: number } = {}) =>
+      requireApiClient().fetchRunnerDirectoryTree(runnerId, options),
+    [requireApiClient],
+  );
+
+  const createRunnerDirectory = useCallback(
+    async (runnerId: string, input: { parentPath: string; name: string }) =>
+      requireApiClient().createRunnerDirectory(runnerId, input),
+    [requireApiClient],
+  );
+
+  const listAgentSkills = useCallback(
+    async (input: ApiAgentSkillList) => {
+      return requireApiClient().listAgentSkills(input);
+    },
+    [requireApiClient],
+  );
+
+  const searchWorkspacePaths = useCallback(
+    async (input: ApiPathSearch) => {
+      return requireApiClient().searchWorkspacePaths(input);
     },
     [requireApiClient],
   );
@@ -860,6 +1037,9 @@ export function useRoamController() {
   const sessionFileTreeState = selectedSession
     ? (state.fileTreeState[selectedSession.id] ?? "idle")
     : "idle";
+  const sessionFileTreePathState = selectedSession
+    ? (state.fileTreePathState[selectedSession.id] ?? {})
+    : {};
   const sessionStatusCheckState: "idle" | "loading" =
     checkingSessionStatusId === selectedSession?.id ? "loading" : "idle";
 
@@ -882,6 +1062,7 @@ export function useRoamController() {
     sessionHunks,
     sessionFiles,
     sessionFileTreeState,
+    sessionFileTreePathState,
     runnerCommand: buildRunnerCommand(token),
     selectRunner,
     selectProject,
@@ -896,8 +1077,14 @@ export function useRoamController() {
     sendControl,
     deleteSelectedSession,
     selectFile,
+    loadSelectedDirectory,
+    refreshSelectedFileTree,
     saveSelectedFile,
     fetchMessageAttachmentContent,
+    fetchRunnerDirectoryTree,
+    createRunnerDirectory,
+    listAgentSkills,
+    searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
     fetchGitBlame,
@@ -931,4 +1118,17 @@ function hydrateInitialSelection(state: AppState): AppState {
         selectedSessionId: selection.sessionId,
       }
     : state;
+}
+
+function nextFileTreeRequestId(): string {
+  fileTreeRequestSequence += 1;
+  return `file-tree-${Date.now()}-${fileTreeRequestSequence}`;
+}
+
+function isActiveSessionStatus(status: SessionStatus): boolean {
+  return (
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_approval"
+  );
 }

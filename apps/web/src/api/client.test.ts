@@ -120,6 +120,47 @@ describe("createRoamApiClient", () => {
     expect(session.status).toBe("stopped");
   });
 
+  it("fetches session details with a read-only GET request", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      token: "dev-token",
+      fetchImpl: async (url, init) => {
+        requestUrl = String(url);
+        requestInit = init;
+        return Response.json({
+          session: {
+            id: "session 1",
+            title: "Persisted session",
+            projectId: "project-1",
+            runnerId: "runner-1",
+            agent: "codex",
+            status: "completed",
+            executionMode: "direct",
+            executionFolder: ".",
+            cwd: ".",
+            createdAt: "2026-06-10T00:00:00.000Z",
+            updatedAt: "2026-06-10T00:01:00.000Z",
+          },
+          messages: [],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        });
+      },
+    });
+
+    const detail = await client.fetchSessionDetail("session 1");
+
+    expect(requestUrl).toBe("http://127.0.0.1:8787/v1/sessions/session%201");
+    expect(requestInit?.method ?? "GET").toBe("GET");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBe(
+      "Bearer dev-token",
+    );
+    expect(detail.session.status).toBe("completed");
+  });
+
   it("patches session title updates", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;

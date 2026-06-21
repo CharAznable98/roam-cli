@@ -305,6 +305,70 @@
     min-width: 0;
   }
 
+  .directory-select-button {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid #cdd7e3;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1f2937;
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .directory-select-button:hover {
+    border-color: #9fb0c3;
+    background: #f8fafc;
+  }
+
+  .directory-picker {
+    display: grid;
+    gap: 12px;
+  }
+
+  .directory-picker-current {
+    display: grid;
+    gap: 4px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 10px;
+  }
+
+  .directory-picker-current span {
+    color: #586a80;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .directory-picker-current strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  .directory-picker-tree {
+    min-height: 260px;
+    max-height: min(46vh, 420px);
+    overflow: auto;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 6px 0;
+  }
+
+  .directory-create-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
   .tablet-tabs,
   .workspace-tabs {
     display: none;
@@ -507,7 +571,9 @@
   .modal-panel {
     display: grid;
     width: min(100%, 460px);
+    max-height: calc(100dvh - 48px);
     gap: 14px;
+    overflow: auto;
     border: 1px solid #d9e1ea;
     border-radius: 8px;
     background: #f8fafc;
@@ -517,7 +583,7 @@
 
   .modal-sheet {
     width: 100%;
-    max-height: min(82dvh, 640px);
+    max-height: calc(100dvh - 16px);
     overflow: auto;
     border-bottom: 0;
     border-radius: 12px 12px 0 0;
@@ -532,18 +598,115 @@
     gap: 10px;
   }
 
+  .skill-list-dialog {
+    width: min(720px, calc(100vw - 28px));
+  }
+
+  .skill-list-header-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .skill-list-timestamp {
+    margin: 4px 0 0;
+    color: #6a7b8f;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .skill-list,
+  .skill-list-state,
+  .skill-list-empty {
+    margin-top: 12px;
+  }
+
+  .skill-list {
+    display: grid;
+    max-height: min(520px, 62vh);
+    gap: 8px;
+    overflow: auto;
+  }
+
+  .skill-list-row {
+    display: grid;
+    min-width: 0;
+    gap: 7px;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #fbfdff;
+    padding: 10px 12px;
+  }
+
+  .skill-list-row-main,
+  .skill-list-row-meta {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .skill-list-row-main strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #17202e;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skill-list-row-main span,
+  .skill-list-row-meta span,
+  .skill-list-row-meta code {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skill-list-row-main span {
+    color: #4d5f73;
+    font-size: 12px;
+  }
+
+  .skill-list-row-meta {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    color: #748398;
+    font-size: 11px;
+  }
+
+  .skill-list-row-meta code {
+    border-radius: 4px;
+    background: #eef3f8;
+    color: #43556b;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
+    padding: 2px 5px;
+  }
+
+  .skill-list-state,
+  .skill-list-empty {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    gap: 8px;
+    color: #66788f;
+    font-size: 13px;
+  }
+
   .modal-panel .sidebar-project-form,
   .modal-panel .new-session-form {
     border-top: 0;
     padding-top: 0;
   }
 
-  .rename-session-dialog .form-actions {
-    gap: 8px;
-  }
-
   .form-actions {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
     justify-content: flex-end;
   }
 
@@ -691,6 +854,13 @@
     gap: 8px;
     border-bottom: 1px solid #d9e1ea;
     padding: 4px 10px;
+  }
+
+  .tool-panel-header-actions {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
   }
 
   .chat-header {
@@ -1112,6 +1282,7 @@
   }
 
   .collapsible-message {
+    width: min(840px, 100%);
     min-width: 0;
     max-width: min(840px, 100%);
     overflow: hidden;
@@ -1123,12 +1294,26 @@
 
   .collapsible-message summary {
     display: flex;
+    min-width: 0;
+    min-height: 22px;
     cursor: pointer;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     color: #465568;
     font-size: 13px;
     font-weight: 700;
+    line-height: 1.35;
+    list-style: none;
+  }
+
+  .collapsible-message summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .collapsible-message.intermediate-group {
+    overflow: visible;
+    scroll-margin: 12px;
   }
 
   .collapsible-message[open] summary {
@@ -1228,6 +1413,88 @@
     border-radius: 8px;
     padding: 9px 10px;
     outline: none;
+  }
+
+  .prompt-composer {
+    position: relative;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .prompt-composer textarea {
+    display: block;
+  }
+
+  .prompt-suggestion-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 42;
+    display: grid;
+    max-height: min(320px, 44vh);
+    gap: 2px;
+    overflow: auto;
+    border: 1px solid #c8d3e1;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+    padding: 6px;
+  }
+
+  .prompt-suggestion-panel.below {
+    position: static;
+    max-height: min(176px, 24vh);
+    margin-top: 6px;
+  }
+
+  .prompt-suggestion-option {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #263445;
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .prompt-suggestion-option:hover,
+  .prompt-suggestion-option.active {
+    background: #edf5ff;
+    color: #162033;
+  }
+
+  .prompt-suggestion-title,
+  .prompt-suggestion-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prompt-suggestion-title {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .prompt-suggestion-meta {
+    color: #65758a;
+    font-size: 12px;
+  }
+
+  .prompt-suggestion-status,
+  .prompt-suggestion-empty {
+    display: flex;
+    min-height: 36px;
+    align-items: center;
+    gap: 8px;
+    color: #66788f;
+    font-size: 12px;
+    padding: 8px 10px;
   }
 
   .composer-error {
@@ -1482,6 +1749,11 @@
     display: block;
   }
 
+  .active-approvals .approvals-surface {
+    display: grid;
+    gap: 12px;
+  }
+
   .tool-panel,
   .push-panel {
     min-height: 0;
@@ -1539,9 +1811,28 @@
     color: #1f2937;
   }
 
+  .tree-row-status {
+    cursor: default;
+    color: #586a80;
+    font-size: 12px;
+  }
+
+  .tree-row-status:hover {
+    background: transparent;
+    color: #586a80;
+  }
+
+  .tree-row-status.error {
+    color: #b42318;
+  }
+
   .tree-row svg {
     flex-shrink: 0;
     transition: transform 120ms ease;
+  }
+
+  .tree-row svg.animate-spin {
+    animation: roam-spin 0.9s linear infinite;
   }
 
   .editor-placeholder {
@@ -1564,6 +1855,31 @@
     overflow-wrap: anywhere;
     font-size: 14px;
     font-weight: 700;
+  }
+
+  .file-image-preview,
+  .file-preview-empty {
+    display: grid;
+    min-height: 240px;
+    flex: 1;
+    place-items: center;
+    overflow: auto;
+    border: 1px solid #d9e1ea;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .file-image-preview img {
+    display: block;
+    max-width: 100%;
+    max-height: 64vh;
+    object-fit: contain;
+  }
+
+  .file-preview-empty {
+    color: #586a80;
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
   .editor-header {
@@ -1712,14 +2028,23 @@
 
   .git-change-list {
     display: grid;
+    min-width: 0;
+    max-width: 100%;
     gap: 10px;
     margin-top: 10px;
   }
 
+  .git-change-group {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   .git-change-group h3 {
     display: flex;
+    min-width: 0;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin: 0 0 4px;
     color: #586a80;
     font-size: 11px;
@@ -1739,6 +2064,11 @@
     color: #1f2937;
     padding: 7px 8px;
     text-align: left;
+  }
+
+  .git-change-group button .truncate {
+    min-width: 0;
+    flex: 1;
   }
 
   .git-change-group button:hover,
@@ -1899,6 +2229,18 @@
     margin: 10px 0;
     max-height: 160px;
     padding: 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .approvals-surface .approval-card {
+    border-width: 1px 0 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .approvals-surface .approval-card:first-of-type {
+    border-top: 0;
   }
 
   .approval-status,
@@ -2143,8 +2485,118 @@
     width: 44px;
   }
 
+  .primary-action-button,
   .small-button {
     min-height: 44px;
+  }
+
+  .field input,
+  .field select,
+  .field textarea {
+    min-height: 44px;
+  }
+
+  .session-title-button {
+    min-height: 44px;
+    align-content: center;
+  }
+
+  .collapsible-message summary {
+    min-height: 44px;
+  }
+
+  .modal-sheet .new-session-form .draft-image-strip {
+    scroll-margin-bottom: 76px;
+  }
+
+  .modal-sheet .new-session-form .form-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: calc(-14px - env(safe-area-inset-bottom));
+    margin: 0 -14px calc(-14px - env(safe-area-inset-bottom));
+    border-top: 1px solid #d9e1ea;
+    background: #f8fafc;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .draft-image-tile {
+    min-height: 64px;
+    padding-right: 54px;
+  }
+
+  .draft-image-remove {
+    top: 4px;
+    right: 4px;
+    height: 44px;
+    width: 44px;
+  }
+
+  .markdown-code-header {
+    min-height: 44px;
+    padding-bottom: 4px;
+    padding-top: 4px;
+  }
+
+  .markdown-code-header .small-icon-button {
+    height: 44px;
+    width: 44px;
+    flex: 0 0 auto;
+  }
+
+  .tool-panel-header.git-panel-header {
+    min-height: 52px;
+  }
+
+  .git-panel-header .icon-button {
+    height: 44px;
+    width: 44px;
+  }
+
+  .git-toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+    padding: 8px 10px;
+  }
+
+  .git-context-field,
+  .git-remote-actions {
+    flex: 1 1 100%;
+  }
+
+  .git-remote-actions {
+    flex-wrap: wrap;
+  }
+
+  .git-context-field select,
+  .git-toolbar .small-button,
+  .git-file-actions .small-button,
+  .git-error-actions .small-button {
+    min-height: 44px;
+    padding-bottom: 8px;
+    padding-top: 8px;
+  }
+
+  .git-remote-actions .small-button {
+    flex: 1 1 calc(33.333% - 8px);
+  }
+
+  .git-change-group button {
+    min-height: 44px;
+    padding-bottom: 10px;
+    padding-top: 10px;
+  }
+
+  .danger-text-button {
+    min-height: 44px;
+    padding: 10px 0;
+  }
+
+  .approval-card {
+    padding: 10px;
+  }
+
+  .approval-card pre {
+    max-height: 72px;
   }
 
   .session-action-menu-item {
@@ -2156,6 +2608,18 @@
   .composer .primary-icon-button {
     height: 44px;
     width: 44px;
+  }
+
+  .prompt-suggestion-panel {
+    left: 0;
+    right: auto;
+    width: min(360px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+  }
+
+  .prompt-suggestion-option {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 
@@ -2352,6 +2816,10 @@
   .active-git .git-surface,
   .active-approvals .approvals-surface {
     display: block;
+  }
+
+  .active-approvals .approvals-surface {
+    display: grid;
   }
 
   .active-chat .approvals-surface,

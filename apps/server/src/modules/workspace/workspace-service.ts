@@ -1,10 +1,16 @@
 import type {
+  AgentSkillListResult,
+  ApiAgentSkillList,
   ApiApplyPatch,
+  ApiPathSearch,
   ApiWriteFile,
+  DirectoryCreateResult,
   FileContentResult,
+  FileNode,
   FileTreeResult,
   FileWriteResult,
   PatchApplyResult,
+  PathSearchResult,
   Session,
 } from "@roamcli/shared/protocol";
 import { RunnerRpcClient } from "../../infra/runner-rpc-client.js";
@@ -14,6 +20,7 @@ import { fail, ok, type ServiceResult } from "../result.js";
 import type { ApprovalSignatureVerifier } from "../approvals/approval-signatures.js";
 
 export interface FileTreeQuery {
+  clientRequestId?: string;
   path: string;
   depth: number;
 }
@@ -21,6 +28,11 @@ export interface FileTreeQuery {
 export interface FileContentQuery {
   path: string;
   maxBytes: number;
+}
+
+export interface DirectoryCreateInput {
+  parentPath: string;
+  name: string;
 }
 
 export class WorkspaceService {
@@ -49,10 +61,14 @@ export class WorkspaceService {
       {
         type: "readFileTree",
         requestId: newId("file_tree"),
+        ...(query.clientRequestId === undefined
+          ? {}
+          : { clientRequestId: query.clientRequestId }),
         sessionId: session.id,
         cwd: session.executionFolder,
         path: query.path,
         depth: query.depth,
+        includeFiles: true,
       },
       this.runnerRpcTimeoutMs,
     );
@@ -116,6 +132,58 @@ export class WorkspaceService {
     return ok({ result });
   }
 
+  async readRunnerDirectoryTree(
+    runnerId: string,
+    query: FileTreeQuery,
+  ): Promise<ServiceResult<{ result: FileTreeResult }>> {
+    const runner = this.store.getRunner(runnerId);
+    if (!runner) {
+      return fail("runner_not_found");
+    }
+
+    const result = await this.rpc.requestRunner<FileTreeResult>(
+      runnerId,
+      {
+        type: "readFileTree",
+        requestId: newId("runner_directory"),
+        sessionId: `runner-directory-${runnerId}`,
+        cwd: runner.workspaceRoot,
+        path: query.path,
+        depth: query.depth,
+        includeFiles: false,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    const root = directoriesOnly(result.root);
+    if (!root) {
+      return fail("invalid_directory");
+    }
+    return ok({ result: { ...result, root } });
+  }
+
+  async createRunnerDirectory(
+    runnerId: string,
+    input: DirectoryCreateInput,
+  ): Promise<ServiceResult<{ result: DirectoryCreateResult }>> {
+    const runner = this.store.getRunner(runnerId);
+    if (!runner) {
+      return fail("runner_not_found");
+    }
+
+    const result = await this.rpc.requestRunner<DirectoryCreateResult>(
+      runnerId,
+      {
+        type: "createDirectory",
+        requestId: newId("directory_create"),
+        cwd: runner.workspaceRoot,
+        parentPath: input.parentPath,
+        name: input.name,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
   async applyPatch(
     sessionId: string,
     body: ApiApplyPatch,
@@ -155,7 +223,43 @@ export class WorkspaceService {
     return ok({ result });
   }
 
-  async validateRunnerDirectory(runnerId: string, directory: string): Promise<void> {
+  async listAgentSkills(
+    body: ApiAgentSkillList,
+  ): Promise<ServiceResult<{ result: AgentSkillListResult }>> {
+    const result = await this.rpc.requestRunner<AgentSkillListResult>(
+      body.runnerId,
+      {
+        type: "listAgentSkills",
+        requestId: newId("agent_skills"),
+        agent: body.agent,
+        basePath: body.basePath,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
+  async searchPaths(
+    body: ApiPathSearch,
+  ): Promise<ServiceResult<{ result: PathSearchResult }>> {
+    const result = await this.rpc.requestRunner<PathSearchResult>(
+      body.runnerId,
+      {
+        type: "searchWorkspacePaths",
+        requestId: newId("path_search"),
+        basePath: body.basePath,
+        query: body.query,
+        limit: body.limit,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
+  async validateRunnerDirectory(
+    runnerId: string,
+    directory: string,
+  ): Promise<void> {
     await this.rpc.requestRunner<FileTreeResult>(
       runnerId,
       {
@@ -165,6 +269,7 @@ export class WorkspaceService {
         cwd: directory,
         path: ".",
         depth: 0,
+        includeFiles: true,
       },
       this.runnerRpcTimeoutMs,
     );
@@ -176,4 +281,21 @@ export class WorkspaceService {
       ? fail("worktree_not_available")
       : undefined;
   }
+}
+
+function directoriesOnly(node: FileNode): FileNode | undefined {
+  if (node.type !== "directory") {
+    return undefined;
+  }
+  return {
+    ...node,
+    ...(node.children === undefined
+      ? {}
+      : {
+          children: node.children.flatMap((child) => {
+            const directory = directoriesOnly(child);
+            return directory ? [directory] : [];
+          }),
+        }),
+  };
 }
