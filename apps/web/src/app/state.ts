@@ -981,8 +981,9 @@ function shouldApplyFileTreeEvent(
   if (path !== "." && state.fileTreePathState[sessionId]?.["."] === "loading") {
     return false;
   }
-  const currentRequestId = state.fileTreeRequestIds[sessionId]?.[path];
-  return currentRequestId === undefined || currentRequestId === requestId;
+  // Same-path broadcasts from other clients should supersede pending local loads.
+  // Applying the event prunes those local request ids and marks them stale.
+  return true;
 }
 
 function isFileTreePathLoading(

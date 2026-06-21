@@ -796,6 +796,84 @@ describe("app reducer", () => {
     });
   });
 
+  it("applies same-path broadcasts over pending local file tree loads", () => {
+    const loadingLocal = appReducer(
+      {
+        ...initialAppState,
+        filesBySession: {
+          "session-1": [
+            {
+              path: "src",
+              name: "src",
+              type: "directory",
+              children: [
+                {
+                  path: "src/Old.tsx",
+                  name: "Old.tsx",
+                  type: "file",
+                  size: 1,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        type: "fileTreePathLoading",
+        sessionId: "session-1",
+        path: "src",
+        requestId: "local-tree",
+      },
+    );
+    const broadcastEvent: ServerEvent = {
+      type: "file:tree",
+      result: {
+        requestId: "broadcast-tree",
+        sessionId: "session-1",
+        root: {
+          path: "src",
+          name: "src",
+          type: "directory",
+          children: [
+            {
+              path: "src/Updated.tsx",
+              name: "Updated.tsx",
+              type: "file",
+              size: 42,
+            },
+          ],
+        },
+      },
+    };
+
+    const broadcastApplied = appReducer(loadingLocal, {
+      type: "serverEventReceived",
+      event: broadcastEvent,
+    });
+    const staleLocal = appReducer(broadcastApplied, {
+      type: "fileTreeLoaded",
+      sessionId: "session-1",
+      path: "src",
+      requestId: "local-tree",
+      files: [
+        {
+          path: "src/Stale.tsx",
+          name: "Stale.tsx",
+          type: "file",
+          size: 1,
+        },
+      ],
+    });
+
+    expect(broadcastApplied.filesBySession["session-1"]?.[0]).toMatchObject({
+      path: "src",
+      children: [{ path: "src/Updated.tsx" }],
+    });
+    expect(broadcastApplied.fileTreeRequestIds["session-1"]).toBeUndefined();
+    expect(broadcastApplied.staleFileTreeRequestIds["local-tree"]).toBe(true);
+    expect(staleLocal).toBe(broadcastApplied);
+  });
+
   it("treats streamed depth-zero directory updates as empty child lists", () => {
     const event: ServerEvent = {
       type: "file:tree",
