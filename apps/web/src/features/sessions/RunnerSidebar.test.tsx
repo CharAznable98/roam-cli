@@ -120,6 +120,36 @@ describe("ProjectForm", () => {
     expect(onCreate).not.toHaveBeenCalled();
   });
 
+  it("hides RoamCli generated folders in the directory picker", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const onFetchRunnerDirectoryTree = vi.fn(async () => [
+      directoryNode(".roam-runner", ".roam-runner"),
+      directoryNode("product", "product"),
+    ]);
+    const onCreateRunnerDirectory = vi.fn();
+
+    render(
+      <ProjectForm
+        runners={runners}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    const picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+
+    expect(
+      within(picker).queryByRole("treeitem", { name: /\.roam-runner/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      await within(picker).findByRole("treeitem", { name: /product/ }),
+    ).toBeInTheDocument();
+  });
+
   it("ignores stale directory picker loads after a forced reload", async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
     const rootLoads: Array<Deferred<FileNode[]>> = [];

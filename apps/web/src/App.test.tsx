@@ -1755,9 +1755,7 @@ describe("App", () => {
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     );
 
-    expect(
-      mobileTabs.getByRole("button", { name: "Conversation" }),
-    ).toBeInTheDocument();
+    expect(mobileTabs.getByRole("button", { name: "Chat" })).toBeInTheDocument();
     expect(
       mobileTabs.getByRole("button", { name: "Files" }),
     ).toBeInTheDocument();

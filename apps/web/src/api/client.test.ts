@@ -238,4 +238,22 @@ describe("createRoamApiClient", () => {
       /development proxy returned an empty server error/,
     );
   });
+
+  it("formats JSON API errors without exposing the raw response payload", async () => {
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async () =>
+        Response.json(
+          { message: "Invalid API token", debug: { requestId: "req-1" } },
+          { status: 401, statusText: "Unauthorized" },
+        ),
+    });
+
+    await expect(client.loadInitialState()).rejects.toThrow(
+      "RoamCli API request /v1/runners failed with 401 Unauthorized: Invalid API token.",
+    );
+    await expect(client.loadInitialState()).rejects.not.toThrow(
+      /"debug"|"requestId"/,
+    );
+  });
 });

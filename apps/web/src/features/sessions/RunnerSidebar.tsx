@@ -533,7 +533,9 @@ function DirectoryPickerModal({
         if (activeLoadRequestsRef.current[path] !== requestId) {
           return;
         }
-        setNodes((current) => replaceTreeChildren(current, path, children));
+        setNodes((current) =>
+          replaceTreeChildren(current, path, filterPickerNodes(children)),
+        );
         setPathStates((current) => ({ ...current, [path]: "ready" }));
       })
       .catch((loadError: unknown) => {
@@ -574,7 +576,11 @@ function DirectoryPickerModal({
         name: cleanName,
       });
       if (parentLoaded) {
-        setNodes((current) => upsertTreeChild(current, parentPath, result.node));
+        setNodes((current) =>
+          shouldShowPickerNode(result.node)
+            ? upsertTreeChild(current, parentPath, result.node)
+            : current,
+        );
       } else {
         loadDirectory(parentPath, { force: true });
       }
@@ -664,6 +670,20 @@ function DirectoryPickerModal({
   );
 }
 
+function filterPickerNodes(nodes: FileNode[]): FileNode[] {
+  return nodes
+    .filter(shouldShowPickerNode)
+    .map((node) =>
+      node.children
+        ? { ...node, children: filterPickerNodes(node.children) }
+        : node,
+    );
+}
+
+function shouldShowPickerNode(node: FileNode): boolean {
+  return node.name !== ".roam-runner";
+}
+
 function validateFolderName(name: string): string | undefined {
   if (
     name.length === 0 ||
@@ -673,6 +693,9 @@ function validateFolderName(name: string): string | undefined {
     name.includes("\\")
   ) {
     return "Folder name must be a single directory name.";
+  }
+  if (name === ".roam-runner") {
+    return "Folder name is reserved for RoamCli runtime data.";
   }
   return undefined;
 }

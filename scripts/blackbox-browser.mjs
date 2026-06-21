@@ -487,14 +487,17 @@ async function assertProjectGitUi(page, scenario, project, fileName) {
 }
 
 async function waitForGitStatus(gitContext, predicate) {
-  return waitFor(async () => {
-    const payload = await requestJson("/v1/git/status", {
-      method: "POST",
-      body: JSON.stringify(gitContext),
-    });
-    const status = payload.result;
-    return status !== undefined && predicate(status);
-  }, `Git status ${JSON.stringify(gitContext)}`);
+  return waitFor(
+    async () => {
+      const payload = await requestJson("/v1/git/status", {
+        method: "POST",
+        body: JSON.stringify(gitContext),
+      });
+      const status = payload.result;
+      return status !== undefined && predicate(status);
+    },
+    `Git status ${JSON.stringify(gitContext)}`,
+  );
 }
 
 async function clickGitActionAndExpectJob(page, path, click) {
@@ -560,12 +563,12 @@ async function assertMobileTouchTargets(page, scenario) {
         name: "Send message button",
         element: document.querySelector('button[aria-label="Send message"]'),
       },
-      ...Array.from(
-        document.querySelectorAll(".session-action-menu-item"),
-      ).map((element, index) => ({
-        name: `Session action menu item ${index + 1}`,
-        element,
-      })),
+      ...Array.from(document.querySelectorAll(".session-action-menu-item")).map(
+        (element, index) => ({
+          name: `Session action menu item ${index + 1}`,
+          element,
+        }),
+      ),
     ];
     return targets
       .map(({ name, element }) => {
@@ -686,7 +689,7 @@ async function assertExecApprovals(page, scenario, sessionId) {
 
 async function assertSessionResume(page, scenario, session) {
   await openTab(page, scenario, "chat");
-  await expectText(page, "已结束");
+  await expectText(page, "Completed");
   await clickSessionAction(page, scenario, "Resume session");
   await expectText(page, `Resume session ${session.id}`);
 }
@@ -766,7 +769,7 @@ async function createProjectFromUi(page, scenario, values) {
       .locator('input[placeholder="Optional project name"]')
       .fill(values.name);
     await selectProjectRunnerFromUi(dialog);
-    await fillProjectDirectoryFromUi(dialog, values);
+    await fillProjectDirectoryFromUi(page, dialog, values);
     await dialog.getByRole("button", { name: "Create project" }).click();
     const project = await waitFor(async () => {
       const payload = await requestJson("/v1/projects");
@@ -790,7 +793,7 @@ async function createProjectFromUi(page, scenario, values) {
     .locator('input[placeholder="Optional project name"]')
     .fill(values.name);
   await selectProjectRunnerFromUi(dialog);
-  await fillProjectDirectoryFromUi(dialog, values);
+  await fillProjectDirectoryFromUi(page, dialog, values);
   await dialog.getByRole("button", { name: "Create project" }).click();
   const project = await waitFor(async () => {
     const payload = await requestJson("/v1/projects");
@@ -810,23 +813,24 @@ async function selectProjectRunnerFromUi(dialog) {
     .selectOption(runnerId);
 }
 
-async function fillProjectDirectoryFromUi(dialog, values) {
-  const baseInput = dialog.getByLabel("Runner base", { exact: true });
-  const directoryInput = dialog.getByLabel("Directory", { exact: true });
-  const baseValue = await baseInput.inputValue();
-  if (baseValue !== workspace) {
-    throw new Error(
-      `project directory base mismatch: expected ${workspace}, received ${baseValue}`,
-    );
-  }
-  if ((await baseInput.getAttribute("readonly")) === null) {
-    throw new Error("project directory base is editable");
+async function fillProjectDirectoryFromUi(page, dialog, values) {
+  await dialog.getByLabel("Directory", { exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Choose directory" });
+  await picker.waitFor();
+  await expectTextIn(picker, workspace);
+
+  const directoryName = values.directorySuffix
+    .split("/")
+    .filter(Boolean)
+    .at(-1);
+  if (!directoryName) {
+    throw new Error(`missing project directory suffix for ${values.directory}`);
   }
 
-  await directoryInput.fill(values.directory);
-  await dialog.getByRole("button", { name: "Create project" }).click();
-  await expectTextIn(dialog, "Directory must stay under the runner base.");
-  await directoryInput.fill(values.directorySuffix);
+  await picker.getByRole("treeitem", { name: directoryName }).click();
+  await picker.getByRole("button", { name: "Choose" }).click();
+  await picker.waitFor({ state: "hidden" });
+  await expectTextIn(dialog, values.directorySuffix);
 }
 
 async function createSessionFromUi(page, scenario, values) {
@@ -995,12 +999,12 @@ async function openTab(page, scenario, tab) {
   if (scenario.mobile) {
     const label =
       tab === "chat"
-        ? "对话"
+        ? "Chat"
         : tab === "files"
-          ? "文件"
+          ? "Files"
           : tab === "git"
             ? "Git"
-            : "审批";
+            : "Approvals";
     await page
       .getByRole("navigation", { name: "Mobile tabs" })
       .getByRole("button", { name: label })
@@ -1453,7 +1457,9 @@ async function assertNoLayoutOverflow(page, scenario, label) {
       };
     };
     const critical = criticalSelectors.flatMap((selector) =>
-      Array.from(document.querySelectorAll(selector)).filter(isVisible).map(serialize),
+      Array.from(document.querySelectorAll(selector))
+        .filter(isVisible)
+        .map(serialize),
     );
     const criticalOverflow = critical.filter(
       (entry) =>
