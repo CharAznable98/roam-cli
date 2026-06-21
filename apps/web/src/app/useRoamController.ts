@@ -93,28 +93,63 @@ export function useRoamController() {
     let retryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let retryAttempt = 0;
-    let remoteStateRequestId = 0;
+    let nextRemoteStateRequestId = 0;
+    let latestBootstrapRequestId = 0;
+    let latestNotificationRequestId = 0;
+    let pendingBootstrapRequestId: number | undefined;
+    let bootstrapReady = false;
 
     function loadRemoteState(failureMode: "bootstrap" | "notification") {
-      const requestId = ++remoteStateRequestId;
+      const requestId = ++nextRemoteStateRequestId;
+      const isBootstrap = failureMode === "bootstrap";
+      if (isBootstrap) {
+        latestBootstrapRequestId = requestId;
+        pendingBootstrapRequestId = requestId;
+        bootstrapReady = false;
+      } else {
+        latestNotificationRequestId = requestId;
+      }
       if (failureMode === "bootstrap") {
         dispatch({ type: "bootstrapStarted" });
       }
       void api
         .loadInitialState()
         .then((remote) => {
-          if (cancelled || requestId !== remoteStateRequestId) {
+          if (cancelled) {
+            return;
+          }
+          if (isBootstrap) {
+            if (requestId !== latestBootstrapRequestId) {
+              return;
+            }
+            pendingBootstrapRequestId = undefined;
+            bootstrapReady = true;
+            dispatch({ type: "bootstrapSucceeded", remote });
+            return;
+          }
+          if (
+            pendingBootstrapRequestId !== undefined ||
+            requestId !== latestNotificationRequestId
+          ) {
             return;
           }
           dispatch({ type: "bootstrapSucceeded", remote });
         })
         .catch((loadError: unknown) => {
-          if (cancelled || requestId !== remoteStateRequestId) {
+          if (cancelled) {
             return;
           }
           const message = errorMessage(loadError);
-          if (failureMode === "bootstrap") {
+          if (isBootstrap) {
+            if (requestId !== latestBootstrapRequestId) {
+              return;
+            }
+            pendingBootstrapRequestId = undefined;
+            bootstrapReady = false;
             dispatch({ type: "bootstrapFailed", message });
+            return;
+          }
+          if (!bootstrapReady || requestId !== latestNotificationRequestId) {
             return;
           }
           dispatch({

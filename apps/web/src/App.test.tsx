@@ -906,6 +906,50 @@ describe("App", () => {
     expect(screen.queryByText("API connection failed")).not.toBeInTheDocument();
   });
 
+  it("keeps the initial bootstrap authoritative while missed-events sync is pending", async () => {
+    const initialBootstrap = deferred<Response>();
+    const missedEventsSync = deferred<Response>();
+    queuedRunnerResponses.push(initialBootstrap, missedEventsSync);
+
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      expect(sockets).toHaveLength(1);
+
+      act(() => {
+        sockets[0]?.dispatchEvent(new Event("close"));
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(sockets).toHaveLength(2);
+
+      act(() => {
+        sockets[1]?.dispatchEvent(new Event("open"));
+      });
+
+      await act(async () => {
+        missedEventsSync.resolve(
+          jsonResponse({ message: "temporary sync failure" }, 503),
+        );
+        await missedEventsSync.promise;
+      });
+
+      await act(async () => {
+        initialBootstrap.resolve(jsonResponse({ runners: [runner] }));
+        await initialBootstrap.promise;
+      });
+
+      expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+      expect(
+        screen.queryByText("API connection failed"),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("checks only the selected session status from the session actions menu", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
