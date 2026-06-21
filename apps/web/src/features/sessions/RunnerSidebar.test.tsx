@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
+  type FileNode,
   type RunnerRegistration,
 } from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
@@ -115,6 +116,109 @@ describe("ProjectForm", () => {
     });
     expect(onCreate).not.toHaveBeenCalled();
   });
+
+  it("reloads unloaded selected directories after creating a child folder", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    let mobileCreated = false;
+    const onFetchRunnerDirectoryTree = vi.fn(
+      async (_runnerId: string, options?: { path?: string }) => {
+        if (options?.path === "mobile") {
+          return [
+            directoryNode("mobile/existing", "existing"),
+            directoryNode("mobile/new", "new"),
+          ];
+        }
+        if (options?.path === ".") {
+          return mobileCreated ? [directoryNode("mobile", "mobile")] : [];
+        }
+        return [];
+      },
+    );
+    const onCreateRunnerDirectory = vi.fn(
+      async (
+        _runnerId: string,
+        input: { parentPath: string; name: string },
+      ) => {
+        const path =
+          input.parentPath === "."
+            ? input.name
+            : `${input.parentPath}/${input.name}`;
+        if (path === "mobile") {
+          mobileCreated = true;
+        }
+        return {
+          requestId: `directory-create-${path}`,
+          path,
+          node: directoryNode(path, input.name, []),
+        };
+      },
+    );
+    render(
+      <ProjectForm
+        runners={runners}
+        onCreate={onCreate}
+        onFetchRunnerDirectoryTree={onFetchRunnerDirectoryTree}
+        onCreateRunnerDirectory={onCreateRunnerDirectory}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    let picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+    await waitFor(() => {
+      expect(onFetchRunnerDirectoryTree).toHaveBeenCalledWith("runner-1", {
+        path: ".",
+        depth: 1,
+      });
+    });
+    let folderInput = within(picker).getByLabelText("New folder name");
+    fireEvent.change(folderInput, { target: { value: "mobile" } });
+    fireEvent.submit(folderInput.closest("form") as HTMLFormElement);
+    await waitFor(() => {
+      expect(onCreateRunnerDirectory).toHaveBeenLastCalledWith("runner-1", {
+        parentPath: ".",
+        name: "mobile",
+      });
+    });
+    fireEvent.click(within(picker).getByRole("button", { name: "Choose" }));
+    expect(screen.getByLabelText("Directory")).toHaveTextContent(
+      "/workspace/mobile",
+    );
+
+    fireEvent.click(screen.getByLabelText("Directory"));
+    picker = await screen.findByRole("dialog", {
+      name: "Choose directory",
+    });
+    const mobileRow = await within(picker).findByRole("treeitem", {
+      name: /mobile/,
+    });
+    expect(onFetchRunnerDirectoryTree).not.toHaveBeenCalledWith("runner-1", {
+      path: "mobile",
+      depth: 1,
+    });
+
+    folderInput = within(picker).getByLabelText("New folder name");
+    fireEvent.change(folderInput, { target: { value: "new" } });
+    fireEvent.submit(folderInput.closest("form") as HTMLFormElement);
+    await waitFor(() => {
+      expect(onCreateRunnerDirectory).toHaveBeenLastCalledWith("runner-1", {
+        parentPath: "mobile",
+        name: "new",
+      });
+    });
+    await waitFor(() => {
+      expect(onFetchRunnerDirectoryTree).toHaveBeenCalledWith("runner-1", {
+        path: "mobile",
+        depth: 1,
+      });
+    });
+
+    fireEvent.click(mobileRow);
+    expect(
+      await within(picker).findByRole("treeitem", { name: /existing/ }),
+    ).toBeInTheDocument();
+  });
 });
 
 const runners: RunnerRegistration[] = [
@@ -165,3 +269,16 @@ const runners: RunnerRegistration[] = [
     version: "1.1.0",
   },
 ];
+
+function directoryNode(
+  path: string,
+  name: string,
+  children?: FileNode[],
+): FileNode {
+  return {
+    path,
+    name,
+    type: "directory",
+    ...(children === undefined ? {} : { children }),
+  };
+}

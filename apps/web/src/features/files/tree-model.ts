@@ -53,6 +53,13 @@ export function hasTreeDirectory(nodes: FileNode[], path: string): boolean {
   return path === "." || findTreeDirectory(nodes, path) !== undefined;
 }
 
+export function isTreeDirectoryLoaded(
+  nodes: FileNode[],
+  path: string,
+): boolean {
+  return path === "." || findTreeDirectory(nodes, path)?.children !== undefined;
+}
+
 export function nearestTreeDirectoryPath(
   nodes: FileNode[],
   path: string,

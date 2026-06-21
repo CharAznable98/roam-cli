@@ -35,7 +35,11 @@ import {
 } from "./project-directory";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { LazyFileTree, type TreePathStates } from "../files/LazyFileTree";
-import { replaceTreeChildren, upsertTreeChild } from "../files/tree-model";
+import {
+  isTreeDirectoryLoaded,
+  replaceTreeChildren,
+  upsertTreeChild,
+} from "../files/tree-model";
 
 type FetchRunnerDirectoryTree = (
   runnerId: string,
@@ -547,15 +551,24 @@ function DirectoryPickerModal({
       return;
     }
     setCreating(true);
+    const parentPath = draftPath;
+    const parentLoaded =
+      parentPath === "."
+        ? pathStates[parentPath] === "ready"
+        : isTreeDirectoryLoaded(nodes, parentPath);
     try {
       const result = await onCreateRunnerDirectory(runner.runnerId, {
-        parentPath: draftPath,
+        parentPath,
         name: cleanName,
       });
-      setNodes((current) => upsertTreeChild(current, draftPath, result.node));
+      if (parentLoaded) {
+        setNodes((current) => upsertTreeChild(current, parentPath, result.node));
+      } else {
+        loadDirectory(parentPath, { force: true });
+      }
       setPathStates((current) => ({
         ...current,
-        [draftPath]: "ready",
+        ...(parentLoaded ? { [parentPath]: "ready" as const } : {}),
         [result.path]: "ready",
       }));
       setDraftPath(result.path);
