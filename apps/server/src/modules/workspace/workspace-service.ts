@@ -154,7 +154,11 @@ export class WorkspaceService {
       },
       this.runnerRpcTimeoutMs,
     );
-    return ok({ result: { ...result, root: directoriesOnly(result.root) } });
+    const root = directoriesOnly(result.root);
+    if (!root) {
+      return fail("invalid_directory");
+    }
+    return ok({ result: { ...result, root } });
   }
 
   async createRunnerDirectory(
@@ -279,18 +283,19 @@ export class WorkspaceService {
   }
 }
 
-function directoriesOnly(node: FileNode): FileNode {
-  if (node.type === "file") {
-    return node;
+function directoriesOnly(node: FileNode): FileNode | undefined {
+  if (node.type !== "directory") {
+    return undefined;
   }
   return {
     ...node,
     ...(node.children === undefined
       ? {}
       : {
-          children: node.children
-            .filter((child) => child.type === "directory")
-            .map(directoriesOnly),
+          children: node.children.flatMap((child) => {
+            const directory = directoriesOnly(child);
+            return directory ? [directory] : [];
+          }),
         }),
   };
 }

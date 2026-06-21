@@ -1117,6 +1117,50 @@ describe("server", () => {
     runner.close();
   });
 
+  it("rejects file roots from runner directory listings", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    const listPromise = app.inject({
+      method: "GET",
+      url: "/v1/runners/runner-1/directories?path=src&depth=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const listCommand = await nextJson(runner);
+    expect(listCommand).toMatchObject({
+      type: "readFileTree",
+      cwd: "/workspace",
+      path: "src",
+      depth: 1,
+      includeFiles: false,
+    });
+    runner.send(
+      JSON.stringify({
+        type: "fileTreeResult",
+        result: {
+          requestId: listCommand.requestId,
+          sessionId: listCommand.sessionId,
+          root: {
+            path: "src",
+            name: "src",
+            type: "file",
+            size: 12,
+          },
+        },
+      }),
+    );
+
+    const listResponse = await listPromise;
+    expect(listResponse.statusCode).toBe(400);
+    expect(listResponse.json()).toEqual({ error: "invalid_directory" });
+
+    runner.close();
+  });
+
   it("returns bad requests for runner directory creation failures", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
