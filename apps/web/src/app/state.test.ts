@@ -79,6 +79,44 @@ describe("app reducer", () => {
     expect(next.selectedSessionId).toBe("session-1");
   });
 
+  it("keeps the cached project when the cached session is archived", () => {
+    const projects: Project[] = [
+      makeProject("project-1"),
+      makeProject("project-2"),
+    ];
+    const sessions: Session[] = [
+      makeSession("session-1", "project-1"),
+      {
+        ...makeSession("old-session", "project-2"),
+        archivedAt: "2026-06-05T01:00:00.000Z",
+      },
+      makeSession("session-2", "project-2"),
+    ];
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedProjectId: "project-2",
+        selectedSessionId: "old-session",
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects,
+          runners: [runner],
+          sessions,
+          messages: [],
+          messageAttachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-2");
+  });
+
   it("falls back to the default project when the previous project is archived", () => {
     const projects: Project[] = [
       { ...makeProject("project-1"), archivedAt: "2026-06-05T01:00:00.000Z" },

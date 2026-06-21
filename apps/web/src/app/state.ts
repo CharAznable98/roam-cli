@@ -199,8 +199,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
               session.projectId === cachedProject.id,
           )
         : undefined;
-      const cachedSessionMissing =
-        Boolean(state.selectedSessionId) && !cachedSession;
       const defaultSelection = selectDefaultProjectSession(
         {
           ...state,
@@ -210,11 +208,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         activeProjects,
       );
       const selectedProjectId =
-        cachedProject && !cachedSessionMissing
+        cachedProject
           ? cachedProject.id
           : defaultSelection.selectedProjectId;
       const selectedSessionId =
-        cachedProject && !cachedSessionMissing
+        cachedProject
           ? (cachedSession?.id ??
             activeSessions.find(
               (session) => session.projectId === cachedProject.id,
