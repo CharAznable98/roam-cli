@@ -45,10 +45,7 @@ import {
   getSelectedSession,
 } from "../features/sessions/model";
 import { buildRunnerCommand } from "./runner-command";
-import {
-  loadLastSelection,
-  saveLastSelection,
-} from "./selection-storage";
+import { loadLastSelection, saveLastSelection } from "./selection-storage";
 import { appReducer, initialAppState, type AppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
@@ -88,7 +85,6 @@ export function useRoamController() {
 
   useEffect(() => {
     localStorage.setItem("roamcli.token", token);
-    dispatch({ type: "bootstrapStarted" });
     const api = createRoamApiClient({ token });
     apiRef.current = api;
     let cancelled = false;
@@ -99,6 +95,9 @@ export function useRoamController() {
     let retryAttempt = 0;
 
     function loadRemoteState(failureMode: "bootstrap" | "notification") {
+      if (failureMode === "bootstrap") {
+        dispatch({ type: "bootstrapStarted" });
+      }
       void api
         .loadInitialState()
         .then((remote) => {
@@ -210,6 +209,7 @@ export function useRoamController() {
     reconnectStreamRef.current = () => {
       retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
       retryAttempt = 0;
+      loadRemoteState("bootstrap");
       connectStream();
     };
     connectStream();

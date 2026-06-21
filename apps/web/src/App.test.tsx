@@ -306,6 +306,7 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
+  let failBootstrapRunners: boolean;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
@@ -332,6 +333,7 @@ describe("App", () => {
     deferredFileContent = new Map();
     deferredGitStatus = new Map();
     deferredGitBlame = new Map();
+    failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
     failNextSessionRename = false;
@@ -381,6 +383,9 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/runners") {
+          if (failBootstrapRunners) {
+            return jsonResponse({ message: "backend route unavailable" }, 503);
+          }
           return jsonResponse({ runners: runnerOnline ? [runner] : [] });
         }
         if (requestUrl.pathname === "/v1/runners/real-runner/directories") {
@@ -827,6 +832,32 @@ describe("App", () => {
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
       ).toEqual({ projectId: "project-1", sessionId: "session-1" });
     });
+  });
+
+  it("retries the bootstrap API from connection recovery", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loaded from API")).not.toBeInTheDocument();
+
+    failBootstrapRunners = false;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Connection settings" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reconnect now" }),
+    );
+
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+    expect(screen.queryByText("API connection failed")).not.toBeInTheDocument();
+    expect(
+      fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
+        .length,
+    ).toBeGreaterThan(1);
   });
 
   it("checks only the selected session status from the session actions menu", async () => {
@@ -1755,7 +1786,9 @@ describe("App", () => {
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     );
 
-    expect(mobileTabs.getByRole("button", { name: "Chat" })).toBeInTheDocument();
+    expect(
+      mobileTabs.getByRole("button", { name: "Chat" }),
+    ).toBeInTheDocument();
     expect(
       mobileTabs.getByRole("button", { name: "Files" }),
     ).toBeInTheDocument();
@@ -2904,8 +2937,9 @@ describe("App", () => {
       );
     });
 
-    const intermediate =
-      await within(conversation).findByText("Intermediate output (2)");
+    const intermediate = await within(conversation).findByText(
+      "Intermediate output (2)",
+    );
     const group = intermediate.closest("details");
     expect(group).not.toHaveAttribute("open");
     expect(group).not.toBeNull();
