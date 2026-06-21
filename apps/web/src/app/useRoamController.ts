@@ -45,7 +45,11 @@ import {
   getSelectedSession,
 } from "../features/sessions/model";
 import { buildRunnerCommand } from "./runner-command";
-import { appReducer, initialAppState } from "./state";
+import {
+  loadLastSelection,
+  saveLastSelection,
+} from "./selection-storage";
+import { appReducer, initialAppState, type AppState } from "./state";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
@@ -61,7 +65,11 @@ export type StreamReconnectInfo = {
 };
 
 export function useRoamController() {
-  const [state, dispatch] = useReducer(appReducer, initialAppState);
+  const [state, dispatch] = useReducer(
+    appReducer,
+    initialAppState,
+    hydrateInitialSelection,
+  );
   const [token, setToken] = useState(
     () => localStorage.getItem("roamcli.token") ?? "dev-token",
   );
@@ -245,6 +253,20 @@ export function useRoamController() {
       ),
     [projectSessions, state.selectedSessionId, state.sessions],
   );
+
+  useEffect(() => {
+    if (state.loadState !== "ready") {
+      return;
+    }
+    saveLastSelection(
+      selectedProject
+        ? {
+            projectId: selectedProject.id,
+            sessionId: selectedSession?.id ?? "",
+          }
+        : undefined,
+    );
+  }, [selectedProject, selectedSession, state.loadState]);
 
   useEffect(() => {
     const sessionId = selectedSession?.id;
@@ -841,7 +863,13 @@ export function useRoamController() {
         return await api.fetchGitStatus(context);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({ type: "errorChanged", title: "Git status failed", message });
+        if (!isNonGitRepositoryError(message)) {
+          dispatch({
+            type: "errorChanged",
+            title: "Git status failed",
+            message,
+          });
+        }
         throw new Error(message);
       }
     },
@@ -1075,6 +1103,21 @@ export function useRoamController() {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isNonGitRepositoryError(message: string): boolean {
+  return message.toLowerCase().includes("not a git repository");
+}
+
+function hydrateInitialSelection(state: AppState): AppState {
+  const selection = loadLastSelection();
+  return selection
+    ? {
+        ...state,
+        selectedProjectId: selection.projectId,
+        selectedSessionId: selection.sessionId,
+      }
+    : state;
 }
 
 function nextFileTreeRequestId(): string {

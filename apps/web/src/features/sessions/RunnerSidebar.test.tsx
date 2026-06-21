@@ -11,10 +11,12 @@ import {
 import {
   DEFAULT_MAX_IMAGE_BYTES,
   type FileNode,
+  type Project,
   type RunnerRegistration,
+  type Session,
 } from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
-import { ProjectForm } from "./RunnerSidebar";
+import { ProjectForm, RunnerSidebar } from "./RunnerSidebar";
 
 describe("ProjectForm", () => {
   it("opens a directory picker and resets the selected directory when runner changes", async () => {
@@ -292,6 +294,59 @@ describe("ProjectForm", () => {
   });
 });
 
+describe("RunnerSidebar", () => {
+  it("switches directly to sessions from any active project", () => {
+    const onSelectSession = vi.fn();
+
+    render(
+      <RunnerSidebar
+        projects={[makeProject("project-1"), makeProject("project-2")]}
+        runners={runners}
+        selectedProjectId="project-1"
+        sessions={[
+          makeSession("session-1", "project-1", "First session"),
+          makeSession("session-2", "project-2", "Second session"),
+        ]}
+        selectedSessionId="session-1"
+        onSelectProject={vi.fn()}
+        onSelectSession={onSelectSession}
+        onCreateProject={vi.fn()}
+        onFetchRunnerDirectoryTree={vi.fn(async () => [])}
+        onCreateRunnerDirectory={vi.fn(async () => ({
+          requestId: "directory-create-test",
+          path: "test",
+          node: directoryNode("test", "test"),
+        }))}
+        onArchiveProject={vi.fn()}
+        onCreateSession={vi.fn()}
+        onListAgentSkills={vi.fn(async () => ({
+          requestId: "agent-skills-test",
+          agent: "codex",
+          basePath: "/workspace/project-1",
+          queriedAt: "2026-06-05T00:00:00.000Z",
+          skills: [],
+        }))}
+        onSearchWorkspacePaths={vi.fn(async () => ({
+          requestId: "path-search-test",
+          basePath: "/workspace/project-1",
+          query: "",
+          entries: [],
+        }))}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Session")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-2" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Second session/ }));
+
+    expect(onSelectSession).toHaveBeenCalledWith("session-2");
+  });
+});
+
 const runners: RunnerRegistration[] = [
   {
     runnerId: "runner-1",
@@ -340,6 +395,34 @@ const runners: RunnerRegistration[] = [
     version: "1.1.0",
   },
 ];
+
+function makeProject(id: string): Project {
+  return {
+    id,
+    name: id,
+    runnerId: "runner-1",
+    directory: `/workspace/${id}`,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
+    lastActiveAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function makeSession(id: string, projectId: string, title: string): Session {
+  return {
+    id,
+    title,
+    projectId,
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "completed",
+    executionMode: "direct",
+    executionFolder: `/workspace/${projectId}`,
+    cwd: `/workspace/${projectId}`,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
+  };
+}
 
 function directoryNode(
   path: string,

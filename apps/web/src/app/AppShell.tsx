@@ -96,18 +96,9 @@ export function AppShell({ controller }: AppShellProps) {
   );
   const setSelectedSessionId = useCallback(
     (sessionId: string) => {
-      const session = state.sessions.find((item) => item.id === sessionId);
-      if (session && session.projectId !== selectedProject?.id) {
-        dispatch({
-          type: "projectSelected",
-          projectId: session.projectId,
-          nextSessionId: session.id,
-        });
-        return;
-      }
       dispatch({ type: "sessionSelected", sessionId });
     },
-    [dispatch, selectedProject?.id, state.sessions],
+    [dispatch],
   );
   const openMarkdownFileLink = useCallback(
     (target: MarkdownFileLinkTarget) => {

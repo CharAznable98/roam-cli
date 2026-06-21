@@ -106,6 +106,7 @@ export function ChatPanel({
   const renameInputRef = useRef<HTMLInputElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const compactComposerPlaceholder = useCompactComposerPlaceholder();
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
@@ -606,7 +607,9 @@ export function ChatPanel({
             rows={2}
             placeholder={
               canSend
-                ? "Message the active session, Cmd/Ctrl+Enter to send"
+                ? compactComposerPlaceholder
+                  ? "Message the active session"
+                  : "Message the active session, Cmd/Ctrl+Enter to send"
                 : "Stream is reconnecting"
             }
             ariaLabel="Chat composer"
@@ -663,6 +666,21 @@ function isNearMessageListBottom(list: HTMLElement): boolean {
   const distanceFromBottom =
     list.scrollHeight - list.scrollTop - list.clientHeight;
   return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function useCompactComposerPlaceholder(): boolean {
+  const [compact, setCompact] = useState(() =>
+    typeof window === "undefined" ? false : window.innerWidth < 768,
+  );
+
+  useEffect(() => {
+    const listener = () => setCompact(window.innerWidth < 768);
+    listener();
+    window.addEventListener("resize", listener);
+    return () => window.removeEventListener("resize", listener);
+  }, []);
+
+  return compact;
 }
 
 function getErrorMessage(

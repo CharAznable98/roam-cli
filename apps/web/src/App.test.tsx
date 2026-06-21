@@ -18,6 +18,7 @@ import type {
   MessageAttachment,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
+import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
 
 vi.mock("@monaco-editor/react", () => {
   function Editor({
@@ -318,6 +319,7 @@ describe("App", () => {
   let gitStatusClean: boolean;
   let gitStatusChanges: MockGitChange[];
   let failNextGitStatus: boolean;
+  let failNonGitStatus: boolean;
   let failGitBlame: boolean;
   let sessionDetailMessages: Message[];
   let sessionDetailAttachments: MessageAttachment[];
@@ -349,6 +351,7 @@ describe("App", () => {
       },
     ];
     failNextGitStatus = false;
+    failNonGitStatus = false;
     failGitBlame = false;
     sessionDetailMessages = [
       {
@@ -682,6 +685,13 @@ describe("App", () => {
             failNextGitStatus = false;
             return jsonResponse({ error: "status_failed" }, 500);
           }
+          if (failNonGitStatus) {
+            failNonGitStatus = false;
+            return jsonResponse(
+              { error: "Directory is not a git repository" },
+              502,
+            );
+          }
           return jsonResponse({
             result: gitStatusPayload(context, gitStatusClean, gitStatusChanges),
           });
@@ -812,6 +822,11 @@ describe("App", () => {
     expect(
       screen.getByRole("complementary", { name: "Workspace tools" }),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
+      ).toEqual({ projectId: "project-1", sessionId: "session-1" });
+    });
   });
 
   it("checks only the selected session status from the session actions menu", async () => {
@@ -1138,6 +1153,28 @@ describe("App", () => {
 
     expect(await tools.findByText("Git status failed")).toBeInTheDocument();
     expect(await tools.findByText(/status_failed/)).toBeInTheDocument();
+  });
+
+  it("keeps non-git status failures inline without a global notification", async () => {
+    failNonGitStatus = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+
+    expect(await tools.findByText("Git status failed")).toBeInTheDocument();
+    expect(await tools.findByText(/not a git repository/)).toBeInTheDocument();
+    expect(
+      tools.getByRole("button", { name: "Init repository" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Dismiss notification: Git status failed",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("ignores stale Git status refresh responses after switching context", async () => {
@@ -1729,6 +1766,26 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not add session switching to mobile workspace tabs", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const mobileTabs = within(
+      screen.getByRole("navigation", { name: "Mobile tabs" }),
+    );
+    fireEvent.click(mobileTabs.getByRole("button", { name: "Approvals" }));
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    expect(
+      tools.queryByRole("button", { name: /Switch Session/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Switch Session" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses a collapsed project tree with modal create actions", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
@@ -2036,7 +2093,7 @@ describe("App", () => {
     );
   });
 
-  it("keeps the mobile project select visibly empty after archiving the selected project", async () => {
+  it("falls back to a remaining mobile project after archiving the selected project", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -2075,18 +2132,20 @@ describe("App", () => {
       ).toBe(true),
     );
     await waitFor(() =>
-      expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(""),
+      expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(
+        "project-backup",
+      ),
     );
     expect(sessionSwitcher.getByLabelText("Project")).toHaveDisplayValue(
-      "No project selected",
+      "Backup Project",
     );
     expect(
-      sessionSwitcher.queryByRole("button", {
-        name: /New session in selected project/,
+      sessionSwitcher.getByRole("button", {
+        name: "New session in selected project Backup Project",
       }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
     expect(
-      screen.getAllByText("Create a project to start a session.").length,
+      screen.getAllByText("Create a session in the selected project.").length,
     ).toBeGreaterThan(0);
   });
 
@@ -2166,7 +2225,7 @@ describe("App", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Expand project Backup Project" }),
     );
-    fireEvent.click(screen.getByText("Backup session"));
+    fireEvent.click(screen.getByRole("button", { name: /Backup session/ }));
 
     expect(
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
