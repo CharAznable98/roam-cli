@@ -139,10 +139,26 @@ export type GitNotRepositoryStatus = z.infer<
   typeof GitNotRepositoryStatusSchema
 >;
 
-export const GitStatusResultSchema = z.discriminatedUnion("kind", [
+const GitStatusResultDiscriminatedSchema = z.discriminatedUnion("kind", [
   GitStatusSchema,
   GitNotRepositoryStatusSchema,
 ]);
+export const GitStatusResultSchema = z.preprocess(
+  (value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as { kind?: unknown }).kind === undefined &&
+      "clean" in value &&
+      "groups" in value
+    ) {
+      return { ...value, kind: "repository" };
+    }
+    return value;
+  },
+  GitStatusResultDiscriminatedSchema,
+);
 export type GitStatusResult = z.infer<typeof GitStatusResultSchema>;
 
 export const GitDiffModeSchema = z.enum([
