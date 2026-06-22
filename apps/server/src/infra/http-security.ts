@@ -1,6 +1,11 @@
 import type { FastifyRequest } from "fastify";
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const DEV_PROXY_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://[::1]:5173",
+]);
 
 export function isHttpOriginAllowed(
   request: FastifyRequest,
@@ -37,21 +42,19 @@ export function isRequestOriginAllowed(
     return true;
   }
 
-  return isLoopbackOrigin(normalizedOrigin) && isLoopbackHost(host);
+  return DEV_PROXY_ORIGINS.has(normalizedOrigin) && isLoopbackHost(host);
 }
 
-export function isTrustedProxyAddress(address: string): boolean {
+export function isTrustedProxyAddress(
+  address: string,
+  trustedProxyIps: string[] = [],
+): boolean {
   const ip = normalizeIpAddress(address);
-  if (isPrivateIpv4(ip)) {
+  if (isLoopbackAddress(ip)) {
     return true;
   }
-  const lower = ip.toLowerCase();
-  return (
-    lower === "::1" ||
-    lower === "localhost" ||
-    lower.startsWith("fc") ||
-    lower.startsWith("fd") ||
-    lower.startsWith("fe80:")
+  return trustedProxyIps.some(
+    (trustedAddress) => normalizeIpAddress(trustedAddress) === ip,
   );
 }
 
@@ -67,14 +70,6 @@ export function isLoopbackHost(host: string): boolean {
     normalized === "::1" ||
     normalized === "[::1]"
   );
-}
-
-function isLoopbackOrigin(origin: string): boolean {
-  try {
-    return isLoopbackHost(new URL(origin).host);
-  } catch {
-    return false;
-  }
 }
 
 function normalizeOrigin(origin: string): string | undefined {
@@ -104,30 +99,17 @@ function firstHeaderValue(
 }
 
 function normalizeIpAddress(address: string): string {
-  if (address.startsWith("::ffff:")) {
-    return address.slice("::ffff:".length);
+  const lower = address.toLowerCase();
+  if (lower.startsWith("::ffff:")) {
+    return lower.slice("::ffff:".length);
   }
-  return address;
+  return lower;
 }
 
-function isPrivateIpv4(address: string): boolean {
-  const parts = address.split(".").map((part) => Number(part));
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
-    return false;
-  }
-  const first = parts[0];
-  const second = parts[1];
-  if (first === undefined || second === undefined) {
-    return false;
-  }
+function isLoopbackAddress(address: string): boolean {
   return (
-    first === 10 ||
-    first === 127 ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    (first === 169 && second === 254)
+    address === "localhost" ||
+    address === "::1" ||
+    address.startsWith("127.")
   );
 }

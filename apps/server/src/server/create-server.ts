@@ -28,7 +28,8 @@ export async function createServer(
   const config = loadConfig(input);
   const app = Fastify({
     logger: false,
-    trustProxy: (address) => isTrustedProxyAddress(address),
+    trustProxy: (address) =>
+      isTrustedProxyAddress(address, config.trustedProxyIps),
   }) as unknown as RoamServer;
   const store = new ServerStore(config.dataDir);
   const artifacts = new ArtifactStorage(config.dataDir);

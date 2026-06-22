@@ -6,6 +6,7 @@ export interface ServerConfig {
   port: number;
   dataDir: string;
   publicOrigin?: string;
+  trustedProxyIps: string[];
   resetOwner: boolean;
   webDistDir?: string;
   runnerRpcTimeoutMs: number;
@@ -16,6 +17,7 @@ export interface ServerConfigInput {
   port?: number;
   dataDir?: string;
   publicOrigin?: string;
+  trustedProxyIps?: string[];
   resetOwner?: boolean;
   webDistDir?: string | false;
   runnerRpcTimeoutMs?: number;
@@ -36,6 +38,9 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
       ? undefined
       : (configuredWebDist ?? defaultWebDist);
   const publicOrigin = input.publicOrigin ?? process.env.ROAMCLI_PUBLIC_ORIGIN;
+  const trustedProxyIps =
+    input.trustedProxyIps ??
+    parseCsv(process.env.ROAMCLI_TRUSTED_PROXY_IPS);
   return {
     host: input.host ?? process.env.HOST ?? "127.0.0.1",
     port: input.port ?? Number(process.env.PORT ?? 3000),
@@ -46,11 +51,21 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
         (process.env.ROAMCLI_RESET_OWNER ?? "").toLowerCase(),
       ),
     ...(publicOrigin ? { publicOrigin } : {}),
+    trustedProxyIps,
     runnerRpcTimeoutMs:
       input.runnerRpcTimeoutMs ??
       Number(process.env.ROAMCLI_RUNNER_RPC_TIMEOUT_MS ?? 5000),
     ...(webDistDir ? { webDistDir } : {}),
   };
+}
+
+function parseCsv(value: string | undefined): string[] {
+  return (
+    value
+      ?.split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean) ?? []
+  );
 }
 
 function isDirectory(candidate: string): boolean {

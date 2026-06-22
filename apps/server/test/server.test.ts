@@ -122,7 +122,7 @@ describe("server", () => {
           origin: TEST_ORIGIN,
           "x-forwarded-for": "198.51.100.10",
         },
-        remoteAddress: "10.0.0.10",
+        remoteAddress: "127.0.0.1",
         payload: { password: "wrong-password" },
       } as any);
       expect(response.statusCode).toBe(401);
@@ -135,7 +135,7 @@ describe("server", () => {
         origin: TEST_ORIGIN,
         "x-forwarded-for": "198.51.100.10",
       },
-      remoteAddress: "10.0.0.10",
+      remoteAddress: "127.0.0.1",
       payload: { password: OWNER_PASSWORD },
     } as any);
     expect(sameForwardedSource.statusCode).toBe(429);
@@ -147,7 +147,7 @@ describe("server", () => {
         origin: TEST_ORIGIN,
         "x-forwarded-for": "198.51.100.20",
       },
-      remoteAddress: "10.0.0.10",
+      remoteAddress: "127.0.0.1",
       payload: { password: OWNER_PASSWORD },
     } as any);
     expect(otherForwardedSource.statusCode).toBe(200);
@@ -179,6 +179,34 @@ describe("server", () => {
       payload: { password: OWNER_PASSWORD },
     } as any);
     expect(sameRemoteAddress.statusCode).toBe(429);
+  });
+
+  it("ignores forwarded client IPs from unconfigured private sources for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": `198.51.100.${attempt + 30}`,
+        },
+        remoteAddress: "172.17.0.1",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const samePrivateRemote = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.199",
+      },
+      remoteAddress: "172.17.0.1",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(samePrivateRemote.statusCode).toBe(429);
   });
 
   it("keeps setup rate limits scoped to the failing source", async () => {
@@ -256,7 +284,7 @@ describe("server", () => {
             origin: TEST_ORIGIN,
             "x-forwarded-for": "198.51.100.10",
           },
-          remoteAddress: "10.0.0.10",
+          remoteAddress: "127.0.0.1",
           payload: {
             setupToken: "wrong-token",
             password: OWNER_PASSWORD,
@@ -272,7 +300,7 @@ describe("server", () => {
           origin: TEST_ORIGIN,
           "x-forwarded-for": "198.51.100.10",
         },
-        remoteAddress: "10.0.0.10",
+        remoteAddress: "127.0.0.1",
         payload: {
           setupToken,
           password: OWNER_PASSWORD,
@@ -287,7 +315,7 @@ describe("server", () => {
           origin: TEST_ORIGIN,
           "x-forwarded-for": "198.51.100.20",
         },
-        remoteAddress: "10.0.0.10",
+        remoteAddress: "127.0.0.1",
         payload: {
           setupToken,
           password: OWNER_PASSWORD,
@@ -336,6 +364,13 @@ describe("server", () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(closed).toBe(false);
       stream.close();
+
+      await expect(
+        openSocketAndWaitForClose(`${localBaseUrl(devApp)}/v1/stream`, {
+          origin: "http://127.0.0.1:5174",
+          streamCookie: extractCookie(setup.headers["set-cookie"]),
+        }),
+      ).resolves.toEqual({ code: 1008, reason: "invalid origin" });
     } finally {
       await devApp.close();
       fs.rmSync(devDataDir, { recursive: true, force: true });
@@ -2094,26 +2129,21 @@ function localBaseUrl(app: RoamServer): string {
   return `ws://127.0.0.1:${address.port}`;
 }
 
+interface SocketOptions {
+  authenticateRunner?: boolean;
+  headers?: Record<string, string>;
+  origin?: string;
+  streamCookie?: string;
+}
+
 function openSocket(
   url: string,
-  options: {
-    authenticateRunner?: boolean;
-    headers?: Record<string, string>;
-    origin?: string;
-    streamCookie?: string;
-  } = {},
+  options: SocketOptions = {},
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const isStream = url.endsWith("/v1/stream");
     const isRunner = url.endsWith("/v1/runner");
     const socket = new WebSocket(url, {
-      headers: isStream
-        ? {
-            cookie: options.streamCookie ?? authCookie,
-            origin: options.origin ?? TEST_ORIGIN,
-            ...options.headers,
-          }
-        : options.headers,
+      headers: socketHeaders(url, options),
     });
     if (isRunner && options.authenticateRunner !== false) {
       wrapRunnerAuthSend(socket);
@@ -2121,6 +2151,40 @@ function openSocket(
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
   });
+}
+
+function openSocketAndWaitForClose(
+  url: string,
+  options: SocketOptions = {},
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, {
+      headers: socketHeaders(url, options),
+    });
+    const timer = setTimeout(
+      () => reject(new Error("timed out waiting for websocket close")),
+      2000,
+    );
+    socket.once("close", (code, reason) => {
+      clearTimeout(timer);
+      resolve({ code, reason: reason.toString() });
+    });
+    socket.once("error", reject);
+  });
+}
+
+function socketHeaders(
+  url: string,
+  options: SocketOptions,
+): Record<string, string> | undefined {
+  if (!url.endsWith("/v1/stream")) {
+    return options.headers;
+  }
+  return {
+    cookie: options.streamCookie ?? authCookie,
+    origin: options.origin ?? TEST_ORIGIN,
+    ...options.headers,
+  };
 }
 
 function wrapRunnerAuthSend(socket: WebSocket): void {
