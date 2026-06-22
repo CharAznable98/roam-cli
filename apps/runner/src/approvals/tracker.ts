@@ -72,12 +72,18 @@ export class ApprovalTracker {
       return;
     }
     this.#pending.delete(approvalId);
-    pending.resolve({ approvalId, approved, signedAt, signature });
-    void this.#emit({
-      type: "sessionStatus",
-      sessionId: pending.sessionId,
-      status: "running",
-    });
+    void Promise.resolve()
+      .then(() =>
+        this.#emit({
+          type: "sessionStatus",
+          sessionId: pending.sessionId,
+          status: "running",
+        }),
+      )
+      .catch(() => undefined)
+      .finally(() => {
+        pending.resolve({ approvalId, approved, signedAt, signature });
+      });
   }
 
   public clear(sessionId: string): void {

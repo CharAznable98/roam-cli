@@ -1,5 +1,3 @@
-import { agentPlugin as claudeCodePlugin } from "@roamcli/agent-claude-code";
-import { agentPlugin as codexPlugin } from "@roamcli/agent-codex";
 import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/agent-plugin-sdk";
 import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
 import { getPermissionTemplate } from "./permissions.js";
@@ -60,13 +58,6 @@ export async function loadAgentRegistry(
 }
 
 async function loadAgentPlugin(name: string): Promise<AgentPlugin> {
-  if (name === "@roamcli/agent-codex") {
-    return codexPlugin;
-  }
-  if (name === "@roamcli/agent-claude-code") {
-    return claudeCodePlugin;
-  }
-
   let loaded: unknown;
   try {
     loaded = await import(name);

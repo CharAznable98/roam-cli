@@ -129,7 +129,6 @@ class CodexProcessSession implements AgentSession {
     child.on("close", (code, signal) => {
       void this.#finish(code, signal);
     });
-    child.stdin.end();
   }
 
   public deliverInput(input: AgentInput): void {

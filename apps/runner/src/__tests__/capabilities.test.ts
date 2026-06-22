@@ -62,6 +62,26 @@ describe("capabilities", () => {
     expect(codex?.args).toEqual(["--one", "two words"]);
   });
 
+  it("does not load Claude Code when only the Codex plugin is selected", async () => {
+    vi.resetModules();
+    vi.doMock("@roamcli/agent-claude-code", () => {
+      throw new Error("Claude Code should not load");
+    });
+    try {
+      const registryModule = await import("../agents/registry.js");
+      const registry = await registryModule.loadAgentRegistry("standard", [
+        "@roamcli/agent-codex",
+      ]);
+
+      expect(registry.capabilities.map((capability) => capability.kind)).toEqual([
+        "codex",
+      ]);
+    } finally {
+      vi.doUnmock("@roamcli/agent-claude-code");
+      vi.resetModules();
+    }
+  });
+
   it("registers Claude Code as a first-party default plugin", async () => {
     const claudeCode = (await loadAgentRegistry("trusted")).capabilities.find(
       (capability) => capability.kind === "claude-code",

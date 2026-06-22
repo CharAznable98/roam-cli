@@ -231,6 +231,76 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("keeps stdin open for subprocess approval responses", async () => {
+    const workspace = await mkdirTemp("roam-codex-approval-stdin-");
+    const script = join(workspace, "approval-stdin.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+        "process.stdin.setEncoding('utf8');",
+        "let buffer = '';",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer += chunk;",
+        "  const lines = buffer.split(/\\r?\\n/);",
+        "  buffer = lines.pop() ?? '';",
+        "  for (const line of lines) {",
+        "    if (!line) continue;",
+        "    const payload = JSON.parse(line);",
+        "    if (payload.type === 'approvalResponse') {",
+        "      console.log(JSON.stringify({",
+        "        type: 'item.completed',",
+        "        item: {",
+        "          id: 'item_2',",
+        "          type: 'agent_message',",
+        "          text: `approval response: ${payload.approvalId}:${payload.approved}`,",
+        "        },",
+        "      }));",
+        "      process.exit(0);",
+        "    }",
+        "  }",
+        "});",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "message",
+        content: "approval response: approval-1:true",
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+  });
+
   it("supports JSON array and shell-like args overrides", () => {
     expect(parseArgs('["--one","two words"]')).toEqual(["--one", "two words"]);
     expect(parseArgs('exec --sandbox "danger full"')).toEqual([
