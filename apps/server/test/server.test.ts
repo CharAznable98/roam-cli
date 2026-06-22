@@ -113,6 +113,74 @@ describe("server", () => {
     expect(otherSource.statusCode).toBe(200);
   });
 
+  it("uses forwarded client IPs from trusted proxies for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.10",
+        },
+        remoteAddress: "10.0.0.10",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameForwardedSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.10",
+      },
+      remoteAddress: "10.0.0.10",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameForwardedSource.statusCode).toBe(429);
+
+    const otherForwardedSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.20",
+      },
+      remoteAddress: "10.0.0.10",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(otherForwardedSource.statusCode).toBe(200);
+  });
+
+  it("ignores forwarded client IPs from untrusted direct sources for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": `198.51.100.${attempt + 10}`,
+        },
+        remoteAddress: "203.0.113.30",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameRemoteAddress = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.99",
+      },
+      remoteAddress: "203.0.113.30",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameRemoteAddress.statusCode).toBe(429);
+  });
+
   it("keeps setup rate limits scoped to the failing source", async () => {
     const setupDataDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "roamcli-server-setup-rate-"),
@@ -165,6 +233,112 @@ describe("server", () => {
     } finally {
       await setupApp.close();
       fs.rmSync(setupDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses forwarded client IPs from trusted proxies for setup rate limits", async () => {
+    const setupDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-setup-forwarded-rate-"),
+    );
+    const setupApp = await createServer({
+      dataDir: setupDataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setupToken = readSetupToken(setupDataDir);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await setupApp.inject({
+          method: "POST",
+          url: "/v1/auth/setup",
+          headers: {
+            origin: TEST_ORIGIN,
+            "x-forwarded-for": "198.51.100.10",
+          },
+          remoteAddress: "10.0.0.10",
+          payload: {
+            setupToken: "wrong-token",
+            password: OWNER_PASSWORD,
+          },
+        } as any);
+        expect(response.statusCode).toBe(401);
+      }
+
+      const sameForwardedSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.10",
+        },
+        remoteAddress: "10.0.0.10",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(sameForwardedSource.statusCode).toBe(429);
+
+      const otherForwardedSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.20",
+        },
+        remoteAddress: "10.0.0.10",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(otherForwardedSource.statusCode).toBe(201);
+    } finally {
+      await setupApp.close();
+      fs.rmSync(setupDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows the default Vite dev proxy origin for setup and owner streams", async () => {
+    const devDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-dev-origin-"),
+    );
+    const devApp = await createServer({
+      dataDir: devDataDir,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setup = await devApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          host: "127.0.0.1:8787",
+          origin: "http://localhost:5173",
+        },
+        payload: {
+          setupToken: readSetupToken(devDataDir),
+          password: OWNER_PASSWORD,
+        },
+      });
+      expect(setup.statusCode).toBe(201);
+
+      await devApp.listen({ host: "127.0.0.1", port: 0 });
+      const stream = await openSocket(`${localBaseUrl(devApp)}/v1/stream`, {
+        origin: "http://localhost:5173",
+        streamCookie: extractCookie(setup.headers["set-cookie"]),
+      });
+      let closed = false;
+      stream.once("close", () => {
+        closed = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(closed).toBe(false);
+      stream.close();
+    } finally {
+      await devApp.close();
+      fs.rmSync(devDataDir, { recursive: true, force: true });
     }
   });
 
@@ -1922,15 +2096,24 @@ function localBaseUrl(app: RoamServer): string {
 
 function openSocket(
   url: string,
-  options: { authenticateRunner?: boolean } = {},
+  options: {
+    authenticateRunner?: boolean;
+    headers?: Record<string, string>;
+    origin?: string;
+    streamCookie?: string;
+  } = {},
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const isStream = url.endsWith("/v1/stream");
     const isRunner = url.endsWith("/v1/runner");
     const socket = new WebSocket(url, {
       headers: isStream
-        ? { cookie: authCookie, origin: TEST_ORIGIN }
-        : undefined,
+        ? {
+            cookie: options.streamCookie ?? authCookie,
+            origin: options.origin ?? TEST_ORIGIN,
+            ...options.headers,
+          }
+        : options.headers,
     });
     if (isRunner && options.authenticateRunner !== false) {
       wrapRunnerAuthSend(socket);

@@ -1,8 +1,13 @@
 import websocketPlugin from "@fastify/websocket";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify from "fastify";
 import { loadConfig, type ServerConfigInput } from "../config.js";
 import { registerApiRoutes } from "../http/api-routes.js";
 import { ConnectionHub } from "../infra/connection-hub.js";
+import {
+  isHttpOriginAllowed,
+  isLoopbackHost,
+  isTrustedProxyAddress,
+} from "../infra/http-security.js";
 import { ArtifactStorage } from "../infra/local-artifact-storage.js";
 import { RunnerRpcClient, RunnerRpcError } from "../infra/runner-rpc-client.js";
 import { ServerStore } from "../infra/sqlite-store.js";
@@ -21,7 +26,10 @@ export async function createServer(
   input: ServerConfigInput = {},
 ): Promise<RoamServer> {
   const config = loadConfig(input);
-  const app = Fastify({ logger: false }) as unknown as RoamServer;
+  const app = Fastify({
+    logger: false,
+    trustProxy: (address) => isTrustedProxyAddress(address),
+  }) as unknown as RoamServer;
   const store = new ServerStore(config.dataDir);
   const artifacts = new ArtifactStorage(config.dataDir);
   const authService = new AuthService(store, config.dataDir);
@@ -88,7 +96,7 @@ export async function createServer(
     if (!pathname.startsWith("/v1/")) {
       return;
     }
-    if (!isOriginAllowed(request, config.publicOrigin)) {
+    if (!isHttpOriginAllowed(request, config.publicOrigin)) {
       await reply.code(403).send({ error: "invalid_origin" });
       return;
     }
@@ -110,16 +118,10 @@ export async function createServer(
     if (insecureHttpWarningLogged) {
       return;
     }
-    const forwardedProto = request.headers["x-forwarded-proto"];
-    const proto =
-      typeof forwardedProto === "string"
-        ? forwardedProto.split(",")[0]?.trim()
-        : request.protocol;
-    const host =
-      request.headers["x-forwarded-host"] ?? request.headers.host ?? "";
+    const proto = request.protocol;
+    const host = request.host;
     if (
       proto === "http" &&
-      typeof host === "string" &&
       host &&
       !isLoopbackHost(host)
     ) {
@@ -145,50 +147,3 @@ export async function createServer(
 }
 
 export type { AppContext, RoamServer } from "./context.js";
-
-function isOriginAllowed(
-  request: FastifyRequest,
-  publicOrigin: string | undefined,
-): boolean {
-  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
-    return true;
-  }
-  const origin = request.headers.origin;
-  if (typeof origin !== "string" || origin.length === 0) {
-    return false;
-  }
-  if (publicOrigin) {
-    return normalizeOrigin(origin) === normalizeOrigin(publicOrigin);
-  }
-  const host = firstHeaderValue(
-    request.headers["x-forwarded-host"] ?? request.headers.host,
-  );
-  if (!host) {
-    return false;
-  }
-  const proto =
-    firstHeaderValue(request.headers["x-forwarded-proto"]) ?? request.protocol;
-  return normalizeOrigin(origin) === `${proto}://${host}`;
-}
-
-function normalizeOrigin(origin: string): string {
-  const url = new URL(origin);
-  return `${url.protocol}//${url.host}`;
-}
-
-function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value?.split(",")[0]?.trim();
-}
-
-function isLoopbackHost(host: string): boolean {
-  const hostname = host.split(":")[0] ?? host;
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname === "[::1]"
-  );
-}
