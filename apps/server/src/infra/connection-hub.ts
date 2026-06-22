@@ -15,6 +15,7 @@ interface RunnerConnection {
 interface StreamConnection {
   socket: WebSocket;
   authSessionId?: string;
+  isAuthorized?: () => boolean;
 }
 
 export interface RunnerConnectionLifecycle {
@@ -31,12 +32,20 @@ export class ConnectionHub {
     private readonly lifecycle: RunnerConnectionLifecycle = {},
   ) {}
 
-  addStream(socket: WebSocket, authSessionId?: string): void {
+  addStream(
+    socket: WebSocket,
+    authSessionId?: string,
+    isAuthorized?: () => boolean,
+  ): void {
     const connection: StreamConnection = {
       socket,
       ...(authSessionId ? { authSessionId } : {}),
+      ...(isAuthorized ? { isAuthorized } : {}),
     };
     this.streamClients.add(connection);
+    if (!this.isStreamAuthorized(connection)) {
+      return;
+    }
     for (const runner of this.listOnlineRunners()) {
       sendJson(socket, { type: "runner:online", runner });
     }
@@ -117,12 +126,28 @@ export class ConnectionHub {
 
   broadcast(event: ServerEvent): void {
     for (const connection of this.streamClients) {
+      if (!this.isStreamAuthorized(connection)) {
+        continue;
+      }
       sendJson(connection.socket, event);
     }
   }
 
   sendError(socket: WebSocket, message: string, code?: string): void {
     sendJson(socket, { type: "error", message, ...(code ? { code } : {}) });
+  }
+
+  private isStreamAuthorized(connection: StreamConnection): boolean {
+    try {
+      if (!connection.isAuthorized || connection.isAuthorized()) {
+        return true;
+      }
+    } catch {
+      // If authorization state cannot be checked, the stream is no longer safe to keep.
+    }
+    this.streamClients.delete(connection);
+    connection.socket.close(1008, "session expired");
+    return false;
   }
 }
 

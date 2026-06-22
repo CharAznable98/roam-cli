@@ -82,6 +82,37 @@ describe("server", () => {
     expect(authorized.json()).toEqual({ sessions: [] });
   });
 
+  it("keeps login rate limits scoped to the failing source", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.10",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: { origin: TEST_ORIGIN },
+      remoteAddress: "203.0.113.10",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameSource.statusCode).toBe(429);
+
+    const otherSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: { origin: TEST_ORIGIN },
+      remoteAddress: "203.0.113.20",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(otherSource.statusCode).toBe(200);
+  });
+
   it("does not list persisted online runners without live hub sockets", async () => {
     app.roam.store.setRunnerOnline(
       runnerRegistration(),
@@ -116,6 +147,52 @@ describe("server", () => {
     expect(runner.readyState).toBe(WebSocket.OPEN);
     expect(app.roam.hub.isRunnerOnline("runner-1")).toBe(true);
     expect(runnerMessages).toEqual([]);
+
+    runner.close();
+  });
+
+  it("closes owner streams before broadcasting after their auth session is gone", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await openSocket(`${localBaseUrl(app)}/v1/stream`);
+    const closed = nextClose(stream);
+
+    app.roam.store.deleteAuthSession(currentAuthSessionId(app));
+    app.roam.hub.broadcast({ type: "runner:offline", runnerId: "runner-1" });
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "session expired",
+    });
+  });
+
+  it("rejects client stream commands after their auth session is gone", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    expect(await nextJson(stream)).toMatchObject({ type: "runner:online" });
+    createTestProject(app);
+
+    const closed = nextClose(stream);
+    app.roam.store.deleteAuthSession(currentAuthSessionId(app));
+    stream.send(
+      JSON.stringify({
+        type: "createSession",
+        requestId: "expired-stream-create",
+        projectId: "project-1",
+        agent: "codex",
+        executionMode: "direct",
+        prompt: "should not start",
+      }),
+    );
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "session expired",
+    });
+    expect(app.roam.store.listSessions()).toEqual([]);
 
     runner.close();
   });
@@ -1826,6 +1903,14 @@ function extractCookie(
   return cookie.split(";")[0] ?? cookie;
 }
 
+function currentAuthSessionId(app: RoamServer): string {
+  const session = app.roam.store.listAuthSessions()[0];
+  if (!session) {
+    throw new Error("expected auth session");
+  }
+  return session.id;
+}
+
 function shouldAttachAuth(options: any): boolean {
   if (!options || typeof options !== "object") {
     return false;
@@ -1848,6 +1933,16 @@ function nextJson(socket: WebSocket): Promise<Record<string, any>> {
     socket.once("message", (data) => {
       clearTimeout(timer);
       resolve(JSON.parse(data.toString()) as Record<string, any>);
+    });
+  });
+}
+
+function nextClose(
+  socket: WebSocket,
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve) => {
+    socket.once("close", (code, reason) => {
+      resolve({ code, reason: reason.toString() });
     });
   });
 }

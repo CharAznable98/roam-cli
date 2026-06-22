@@ -165,7 +165,7 @@ export class AuthService {
       return fail("setup_required");
     }
     const rateKey = this.rateKey("login", request);
-    if (this.isRateLimited(rateKey) || this.isRateLimited("login:global")) {
+    if (this.isRateLimited(rateKey)) {
       this.log("auth.login_rate_limited", request);
       return fail("rate_limited");
     }
@@ -176,13 +176,11 @@ export class AuthService {
       )
     ) {
       this.recordFailure(rateKey);
-      this.recordFailure("login:global");
       this.log("auth.login_failed", request);
       return fail("invalid_credentials");
     }
 
     this.recordSuccess(rateKey);
-    this.recordSuccess("login:global");
     const created = this.createSession(request);
     this.log("auth.login_succeeded", request, created.record.id);
     return ok({
@@ -295,23 +293,22 @@ export class AuthService {
     if (!record) {
       return undefined;
     }
-    const now = Date.now();
-    if (
-      Date.parse(record.absoluteExpiresAt) <= now ||
-      Date.parse(record.lastSeenAt) + IDLE_TIMEOUT_MS <= now
-    ) {
-      this.store.deleteAuthSession(record.id);
+    const active = this.validateSessionRecord(record, { touch: true });
+    if (!active) {
       return undefined;
     }
-    if (Date.parse(record.lastSeenAt) + TOUCH_INTERVAL_MS <= now) {
-      const lastSeenAt = new Date(now).toISOString();
-      this.store.touchAuthSession(record.id, lastSeenAt);
-      return {
-        token,
-        record: { ...record, lastSeenAt },
-      };
+    return { token, record: active };
+  }
+
+  authenticateSessionId(
+    sessionId: string,
+    options: { touch?: boolean } = {},
+  ): AuthSessionRecord | undefined {
+    const record = this.store.getAuthSession(sessionId);
+    if (!record) {
+      return undefined;
     }
-    return { token, record };
+    return this.validateSessionRecord(record, options);
   }
 
   requireSession(
@@ -404,6 +401,29 @@ export class AuthService {
     };
     this.store.createAuthSession(record);
     return { record, token };
+  }
+
+  private validateSessionRecord(
+    record: AuthSessionRecord,
+    options: { touch?: boolean },
+  ): AuthSessionRecord | undefined {
+    const now = Date.now();
+    if (
+      Date.parse(record.absoluteExpiresAt) <= now ||
+      Date.parse(record.lastSeenAt) + IDLE_TIMEOUT_MS <= now
+    ) {
+      this.store.deleteAuthSession(record.id);
+      return undefined;
+    }
+    if (
+      options.touch &&
+      Date.parse(record.lastSeenAt) + TOUCH_INTERVAL_MS <= now
+    ) {
+      const lastSeenAt = new Date(now).toISOString();
+      this.store.touchAuthSession(record.id, lastSeenAt);
+      return { ...record, lastSeenAt };
+    }
+    return record;
   }
 
   private rateKey(kind: string, request: FastifyRequest): string {

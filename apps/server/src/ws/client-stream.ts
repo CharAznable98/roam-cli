@@ -18,12 +18,26 @@ export function registerClientStreamRoute(
       socket.close(1008, "unauthorized");
       return;
     }
-    context.hub.addStream(socket, session.record.id);
+    context.hub.addStream(
+      socket,
+      session.record.id,
+      () =>
+        context.services.auth.authenticateSessionId(session.record.id) !==
+        undefined,
+    );
     socket.on("message", (data) => {
+      const activeSession = context.services.auth.authenticateSessionId(
+        session.record.id,
+        { touch: true },
+      );
+      if (!activeSession) {
+        socket.close(1008, "session expired");
+        return;
+      }
       try {
         const command = ClientCommandSchema.parse(parseSocketJson(data));
         void context.services.sessions
-          .handleClientCommand(command, session.record.id)
+          .handleClientCommand(command, activeSession.id)
           .catch((error: unknown) => {
             context.hub.sendError(
               socket,
