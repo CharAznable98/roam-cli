@@ -3,11 +3,16 @@ import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import type {
+  AgentRuntimeEvent,
+  AgentSessionContext,
+} from "@roamcli/agent-plugin-sdk";
 import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
+import { describe, expect, it, vi } from "vitest";
 import {
   CodexJsonParser,
   agentPlugin,
+  approvalResponsePayload,
   codexAgent,
   codexJsonArgs,
   listCodexSkills,
@@ -162,6 +167,279 @@ describe("codex agent plugin", () => {
     ]);
   });
 
+  it("includes approval IDs in subprocess approval response payloads", () => {
+    expect(
+      approvalResponsePayload({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "signature",
+      }),
+    ).toEqual({
+      type: "approvalResponse",
+      approvalId: "approval-1",
+      approved: true,
+      signedAt: "2026-06-21T00:00:00.000Z",
+      signature: "signature",
+    });
+  });
+
+  it("fails sessions cleanly when approval requests cannot be created", async () => {
+    const workspace = await mkdirTemp("roam-codex-approval-failure-");
+    const script = join(workspace, "approval-failure.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+        "setInterval(() => undefined, 1000);",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        throw new Error("approval store down");
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        message: "approval store down",
+        code: "CODEX_APPROVAL_ERROR",
+      });
+      expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
+  it("waits for approval failures before choosing process exit status", async () => {
+    const workspace = await mkdirTemp("roam-codex-approval-exit-");
+    const script = join(workspace, "approval-exit.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error("approval store down");
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        message: "approval store down",
+        code: "CODEX_APPROVAL_ERROR",
+      });
+      expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+    expect(events).not.toContainEqual({ type: "status", status: "completed" });
+  });
+
+  it("does not block stopped sessions on pending approvals", async () => {
+    const workspace = await mkdirTemp("roam-codex-stop-approval-");
+    const script = join(workspace, "stop-approval.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+        "setInterval(() => undefined, 1000);",
+      ].join("\n"),
+    );
+    let approvalStarted!: () => void;
+    const approvalStartedPromise = new Promise<void>((resolve) => {
+      approvalStarted = resolve;
+    });
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        approvalStarted();
+        return new Promise<never>(() => undefined);
+      },
+    });
+
+    await session.start();
+    await approvalStartedPromise;
+    session.control("stop");
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "status", status: "stopped" });
+    });
+    expect(events).not.toContainEqual({ type: "status", status: "failed" });
+  });
+
+  it("handles terminal status emit failures without unhandled rejections", async () => {
+    const workspace = await mkdirTemp("roam-codex-finish-reject-");
+    const script = join(workspace, "finish-reject.mjs");
+    await writeFile(script, "process.exit(0);");
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const session = codexAgent.createSession({
+        profile: "standard",
+        env: {
+          ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+          ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+        },
+        session: makeSession(workspace),
+        cwd: workspace,
+        prompt: "hello",
+        emit: async (event) => {
+          if (event.type === "status") {
+            throw new Error("sink down");
+          }
+        },
+        requestApproval: async () => ({
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        }),
+      });
+
+      await session.start();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("keeps stdin open for subprocess approval responses", async () => {
+    const workspace = await mkdirTemp("roam-codex-approval-stdin-");
+    const script = join(workspace, "approval-stdin.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+        "process.stdin.setEncoding('utf8');",
+        "let buffer = '';",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer += chunk;",
+        "  const lines = buffer.split(/\\r?\\n/);",
+        "  buffer = lines.pop() ?? '';",
+        "  for (const line of lines) {",
+        "    if (!line) continue;",
+        "    const payload = JSON.parse(line);",
+        "    if (payload.type === 'approvalResponse') {",
+        "      console.log(JSON.stringify({",
+        "        type: 'item.completed',",
+        "        item: {",
+        "          id: 'item_2',",
+        "          type: 'agent_message',",
+        "          text: `approval response: ${payload.approvalId}:${payload.approved}`,",
+        "        },",
+        "      }));",
+        "      process.exit(0);",
+        "    }",
+        "  }",
+        "});",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "message",
+        content: "approval response: approval-1:true",
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+  });
+
   it("supports JSON array and shell-like args overrides", () => {
     expect(parseArgs('["--one","two words"]')).toEqual(["--one", "two words"]);
     expect(parseArgs('exec --sandbox "danger full"')).toEqual([
@@ -276,6 +554,22 @@ describe("codex agent plugin", () => {
 
 async function mkdirTemp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+function makeSession(cwd: string): AgentSessionContext["session"] {
+  return {
+    id: "s1",
+    title: "Session",
+    projectId: "project-1",
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "pending",
+    executionMode: "direct",
+    executionFolder: cwd,
+    cwd,
+    createdAt: "2026-06-21T00:00:00.000Z",
+    updatedAt: "2026-06-21T00:00:00.000Z",
+  };
 }
 
 async function writeSkill(

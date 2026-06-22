@@ -200,7 +200,11 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
     if (!navigator.clipboard) {
       return;
     }
-    await navigator.clipboard.writeText(code);
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   };

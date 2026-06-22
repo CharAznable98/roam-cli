@@ -49,6 +49,7 @@ type PromptComposerProps = {
 
 type TriggerToken = {
   type: "skill" | "path";
+  marker: "$" | "/" | "@";
   start: number;
   end: number;
   query: string;
@@ -110,7 +111,10 @@ export function PromptComposer({
     () => ({ runnerId, agent, basePath }),
     [agent, basePath, runnerId],
   );
-  const rawToken = useMemo(() => findTriggerToken(value, caret), [caret, value]);
+  const rawToken = useMemo(
+    () => findTriggerToken(value, caret),
+    [caret, value],
+  );
   const token = useMemo(() => {
     if (!rawToken || triggerTokenKey(rawToken) === dismissedTokenKey) {
       return undefined;
@@ -225,13 +229,19 @@ export function PromptComposer({
     }
     if (token.type === "skill") {
       const query = token.query.trim().toLowerCase();
+      const slashTrigger = token.marker === "/";
       return skillState.skills
         .filter((skill) => {
+          const insertText = skillInsertText(skill);
+          if (slashTrigger !== insertText.startsWith("/")) {
+            return false;
+          }
           if (!query) {
             return true;
           }
           return (
             skill.name.toLowerCase().includes(query) ||
+            insertText.toLowerCase().includes(query) ||
             (skill.description?.toLowerCase().includes(query) ?? false)
           );
         })
@@ -298,7 +308,7 @@ export function PromptComposer({
     }
     const replacement =
       option.kind === "skill"
-        ? `$${option.skill.name}`
+        ? skillInsertText(option.skill)
         : `@${formatPathMention(option.entry)}`;
     const nextValue =
       value.slice(0, token.start) + replacement + value.slice(token.end);
@@ -429,7 +439,7 @@ export function PromptComposer({
             >
               <span className="prompt-suggestion-title">
                 {option.kind === "skill"
-                  ? `$${option.skill.name}`
+                  ? skillInsertText(option.skill)
                   : `@${option.entry.path}${option.entry.type === "directory" ? "/" : ""}`}
               </span>
               <span className="prompt-suggestion-meta">
@@ -458,7 +468,7 @@ function findTriggerToken(
     start -= 1;
   }
   const marker = value[start];
-  if (marker !== "$" && marker !== "@") {
+  if (marker !== "$" && marker !== "/" && marker !== "@") {
     return undefined;
   }
 
@@ -468,10 +478,20 @@ function findTriggerToken(
   }
 
   const query = value.slice(start + 1, caret);
-  if (marker === "$" && !/^[A-Za-z0-9_:-]*$/.test(query)) {
+  if ((marker === "$" || marker === "/") && !/^[A-Za-z0-9_:-]*$/.test(query)) {
     return undefined;
   }
-  return { type: marker === "$" ? "skill" : "path", start, end, query };
+  return {
+    type: marker === "@" ? "path" : "skill",
+    marker,
+    start,
+    end,
+    query,
+  };
+}
+
+function skillInsertText(skill: AgentSkillSummary): string {
+  return skill.insertText ?? `$${skill.name}`;
 }
 
 function formatPathMention(entry: PathSearchEntry): string {
@@ -487,12 +507,12 @@ function formatPathMention(entry: PathSearchEntry): string {
 
 function completionKey(option: CompletionOption): string {
   return option.kind === "skill"
-    ? `skill:${option.skill.name}`
+    ? `skill:${skillInsertText(option.skill)}:${option.skill.sourcePath}`
     : `path:${option.entry.path}`;
 }
 
 function triggerTokenKey(token: TriggerToken): string {
-  return `${token.type}:${token.start}:${token.end}:${token.query}`;
+  return `${token.type}:${token.marker}:${token.start}:${token.end}:${token.query}`;
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {

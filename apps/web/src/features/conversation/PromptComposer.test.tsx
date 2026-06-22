@@ -61,6 +61,62 @@ describe("PromptComposer", () => {
     expect(listAgentSkills).toHaveBeenCalledTimes(1);
   });
 
+  it("loads slash commands after typing / and inserts slash syntax", async () => {
+    const listAgentSkills = vi.fn(
+      async (): Promise<AgentSkillListResult> => ({
+        requestId: "skills-1",
+        agent: "claude-code",
+        basePath: "/workspace",
+        queriedAt: "2026-06-20T00:00:00.000Z",
+        skills: [
+          {
+            name: "plan",
+            description: "Plan work",
+            sourceType: "project",
+            sourcePath: "/workspace/.codex/skills/plan",
+          },
+          {
+            name: "compact",
+            description: "Compact context",
+            insertText: "/compact",
+            sourceType: "project",
+            sourcePath: "/workspace",
+          },
+        ],
+      }),
+    );
+    const searchWorkspacePaths = vi.fn(
+      async (): Promise<PathSearchResult> => ({
+        requestId: "paths-1",
+        basePath: "/workspace",
+        query: "",
+        entries: [],
+      }),
+    );
+
+    render(
+      <ComposerHarness
+        agent="claude-code"
+        onListAgentSkills={listAgentSkills}
+        onSearchWorkspacePaths={searchWorkspacePaths}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(composer, { target: { value: "Run /co" } });
+
+    await screen.findByText("/compact");
+    expect(screen.queryByText("$plan")).not.toBeInTheDocument();
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(composer).toHaveValue("Run /compact"));
+    expect(listAgentSkills).toHaveBeenCalledWith({
+      runnerId: "runner-1",
+      agent: "claude-code",
+      basePath: "/workspace",
+    });
+  });
+
   it("searches top-level paths for an empty @ query and quotes paths with spaces", async () => {
     const listAgentSkills = vi.fn(
       async (): Promise<AgentSkillListResult> => ({
@@ -292,6 +348,7 @@ function ComposerHarness({
   onListAgentSkills,
   onSearchWorkspacePaths,
   suggestionPlacement,
+  agent = "codex",
 }: {
   onListAgentSkills: ComponentProps<typeof PromptComposer>["onListAgentSkills"];
   onSearchWorkspacePaths: ComponentProps<
@@ -300,6 +357,7 @@ function ComposerHarness({
   suggestionPlacement?: ComponentProps<
     typeof PromptComposer
   >["suggestionPlacement"];
+  agent?: ComponentProps<typeof PromptComposer>["agent"];
 }) {
   const [value, setValue] = useState("");
   const placementProps =
@@ -309,7 +367,7 @@ function ComposerHarness({
       value={value}
       onChange={setValue}
       runnerId="runner-1"
-      agent="codex"
+      agent={agent}
       basePath="/workspace"
       onListAgentSkills={onListAgentSkills}
       onSearchWorkspacePaths={onSearchWorkspacePaths}

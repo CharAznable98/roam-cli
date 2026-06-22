@@ -1,16 +1,21 @@
-import { execFile } from "node:child_process";
+import {
+  execFile,
+  spawn as spawnChild,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type {
   AgentDefinition,
-  AgentLaunch,
-  AgentLaunchContext,
+  AgentInput,
   AgentOutputParser,
   AgentParseResult,
   AgentPlugin,
   AgentPluginContext,
+  AgentSession,
+  AgentSessionContext,
   ApprovalRequestDraft,
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
@@ -54,23 +59,20 @@ export const codexAgent: AgentDefinition = {
       pluginVersion: PLUGIN_VERSION,
     };
   },
-  buildLaunch(context: AgentLaunchContext): AgentLaunch {
-    const baseArgs = argsFor(KIND, context.env);
-    return {
+  createSession(context: AgentSessionContext): AgentSession {
+    return new CodexProcessSession({
       command: commandFor(KIND, context.env),
       args: codexJsonArgs(
-        baseArgs,
+        argsFor(KIND, context.env),
         context.prompt,
         context.resumeThreadId,
         imagePaths(context),
       ),
-      preferPty: false,
-      requirePty: false,
-      promptDelivery: "argument",
-    };
-  },
-  createParser(): AgentOutputParser {
-    return new CodexJsonParser();
+      cwd: context.cwd,
+      env: context.env,
+      parser: new CodexJsonParser(),
+      context,
+    });
   },
   async listSkills(context) {
     return listCodexSkills(context.workspace, context.basePath, context.env);
@@ -86,6 +88,209 @@ export const agentPlugin: AgentPlugin = {
 };
 
 export default agentPlugin;
+
+interface CodexProcessSessionOptions {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  parser: AgentOutputParser;
+  context: AgentSessionContext;
+}
+
+class CodexProcessSession implements AgentSession {
+  readonly #options: CodexProcessSessionOptions;
+  #child?: ChildProcessWithoutNullStreams;
+  #stopRequested = false;
+  #failed = false;
+  readonly #outputTasks = new Set<Promise<void>>();
+  readonly #approvalTasks = new Set<Promise<void>>();
+
+  public constructor(options: CodexProcessSessionOptions) {
+    this.#options = options;
+  }
+
+  public async start(): Promise<void> {
+    const child = spawnChild(this.#options.command, [...this.#options.args], {
+      cwd: this.#options.cwd,
+      env: this.#options.env,
+      stdio: "pipe",
+    });
+    this.#child = child;
+
+    child.stdout.on("data", (chunk) => this.#trackOutput(chunk));
+    child.stderr.on("data", (chunk) => this.#trackOutput(chunk));
+    child.on("error", (error) => {
+      void this.#options.context.emit({
+        type: "error",
+        message: error.message,
+        code: "SPAWN_ERROR",
+      });
+    });
+    child.on("close", (code, signal) => {
+      void this.#finish(code, signal).catch(() => undefined);
+    });
+  }
+
+  public deliverInput(input: AgentInput): void {
+    const child = this.#child;
+    if (!child) {
+      return;
+    }
+    this.#write(input.content);
+    if (!input.content.endsWith("\n")) {
+      this.#write("\n");
+    }
+  }
+
+  public control(signal: "interrupt" | "stop" | "resume"): void {
+    const child = this.#child;
+    if (!child) {
+      return;
+    }
+    if (signal === "interrupt") {
+      child.kill("SIGINT");
+      return;
+    }
+    if (signal === "stop") {
+      this.#stopRequested = true;
+      child.kill("SIGTERM");
+      return;
+    }
+    this.#write(`${JSON.stringify({ type: "controlSignal", signal })}\n`);
+  }
+
+  public close(): void {
+    this.#stopRequested = true;
+    this.#child?.kill("SIGKILL");
+  }
+
+  #trackOutput(chunk: string | Buffer): void {
+    this.#trackTask(this.#handleOutput(chunk), this.#outputTasks);
+  }
+
+  #trackTask(task: Promise<void>, tasks: Set<Promise<void>>): void {
+    tasks.add(task);
+    void task
+      .finally(() => {
+        tasks.delete(task);
+      })
+      .catch(() => undefined);
+  }
+
+  async #finish(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): Promise<void> {
+    const stopped =
+      this.#stopRequested ||
+      (!this.#failed && (signal === "SIGTERM" || signal === "SIGINT"));
+    await this.#waitForTasks(this.#outputTasks);
+    if (!stopped) {
+      await this.#waitForTasks(this.#approvalTasks);
+    }
+    await this.#options.context.emit({
+      type: "status",
+      status: statusForExit(code, stopped, this.#failed),
+    });
+  }
+
+  async #waitForTasks(tasks: Set<Promise<void>>): Promise<void> {
+    while (tasks.size > 0) {
+      await Promise.allSettled([...tasks]);
+    }
+  }
+
+  async #handleOutput(chunk: string | Buffer): Promise<void> {
+    let parsed: AgentParseResult;
+    try {
+      parsed = this.#options.parser.feed(chunk);
+    } catch {
+      return;
+    }
+    if (parsed.threadId !== undefined) {
+      await this.#options.context.emit({
+        type: "thread",
+        threadId: parsed.threadId,
+      });
+    }
+    for (const message of parsed.messages ?? []) {
+      await this.#options.context.emit({ type: "message", content: message });
+    }
+    if (parsed.text.length > 0) {
+      await this.#options.context.emit({ type: "token", content: parsed.text });
+    }
+    for (const draft of parsed.approvals) {
+      this.#trackTask(this.#requestApproval(draft), this.#approvalTasks);
+    }
+    for (const draft of parsed.artifacts) {
+      await this.#options.context.emit({ type: "artifact", draft });
+    }
+  }
+
+  async #requestApproval(draft: ApprovalRequestDraft): Promise<void> {
+    try {
+      const decision = await this.#options.context.requestApproval(draft);
+      this.#write(`${JSON.stringify(approvalResponsePayload(decision))}\n`);
+    } catch (error: unknown) {
+      this.#failed = true;
+      try {
+        await this.#options.context.emit({
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+          code: "CODEX_APPROVAL_ERROR",
+        });
+      } catch {
+        // The child must not wait forever even when the runner event sink is down.
+      } finally {
+        this.#child?.kill("SIGTERM");
+      }
+    }
+  }
+
+  #write(data: string): void {
+    const child = this.#child;
+    if (!child || child.stdin.destroyed || !child.stdin.writable) {
+      return;
+    }
+    child.stdin.write(data);
+  }
+}
+
+export function approvalResponsePayload(decision: {
+  approvalId: string;
+  approved: boolean;
+  signedAt: string;
+  signature: string;
+}): {
+  type: "approvalResponse";
+  approvalId: string;
+  approved: boolean;
+  signedAt: string;
+  signature: string;
+} {
+  return {
+    type: "approvalResponse",
+    approvalId: decision.approvalId,
+    approved: decision.approved,
+    signedAt: decision.signedAt,
+    signature: decision.signature,
+  };
+}
+
+function statusForExit(
+  code: number | null,
+  stopped: boolean,
+  failed: boolean,
+): "completed" | "failed" | "stopped" {
+  if (stopped) {
+    return "stopped";
+  }
+  if (failed) {
+    return "failed";
+  }
+  return code === 0 ? "completed" : "failed";
+}
 
 export class CodexJsonParser implements AgentOutputParser {
   #buffer = "";
@@ -158,7 +363,7 @@ export function codexJsonArgs(
   ];
 }
 
-function imagePaths(context: AgentLaunchContext): string[] {
+function imagePaths(context: AgentSessionContext): string[] {
   return (context.attachments ?? [])
     .filter((attachment) => attachment.kind === "image")
     .map((attachment) => attachment.localPath);

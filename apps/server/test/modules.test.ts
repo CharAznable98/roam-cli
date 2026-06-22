@@ -275,6 +275,43 @@ describe("SessionCommandService", () => {
     expect(runnerMessages).toHaveLength(1);
   });
 
+  it.each(["pending", "running", "waiting_approval"] as const)(
+    "rejects active Claude Code messages before persistence when %s",
+    async (status) => {
+      const hub = new ConnectionHub(store);
+      const approvals = new ApprovalService(store, hub);
+      const service = new SessionCommandService(
+        store,
+        hub,
+        approvals,
+        new RunnerRpcClient(hub),
+        100,
+      );
+      const runnerMessages: RunnerCommand[] = [];
+      store.createProject(projectRecord());
+      hub.registerRunner(
+        claudeRunnerRegistration(),
+        fakeSocket(runnerMessages),
+      );
+      store.createSession({
+        ...sessionRecord(),
+        agent: "claude-code",
+        status,
+      });
+
+      const result = await service.createUserMessage("session-1", {
+        content: "follow up",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: "session_turn_active",
+      });
+      expect(store.listMessages("session-1")).toEqual([]);
+      expect(runnerMessages).toEqual([]);
+    },
+  );
+
   it("rolls back session creation when startSession cannot be delivered", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(store, hub);
@@ -313,7 +350,11 @@ describe("SessionCommandService", () => {
         100,
       );
       store.createProject(projectRecord());
-      store.setRunnerOnline(runnerRegistration(), true, new Date().toISOString());
+      store.setRunnerOnline(
+        runnerRegistration(),
+        true,
+        new Date().toISOString(),
+      );
       store.createSession({ ...sessionRecord(), status });
       store.createSession({ ...sessionRecord(), id: "session-2" });
 
@@ -465,7 +506,11 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("session status check was not sent");
     }
-    store.updateSessionStatus("session-1", "completed", new Date().toISOString());
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
     rpc.resolveRunnerResponse({
       requestId: command.requestId,
       sessionId: "session-1",
@@ -1033,6 +1078,59 @@ describe("RunnerEventService", () => {
     );
   });
 
+  it("does not let late approval events downgrade terminal sessions", () => {
+    const streamEvents: ServerEvent[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    const rpc = new RunnerRpcClient(hub);
+    const service = new RunnerEventService(store, hub, rpc);
+    store.createProject(projectRecord());
+    const session = store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+    });
+
+    service.handle({
+      type: "sessionStatus",
+      sessionId: session.id,
+      status: "waiting_approval",
+    });
+
+    expect(store.getSession(session.id)?.status).toBe("completed");
+
+    service.handle({
+      type: "approvalRequested",
+      approval: {
+        id: "approval-late",
+        sessionId: session.id,
+        runnerId: "runner-1",
+        kind: "execCommand",
+        summary: "Late approval",
+        payload: { command: "pwd" },
+        status: "pending",
+        requestedAt: new Date().toISOString(),
+      },
+    });
+
+    expect(store.getSession(session.id)?.status).toBe("completed");
+    expect(store.getApproval("approval-late")).toMatchObject({
+      id: "approval-late",
+      status: "pending",
+    });
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({ type: "approval:requested" }),
+    );
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: session.id,
+          status: "waiting_approval",
+        }),
+      }),
+    );
+  });
+
   it("does not broadcast unscoped runner connection parse errors to users", () => {
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
@@ -1131,6 +1229,23 @@ function imageRunnerRegistration(): RunnerRegistration {
         supportedImageMimeTypes: ["image/png"],
         maxImagesPerTurn: 2,
         maxImageBytes: 1024,
+      },
+    ],
+  };
+}
+
+function claudeRunnerRegistration(): RunnerRegistration {
+  const runner = runnerRegistration();
+  return {
+    ...runner,
+    capabilities: [
+      {
+        ...runner.capabilities[0]!,
+        kind: "claude-code",
+        label: "Claude Code",
+        command: "claude",
+        parser: "claude-agent-sdk",
+        supportsResume: true,
       },
     ],
   };

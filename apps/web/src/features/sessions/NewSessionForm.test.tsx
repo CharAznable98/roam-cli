@@ -43,6 +43,18 @@ const runner: RunnerRegistration = {
       maxImagesPerTurn: 2,
       maxImageBytes: 1024,
     },
+    {
+      kind: "claude-code",
+      label: "Claude Code",
+      command: "claude",
+      args: [],
+      parser: "claude-agent-sdk",
+      supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: ["image/png", "image/jpeg", "image/webp"],
+      maxImagesPerTurn: 4,
+      maxImageBytes: 2048,
+    },
   ],
 };
 
@@ -103,6 +115,61 @@ describe("NewSessionForm image attachments", () => {
           },
         ],
       }),
+    );
+  });
+
+  it("clears stale image validation errors when switching to an agent that supports the image type", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <NewSessionForm project={project} runner={runner} onCreate={onCreate} />,
+    );
+    await screen.findByPlaceholderText("Describe the work");
+
+    fireEvent.change(fileInput(container), {
+      target: {
+        files: [new File(["hello"], "screen.webp", { type: "image/webp" })],
+      },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "image/webp is not supported.",
+    );
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "claude-code" },
+    });
+
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("removes draft images that the newly selected agent does not support", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <NewSessionForm project={project} runner={runner} onCreate={onCreate} />,
+    );
+    await screen.findByPlaceholderText("Describe the work");
+
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "claude-code" },
+    });
+    fireEvent.change(fileInput(container), {
+      target: {
+        files: [new File(["hello"], "screen.webp", { type: "image/webp" })],
+      },
+    });
+    await screen.findByLabelText("Attached images");
+
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "codex" },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Attached images")).toBeNull(),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "image/webp is not supported.",
+    );
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(
+      "blob:new-session-preview",
     );
   });
 });

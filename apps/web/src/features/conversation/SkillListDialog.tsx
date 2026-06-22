@@ -147,9 +147,13 @@ export function SkillListDialog({
         {state.skills.length > 0 ? (
           <div className="skill-list" role="list">
             {state.skills.map((skill) => (
-              <div className="skill-list-row" key={skill.name} role="listitem">
+              <div
+                className="skill-list-row"
+                key={`${skillInsertText(skill)}:${skill.sourcePath}`}
+                role="listitem"
+              >
                 <div className="skill-list-row-main">
-                  <strong>${skill.name}</strong>
+                  <strong>{skillInsertText(skill)}</strong>
                   {skill.description ? <span>{skill.description}</span> : null}
                 </div>
                 <div className="skill-list-row-meta">
@@ -163,6 +167,10 @@ export function SkillListDialog({
       </div>
     </div>
   );
+}
+
+function skillInsertText(skill: AgentSkillSummary): string {
+  return skill.insertText ?? `$${skill.name}`;
 }
 
 function formatDateTime(value: string): string {

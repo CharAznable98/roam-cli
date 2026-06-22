@@ -524,6 +524,7 @@ export type AgentSkillSourceType = z.infer<typeof AgentSkillSourceTypeSchema>;
 export const AgentSkillSummarySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  insertText: z.string().min(1).optional(),
   sourceType: AgentSkillSourceTypeSchema,
   sourcePath: z.string().min(1),
 });

@@ -114,6 +114,29 @@ describe("ChatPanel", () => {
     ).toHaveAttribute("placeholder", "Message the active session");
   });
 
+  it("disables follow-up sends while a Claude Code turn is active", () => {
+    const onSend = vi.fn();
+    render(
+      <ChatPanel
+        session={{ ...baseSession, agent: "claude-code", status: "running" }}
+        messages={[]}
+        onSend={onSend}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    expect(composer).toHaveAttribute("placeholder", "Waiting for Claude Code");
+    fireEvent.change(composer, { target: { value: "follow up" } });
+
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    fireEvent.keyDown(composer, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: true,
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("shows recovery guidance for failed sessions", () => {
     render(
       <ChatPanel

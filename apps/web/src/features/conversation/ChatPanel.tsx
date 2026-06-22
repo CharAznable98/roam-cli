@@ -126,6 +126,12 @@ export function ChatPanel({
     () => imageInputLimits(imageCapability),
     [imageCapability],
   );
+  const claudeTurnInProgress =
+    session.agent === "claude-code" &&
+    (session.status === "pending" ||
+      session.status === "running" ||
+      session.status === "waiting_approval");
+  const canSubmitMessage = canSend && !claudeTurnInProgress;
 
   const scrollToBottom = () => {
     const list = messageListRef.current;
@@ -226,7 +232,7 @@ export function ChatPanel({
 
   const submitDraft = async () => {
     const cleanDraft = draft.trim();
-    if (!cleanDraft || !canSend || submitting) {
+    if (!cleanDraft || !canSubmitMessage || submitting) {
       return;
     }
 
@@ -616,11 +622,13 @@ export function ChatPanel({
             }}
             rows={2}
             placeholder={
-              canSend
+              canSubmitMessage
                 ? compactComposerPlaceholder
                   ? "Message the active session"
                   : "Message the active session, Cmd/Ctrl+Enter to send"
-                : "Stream is reconnecting"
+                : claudeTurnInProgress
+                  ? "Waiting for Claude Code"
+                  : "Stream is reconnecting"
             }
             ariaLabel="Chat composer"
           />
@@ -663,7 +671,9 @@ export function ChatPanel({
           type="submit"
           aria-label="Send message"
           title="Send message"
-          disabled={!canSend || submitting || draft.trim().length === 0}
+          disabled={
+            !canSubmitMessage || submitting || draft.trim().length === 0
+          }
         >
           {submitting ? <LoaderCircle size={17} /> : <Send size={17} />}
         </button>

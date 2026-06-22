@@ -1,9 +1,11 @@
-import { agentPlugin as codexPlugin } from "@roamcli/agent-codex";
 import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/agent-plugin-sdk";
 import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
 import { getPermissionTemplate } from "./permissions.js";
 
-export const DEFAULT_AGENT_PLUGINS = ["@roamcli/agent-codex"] as const;
+export const DEFAULT_AGENT_PLUGINS = [
+  "@roamcli/agent-codex",
+  "@roamcli/agent-claude-code",
+] as const;
 
 export interface LoadedAgent {
   definition: AgentDefinition;
@@ -56,10 +58,6 @@ export async function loadAgentRegistry(
 }
 
 async function loadAgentPlugin(name: string): Promise<AgentPlugin> {
-  if (name === "@roamcli/agent-codex") {
-    return codexPlugin;
-  }
-
   let loaded: unknown;
   try {
     loaded = await import(name);

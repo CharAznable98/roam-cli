@@ -241,10 +241,17 @@ export class SessionCommandService {
     const canResume = runnerCanResume(runner, session.agent);
     const isActive =
       session.status === "running" || session.status === "waiting_approval";
+    const turnInProgress = isActive || session.status === "pending";
     if (attachments.length > 0 && isActive) {
       return fail("attachments_require_idle", {
         message:
           "Images can be sent after the current session turn has finished.",
+      });
+    }
+    if (turnInProgress && requiresIdleUserTurns(session)) {
+      return fail("session_turn_active", {
+        message:
+          "Claude Code can accept the next message after the current turn completes.",
       });
     }
 
@@ -728,6 +735,10 @@ const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
 
 function hasActiveRunnerWork(session: Session): boolean {
   return ACTIVE_RUNNER_STATUSES.has(session.status);
+}
+
+function requiresIdleUserTurns(session: Session): boolean {
+  return session.agent === "claude-code";
 }
 
 function isUnconfirmedManagedWorktree(session: Session): boolean {
