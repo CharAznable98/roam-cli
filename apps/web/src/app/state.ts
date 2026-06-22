@@ -36,7 +36,7 @@ export type ConnectionState = "open" | "closed" | "error";
 
 export interface AppNotification {
   id: string;
-  tone: "error";
+  tone: "error" | "success";
   title: string;
   message: string;
 }
@@ -171,6 +171,12 @@ export type AppAction =
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
   | { type: "sessionDetailMerged"; detail: SessionDetailPayload }
+  | {
+      type: "notificationPushed";
+      tone: AppNotification["tone"];
+      title: string;
+      message: string;
+    }
   | { type: "errorChanged"; title?: string; message: string | undefined }
   | { type: "notificationDismissed"; id: string };
 
@@ -251,6 +257,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "bootstrapFailed":
       return pushNotification(
         { ...state, loadState: "error" },
+        "error",
         "RoamCli API request failed",
         action.message,
       );
@@ -370,6 +377,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           ? state.notifications
           : nextNotifications(
               state.notifications,
+              "error",
               "Patch was not applied",
               action.message,
             ),
@@ -383,6 +391,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "patchApplyFailed":
       return pushNotification(
         { ...state, patchApplyState: "error" },
+        "error",
         "Patch request failed",
         action.message,
       );
@@ -497,6 +506,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             action.requestId === undefined ? [] : [action.requestId],
           ),
         },
+        "error",
         "File tree request failed",
         action.message,
       );
@@ -525,6 +535,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "fileContentFailed":
       return pushNotification(
         { ...state, fileContentState: "error" },
+        "error",
         "File content request failed",
         action.message,
       );
@@ -537,6 +548,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "fileSaveFailed":
       return pushNotification(
         { ...state, fileSaveState: "error" },
+        "error",
         "File save failed",
         action.message,
       );
@@ -544,12 +556,15 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return applyServerEvent(state, action.event);
     case "sessionDetailMerged":
       return mergeSessionDetailState(state, action.detail);
+    case "notificationPushed":
+      return pushNotification(state, action.tone, action.title, action.message);
     case "errorChanged":
       if (action.message === undefined) {
         return state;
       }
       return pushNotification(
         state,
+        "error",
         action.title ?? "RoamCli request failed",
         action.message,
       );
@@ -924,12 +939,18 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       ? { ...state, patchApplyState: "ready" }
       : pushNotification(
           { ...state, patchApplyState: "error" },
+          "error",
           "Patch was not applied",
           event.result.message,
         );
   }
   if (event.type === "error") {
-    return pushNotification(state, "Runner request failed", event.message);
+    return pushNotification(
+      state,
+      "error",
+      "Runner request failed",
+      event.message,
+    );
   }
   return state;
 }
@@ -1272,37 +1293,47 @@ let notificationSequence = 0;
 
 function pushNotification(
   state: AppState,
+  tone: AppNotification["tone"],
   title: string,
   message: string,
 ): AppState {
   return {
     ...state,
-    notifications: nextNotifications(state.notifications, title, message),
+    notifications: nextNotifications(state.notifications, tone, title, message),
   };
 }
 
 function nextNotifications(
   notifications: AppNotification[],
+  tone: AppNotification["tone"],
   title: string,
   message: string,
 ): AppNotification[] {
-  const key = notificationKey(title, message);
+  const key = notificationKey(tone, title, message);
   const deduped = notifications.filter(
     (notification) =>
-      notificationKey(notification.title, notification.message) !== key,
+      notificationKey(
+        notification.tone,
+        notification.title,
+        notification.message,
+      ) !== key,
   );
   notificationSequence += 1;
   return [
     ...deduped,
     {
       id: `notification-${Date.now()}-${notificationSequence}`,
-      tone: "error" as const,
+      tone,
       title,
       message,
     },
   ].slice(-3);
 }
 
-function notificationKey(title: string, message: string): string {
-  return `${title}\n${message}`;
+function notificationKey(
+  tone: AppNotification["tone"],
+  title: string,
+  message: string,
+): string {
+  return `${tone}\n${title}\n${message}`;
 }

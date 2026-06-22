@@ -1,6 +1,9 @@
 import type {
+  ApiGitContext,
   DirectoryCreateResult,
   FileNode,
+  GitBranchList,
+  GitStatusResult,
   Project,
   RunnerRegistration,
   Session,
@@ -52,6 +55,9 @@ type CreateRunnerDirectory = (
   input: { parentPath: string; name: string },
 ) => Promise<DirectoryCreateResult>;
 
+type GitStatusFetcher = (context: ApiGitContext) => Promise<GitStatusResult>;
+type GitBranchesFetcher = (context: ApiGitContext) => Promise<GitBranchList>;
+
 type RunnerSidebarProps = {
   projects: Project[];
   runners: RunnerRegistration[];
@@ -74,6 +80,8 @@ type RunnerSidebarProps = {
   ) => void | Promise<void>;
   onListAgentSkills: AgentSkillFetcher;
   onSearchWorkspacePaths: PathSearchFetcher;
+  onFetchGitStatus: GitStatusFetcher;
+  onFetchGitBranches: GitBranchesFetcher;
 };
 
 export function RunnerSidebar({
@@ -91,6 +99,8 @@ export function RunnerSidebar({
   onCreateSession,
   onListAgentSkills,
   onSearchWorkspacePaths,
+  onFetchGitStatus,
+  onFetchGitBranches,
 }: RunnerSidebarProps) {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [sessionProjectId, setSessionProjectId] = useState<
@@ -285,6 +295,8 @@ export function RunnerSidebar({
               runner={sessionRunner}
               onListAgentSkills={onListAgentSkills}
               onSearchWorkspacePaths={onSearchWorkspacePaths}
+              onFetchGitStatus={onFetchGitStatus}
+              onFetchGitBranches={onFetchGitBranches}
               onCreate={async (values) => {
                 await onCreateSession(sessionProject.id, values);
                 setExpandedProjectIds((current) => {

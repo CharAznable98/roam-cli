@@ -318,6 +318,7 @@ declare module "@roamcli/shared/protocol" {
   }
 
   export interface GitStatus {
+    kind: "repository";
     requestId: string;
     context: GitContextRef;
     branch?: string;
@@ -330,6 +331,15 @@ declare module "@roamcli/shared/protocol" {
     unborn: boolean;
     groups: GitChangeGroup[];
   }
+
+  export interface GitNotRepositoryStatus {
+    kind: "not_git_repository";
+    requestId: string;
+    context: GitContextRef;
+    message: string;
+  }
+
+  export type GitStatusResult = GitStatus | GitNotRepositoryStatus;
 
   export interface GitFileDiff {
     requestId: string;
@@ -381,6 +391,7 @@ declare module "@roamcli/shared/protocol" {
     changedFiles?: number;
     insertions?: number;
     deletions?: number;
+    files?: GitChange[];
   }
 
   export interface GitCommitPage {
@@ -576,7 +587,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "attachmentContentResult"; result: AttachmentContentResult }
     | { type: "attachmentDeleteResult"; result: AttachmentDeleteResult }
     | { type: "patchApplyResult"; result: PatchApplyResult }
-    | { type: "gitStatusResult"; result: GitStatus }
+    | { type: "gitStatusResult"; result: GitStatusResult }
     | { type: "gitFileDiffResult"; result: GitFileDiff }
     | { type: "gitBlameResult"; result: GitBlame }
     | { type: "gitCommitPageResult"; result: GitCommitPage }

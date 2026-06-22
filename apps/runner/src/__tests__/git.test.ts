@@ -35,6 +35,10 @@ describe("runner git workspace operations", () => {
       projectId: "project-1",
       context,
     });
+    expect(status.kind).toBe("repository");
+    if (status.kind !== "repository") {
+      throw new Error("expected repository status");
+    }
     expect(status.clean).toBe(false);
     expect(
       status.groups.find((group) => group.id === "changes")?.changes,
@@ -81,6 +85,10 @@ describe("runner git workspace operations", () => {
       projectId: "project-1",
       context,
     });
+    expect(staged.kind).toBe("repository");
+    if (staged.kind !== "repository") {
+      throw new Error("expected repository status");
+    }
     expect(
       staged.groups.find((group) => group.id === "staged")?.changes,
     ).toContainEqual({
@@ -106,6 +114,25 @@ describe("runner git workspace operations", () => {
     await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
       "new\n",
     );
+  });
+
+  it("returns a friendly status result for directories that are not git repositories", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-non-git-"));
+
+    await expect(
+      readGitStatus({
+        workspace,
+        cwd: ".",
+        requestId: "status-non-git",
+        projectId: "project-1",
+        context,
+      }),
+    ).resolves.toMatchObject({
+      kind: "not_git_repository",
+      requestId: "status-non-git",
+      context,
+      message: "This directory is not a Git repository.",
+    });
   });
 });
 

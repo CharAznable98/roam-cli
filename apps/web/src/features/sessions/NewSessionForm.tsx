@@ -1,12 +1,17 @@
 import type {
   AgentKind,
+  ApiGitContext,
   ExecutionMode,
+  GitBranch,
+  GitBranchList,
+  GitStatus,
+  GitStatusResult,
   ImageAttachmentUpload,
   Project,
   RunnerCapability,
   RunnerRegistration,
 } from "@roamcli/shared/protocol";
-import { ImagePlus, Send, X } from "lucide-react";
+import { ImagePlus, RefreshCw, Send, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDraftImages,
@@ -32,6 +37,17 @@ export type NewSessionValues = {
   attachments?: ImageAttachmentUpload[];
 };
 
+type AsyncState = "idle" | "loading" | "ready" | "error";
+
+type BaseRefOption = {
+  value: string;
+  label: string;
+  meta: string;
+};
+
+type GitStatusFetcher = (context: ApiGitContext) => Promise<GitStatusResult>;
+type GitBranchesFetcher = (context: ApiGitContext) => Promise<GitBranchList>;
+
 type NewSessionFormProps = {
   project: Project;
   runner: RunnerRegistration;
@@ -39,6 +55,8 @@ type NewSessionFormProps = {
   onCreated?: () => void;
   onListAgentSkills?: AgentSkillFetcher | undefined;
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
+  onFetchGitStatus?: GitStatusFetcher | undefined;
+  onFetchGitBranches?: GitBranchesFetcher | undefined;
 };
 
 export function NewSessionForm({
@@ -48,6 +66,8 @@ export function NewSessionForm({
   onCreated,
   onListAgentSkills = emptyAgentSkillList,
   onSearchWorkspacePaths = emptyPathSearch,
+  onFetchGitStatus,
+  onFetchGitBranches,
 }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -60,6 +80,16 @@ export function NewSessionForm({
     useState<ExecutionMode>("managed_worktree");
   const [gitBaseRef, setGitBaseRef] = useState("HEAD");
   const [gitBranchName, setGitBranchName] = useState("");
+  const [sessionOptionsState, setSessionOptionsState] =
+    useState<AsyncState>("loading");
+  const [sessionOptionsError, setSessionOptionsError] = useState("");
+  const [gitStatusResult, setGitStatusResult] = useState<
+    GitStatusResult | undefined
+  >();
+  const [gitBranches, setGitBranches] = useState<GitBranchList | undefined>();
+  const [gitBranchesState, setGitBranchesState] =
+    useState<AsyncState>("idle");
+  const [gitBranchesError, setGitBranchesError] = useState("");
   const agentOptions = useMemo(
     () =>
       runner.capabilities.map(
@@ -78,6 +108,18 @@ export function NewSessionForm({
     () => imageInputLimits(imageCapability),
     [imageCapability],
   );
+  const gitContext = useMemo<ApiGitContext>(
+    () => ({ kind: "project", projectId: project.id }),
+    [project.id],
+  );
+  const repositoryStatus = isRepositoryStatus(gitStatusResult)
+    ? gitStatusResult
+    : undefined;
+  const canUseManagedWorktree = Boolean(repositoryStatus);
+  const baseRefOptions = useMemo(
+    () => buildBaseRefOptions(repositoryStatus, gitBranches),
+    [repositoryStatus, gitBranches],
+  );
 
   useEffect(() => {
     if (imageLimits.supported) {
@@ -88,6 +130,100 @@ export function NewSessionForm({
       return [];
     });
   }, [imageLimits.supported]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSessionOptionsState("loading");
+    setSessionOptionsError("");
+    setGitStatusResult(undefined);
+    setGitBranches(undefined);
+    setGitBranchesState("idle");
+    setGitBranchesError("");
+    setGitBranchName("");
+
+    const loadStatus =
+      onFetchGitStatus ?? (() => defaultGitStatus(gitContext));
+    void loadStatus(gitContext)
+      .then((statusResult) => {
+        if (cancelled) {
+          return;
+        }
+        setGitStatusResult(statusResult);
+        setSessionOptionsState("ready");
+        if (isRepositoryStatus(statusResult)) {
+          setExecutionMode("managed_worktree");
+          setGitBaseRef(defaultBaseRef(statusResult));
+        } else {
+          setExecutionMode("direct");
+          setGitBaseRef("");
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setGitStatusResult(undefined);
+        setSessionOptionsState("error");
+        setSessionOptionsError(
+          errorMessage(loadError, "Project Git options could not be loaded."),
+        );
+        setExecutionMode("direct");
+        setGitBaseRef("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gitContext, onFetchGitStatus]);
+
+  useEffect(() => {
+    if (!repositoryStatus) {
+      setGitBranches(undefined);
+      setGitBranchesState("idle");
+      setGitBranchesError("");
+      return;
+    }
+
+    let cancelled = false;
+    setGitBranchesState("loading");
+    setGitBranchesError("");
+    const loadBranches =
+      onFetchGitBranches ?? (() => defaultGitBranches(gitContext));
+    void loadBranches(gitContext)
+      .then((branches) => {
+        if (cancelled) {
+          return;
+        }
+        setGitBranches(branches);
+        setGitBranchesState("ready");
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setGitBranches(undefined);
+        setGitBranchesState("error");
+        setGitBranchesError(
+          errorMessage(loadError, "Branch refs could not be loaded."),
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gitContext, onFetchGitBranches, repositoryStatus]);
+
+  useEffect(() => {
+    if (!repositoryStatus) {
+      return;
+    }
+    const fallbackRef = defaultBaseRef(repositoryStatus);
+    setGitBaseRef((current) =>
+      current && baseRefOptions.some((option) => option.value === current)
+        ? current
+        : fallbackRef,
+    );
+  }, [baseRefOptions, repositoryStatus]);
 
   useEffect(() => {
     const strip = draftImageStripRef.current;
@@ -137,6 +273,10 @@ export function NewSessionForm({
       setError("Prompt is required.");
       return;
     }
+    if (executionMode === "managed_worktree" && !canUseManagedWorktree) {
+      setError("New branch worktrees require a Git repository.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -165,6 +305,18 @@ export function NewSessionForm({
       setSubmitting(false);
     }
   };
+
+  if (sessionOptionsState === "loading") {
+    return (
+      <div className="new-session-loading" role="status">
+        <RefreshCw size={16} />
+        <div>
+          <strong>Loading session options...</strong>
+          <p>Checking whether this project can create Git worktrees.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form className="new-session-form" onSubmit={submit}>
@@ -201,20 +353,40 @@ export function NewSessionForm({
             setExecutionMode(event.target.value as ExecutionMode)
           }
         >
-          <option value="managed_worktree">New branch worktree</option>
+          <option value="managed_worktree" disabled={!canUseManagedWorktree}>
+            New branch worktree
+          </option>
           <option value="direct">Local</option>
         </select>
       </label>
+      {!canUseManagedWorktree ? (
+        <p className="field-help" role={sessionOptionsState === "error" ? "alert" : undefined}>
+          {sessionOptionsState === "error"
+            ? sessionOptionsError
+            : "This directory is not a Git repository. Local sessions are available."}
+        </p>
+      ) : null}
       {executionMode === "managed_worktree" ? (
         <>
           <label className="field">
             <span>Base ref</span>
-            <input
+            <select
               value={gitBaseRef}
               onChange={(event) => setGitBaseRef(event.target.value)}
-              placeholder="HEAD"
-            />
+            >
+              {baseRefOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
+          {gitBranchesState === "loading" ? (
+            <p className="field-help">Loading branch refs...</p>
+          ) : null}
+          {gitBranchesState === "error" ? (
+            <p className="field-help warning">{gitBranchesError}</p>
+          ) : null}
           <label className="field">
             <span>Branch name</span>
             <input
@@ -348,6 +520,94 @@ export function NewSessionForm({
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function isRepositoryStatus(
+  status: GitStatusResult | undefined,
+): status is GitStatus {
+  return status?.kind === "repository";
+}
+
+function defaultBaseRef(status: GitStatus): string {
+  return status.branch ?? "HEAD";
+}
+
+function buildBaseRefOptions(
+  status: GitStatus | undefined,
+  branches: GitBranchList | undefined,
+): BaseRefOption[] {
+  if (!status) {
+    return [];
+  }
+
+  const options: BaseRefOption[] = [];
+  const seen = new Set<string>();
+  const add = (option: BaseRefOption) => {
+    if (seen.has(option.value)) {
+      return;
+    }
+    seen.add(option.value);
+    options.push(option);
+  };
+
+  const currentValue = defaultBaseRef(status);
+  add({
+    value: currentValue,
+    label: status.branch
+      ? `Current branch (${status.branch})`
+      : "HEAD (detached)",
+    meta: "current",
+  });
+
+  const localBranches =
+    branches?.branches.filter((branch) => !branch.remote) ?? [];
+  const remoteBranches =
+    branches?.branches.filter((branch) => branch.remote) ?? [];
+
+  for (const branch of localBranches) {
+    add(branchRefOption(branch));
+  }
+  for (const branch of remoteBranches) {
+    add(branchRefOption(branch));
+  }
+
+  return options;
+}
+
+function branchRefOption(branch: GitBranch): BaseRefOption {
+  const meta = branch.remote ? "remote" : "local";
+  return {
+    value: branch.name,
+    label: `${branch.name} (${meta})`,
+    meta,
+  };
+}
+
+async function defaultGitStatus(
+  context: ApiGitContext,
+): Promise<GitStatusResult> {
+  return {
+    kind: "repository",
+    requestId: "default-git-status",
+    context,
+    branch: "main",
+    detached: false,
+    ahead: 0,
+    behind: 0,
+    clean: true,
+    unborn: false,
+    groups: [],
+  };
+}
+
+async function defaultGitBranches(
+  context: ApiGitContext,
+): Promise<GitBranchList> {
+  return {
+    requestId: "default-git-branches",
+    context,
+    branches: [],
+  };
 }
 
 async function emptyAgentSkillList(
