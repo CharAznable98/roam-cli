@@ -378,16 +378,16 @@ export class SessionManager {
       });
       return;
     }
-    void Promise.resolve(running.agentSession.deliverInput({ content })).catch(
-      (error: unknown) => {
+    void Promise.resolve()
+      .then(() => running.agentSession.deliverInput({ content }))
+      .catch((error: unknown) => {
         void this.#emit({
           type: "error",
           sessionId,
           message: error instanceof Error ? error.message : String(error),
           code: "AGENT_INPUT_ERROR",
         });
-      },
-    );
+      });
   }
 
   public async readFileTree(
@@ -533,13 +533,19 @@ export class SessionManager {
   ): Promise<void> {
     switch (event.type) {
       case "status":
-        await this.#emit({
-          type: "sessionStatus",
-          sessionId,
-          status: event.status,
-        });
-        if (isTerminalStatus(event.status)) {
-          this.#finishRunningSession(sessionId);
+        {
+          const terminal = isTerminalStatus(event.status);
+          try {
+            await this.#emit({
+              type: "sessionStatus",
+              sessionId,
+              status: event.status,
+            });
+          } finally {
+            if (terminal) {
+              this.#finishRunningSession(sessionId);
+            }
+          }
         }
         return;
       case "thread":

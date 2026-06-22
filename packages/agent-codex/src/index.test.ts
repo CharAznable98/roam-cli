@@ -3,8 +3,12 @@ import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import type {
+  AgentRuntimeEvent,
+  AgentSessionContext,
+} from "@roamcli/agent-plugin-sdk";
 import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
+import { describe, expect, it, vi } from "vitest";
 import {
   CodexJsonParser,
   agentPlugin,
@@ -180,6 +184,53 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("fails sessions cleanly when approval requests cannot be created", async () => {
+    const workspace = await mkdirTemp("roam-codex-approval-failure-");
+    const script = join(workspace, "approval-failure.mjs");
+    await writeFile(
+      script,
+      [
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        "  },",
+        "}));",
+        "setInterval(() => undefined, 1000);",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        throw new Error("approval store down");
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        message: "approval store down",
+        code: "CODEX_APPROVAL_ERROR",
+      });
+      expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
   it("supports JSON array and shell-like args overrides", () => {
     expect(parseArgs('["--one","two words"]')).toEqual(["--one", "two words"]);
     expect(parseArgs('exec --sandbox "danger full"')).toEqual([
@@ -294,6 +345,22 @@ describe("codex agent plugin", () => {
 
 async function mkdirTemp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+function makeSession(cwd: string): AgentSessionContext["session"] {
+  return {
+    id: "s1",
+    title: "Session",
+    projectId: "project-1",
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "pending",
+    executionMode: "direct",
+    executionFolder: cwd,
+    cwd,
+    createdAt: "2026-06-21T00:00:00.000Z",
+    updatedAt: "2026-06-21T00:00:00.000Z",
+  };
 }
 
 async function writeSkill(

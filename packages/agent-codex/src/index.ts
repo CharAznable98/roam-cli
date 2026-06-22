@@ -102,6 +102,7 @@ class CodexProcessSession implements AgentSession {
   readonly #options: CodexProcessSessionOptions;
   #child?: ChildProcessWithoutNullStreams;
   #stopRequested = false;
+  #failed = false;
   readonly #outputTasks = new Set<Promise<void>>();
 
   public constructor(options: CodexProcessSessionOptions) {
@@ -180,7 +181,9 @@ class CodexProcessSession implements AgentSession {
   ): Promise<void> {
     await Promise.allSettled([...this.#outputTasks]);
     const status =
-      code === 0
+      this.#failed
+        ? "failed"
+        : code === 0
         ? "completed"
         : this.#stopRequested || signal === "SIGTERM" || signal === "SIGINT"
           ? "stopped"
@@ -208,12 +211,30 @@ class CodexProcessSession implements AgentSession {
       await this.#options.context.emit({ type: "token", content: parsed.text });
     }
     for (const draft of parsed.approvals) {
-      void this.#options.context.requestApproval(draft).then((decision) => {
-        this.#write(`${JSON.stringify(approvalResponsePayload(decision))}\n`);
-      });
+      void this.#requestApproval(draft);
     }
     for (const draft of parsed.artifacts) {
       await this.#options.context.emit({ type: "artifact", draft });
+    }
+  }
+
+  async #requestApproval(draft: ApprovalRequestDraft): Promise<void> {
+    try {
+      const decision = await this.#options.context.requestApproval(draft);
+      this.#write(`${JSON.stringify(approvalResponsePayload(decision))}\n`);
+    } catch (error: unknown) {
+      this.#failed = true;
+      try {
+        await this.#options.context.emit({
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+          code: "CODEX_APPROVAL_ERROR",
+        });
+      } catch {
+        // The child must not wait forever even when the runner event sink is down.
+      } finally {
+        this.#child?.kill("SIGTERM");
+      }
     }
   }
 

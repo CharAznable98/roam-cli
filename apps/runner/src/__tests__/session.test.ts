@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
+  AgentInput,
   AgentSession,
   AgentSessionContext,
 } from "@roamcli/agent-plugin-sdk";
@@ -555,6 +556,85 @@ describe("SessionManager", () => {
     });
   });
 
+  it("reports synchronous active input failures as session-scoped agent errors", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-input-error-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [throwingInputCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(makeSession(workspace), "ready");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "running",
+      });
+    });
+
+    expect(() => manager.deliverInput("s1", "boom")).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        sessionId: "s1",
+        message: "input boom",
+        code: "AGENT_INPUT_ERROR",
+      });
+    });
+    manager.control("s1", "stop");
+  });
+
+  it("finalizes terminal sessions when terminal status emission rejects", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-terminal-error-"),
+    );
+    const controlledAgent = controlledCompletionCodexAgent();
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [controlledAgent.agent],
+      emit: async (event) => {
+        events.push(event);
+        if (
+          event.type === "sessionStatus" &&
+          event.status === "completed"
+        ) {
+          throw new Error("sink down");
+        }
+      },
+    });
+
+    await manager.start(makeSession(workspace), "ready");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "running",
+      });
+    });
+
+    await expect(controlledAgent.complete()).rejects.toThrow("sink down");
+    manager.deliverInput("s1", "late input");
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        sessionId: "s1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      });
+    });
+  });
+
   it("reports active session liveness for status checks", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-status-check-"),
@@ -870,6 +950,81 @@ function throwingParserCodexAgent(): LoadedAgent {
   };
 }
 
+function throwingInputCodexAgent(): LoadedAgent {
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-throwing-input",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      createSession(context) {
+        return new TestAgentSession(context, undefined, () => {
+          throw new Error("input boom");
+        });
+      },
+    },
+  };
+}
+
+function controlledCompletionCodexAgent(): {
+  agent: LoadedAgent;
+  complete: () => Promise<void>;
+} {
+  let capturedContext: AgentSessionContext | undefined;
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-controlled-completion",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    agent: {
+      capability,
+      definition: {
+        kind: "codex",
+        label: "Codex",
+        buildCapability() {
+          return capability;
+        },
+        createSession(context) {
+          capturedContext = context;
+          return new TestAgentSession(context);
+        },
+      },
+    },
+    async complete() {
+      if (capturedContext === undefined) {
+        throw new Error("controlled session was not started");
+      }
+      await capturedContext.emit({ type: "status", status: "completed" });
+    },
+  };
+}
+
 function longRunningCodexAgent(): LoadedAgent {
   const capability = {
     kind: "codex",
@@ -903,20 +1058,27 @@ function longRunningCodexAgent(): LoadedAgent {
 class TestAgentSession implements AgentSession {
   readonly #context: AgentSessionContext;
   readonly #start: (() => Promise<void> | void) | undefined;
+  readonly #deliverInput:
+    | ((input: AgentInput) => Promise<void> | void)
+    | undefined;
 
   public constructor(
     context: AgentSessionContext,
     start?: () => Promise<void> | void,
+    deliverInput?: (input: AgentInput) => Promise<void> | void,
   ) {
     this.#context = context;
     this.#start = start;
+    this.#deliverInput = deliverInput;
   }
 
   public async start(): Promise<void> {
     await this.#start?.();
   }
 
-  public deliverInput(): void {}
+  public deliverInput(input: AgentInput): Promise<void> | void {
+    return this.#deliverInput?.(input);
+  }
 
   public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
     if (signal === "stop") {
