@@ -207,6 +207,7 @@ function gitStatusPayload(
   context: unknown,
   clean: boolean,
   changes: MockGitChange[],
+  options: { unborn?: boolean } = {},
 ) {
   const visibleChanges = clean ? [] : changes;
   return {
@@ -215,12 +216,12 @@ function gitStatusPayload(
     context,
     branch: "main",
     detached: false,
-    headSha: "abc123",
+    headSha: options.unborn ? undefined : "abc123",
     upstream: "origin/main",
     ahead: 0,
     behind: 0,
     clean,
-    unborn: false,
+    unborn: options.unborn ?? false,
     groups: [
       {
         id: "staged",
@@ -342,6 +343,7 @@ describe("App", () => {
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
   let gitStatusClean: boolean;
+  let gitStatusUnborn: boolean;
   let gitStatusChanges: MockGitChange[];
   let gitHistoryCommits: GitCommitSummary[];
   let gitHistoryNextCursor: string | undefined;
@@ -374,6 +376,7 @@ describe("App", () => {
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
     gitStatusClean = true;
+    gitStatusUnborn = false;
     gitStatusChanges = [
       {
         path: "src/App.tsx",
@@ -753,7 +756,9 @@ describe("App", () => {
             });
           }
           return jsonResponse({
-            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges),
+            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges, {
+              unborn: gitStatusUnborn,
+            }),
           });
         }
         if (requestUrl.pathname === "/v1/git/branches") {
@@ -1300,6 +1305,40 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("passes oldPath when diffing renamed changes", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/New.tsx",
+        oldPath: "src/Old.tsx",
+        status: "renamed",
+        staged: true,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/New.tsx");
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "staged" &&
+            body.path === "src/New.tsx" &&
+            body.oldPath === "src/Old.tsx"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
   it("includes old paths when unstaging staged rename groups", async () => {
     gitStatusClean = false;
     gitStatusChanges = [
@@ -1333,6 +1372,27 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it("shows empty history without fetching commits for unborn repositories", async () => {
+    gitStatusUnborn = true;
+    gitStatusClean = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect(await tools.findByText("No commits found.")).toBeInTheDocument();
+    expect(
+      fetchCalls.some((call) => new URL(call.url).pathname === "/v1/git/history"),
+    ).toBe(false);
   });
 
   it("diffs root history commits against the empty tree", async () => {

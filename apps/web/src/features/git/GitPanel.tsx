@@ -191,10 +191,18 @@ export function GitPanel({
         }
       : selectedContext && activeTab === "changes" && selectedChange
         ? {
-            key: `changes:${selectedMode}:${selectedChange.path}`,
+            key: [
+              "changes",
+              selectedMode,
+              selectedChange.oldPath ?? "",
+              selectedChange.path,
+            ].join(":"),
             query: {
               context: selectedContext,
               path: selectedChange.path,
+              ...(selectedChange.oldPath
+                ? { oldPath: selectedChange.oldPath }
+                : {}),
               mode: selectedMode,
             } satisfies Partial<ApiGitFileDiffQuery>,
           }
@@ -285,12 +293,16 @@ export function GitPanel({
     if (!active || activeTab !== "history" || !selectedContext || !status) {
       return;
     }
-    let cancelled = false;
     setHistoryState("loading");
     setHistoryError("");
     setHistoryPage(undefined);
     setSelectedCommitSha("");
     setSelectedCommitPath("");
+    if (status.unborn) {
+      setHistoryState("ready");
+      return;
+    }
+    let cancelled = false;
     void onFetchHistory({
       context: selectedContext,
       ref: historyRef(status),
@@ -319,6 +331,7 @@ export function GitPanel({
     selectedContext,
     status?.branch,
     status?.headSha,
+    status?.unborn,
   ]);
 
   useEffect(() => {
@@ -404,7 +417,9 @@ export function GitPanel({
   };
 
   const loadMoreHistory = () => {
-    if (!selectedContext || !status || !historyPage?.nextCursor) return;
+    if (!selectedContext || !status || status.unborn || !historyPage?.nextCursor) {
+      return;
+    }
     const requestHistoryScope = historyScope;
     setHistoryState("loading");
     setHistoryError("");
