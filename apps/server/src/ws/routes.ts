@@ -6,8 +6,8 @@ import { registerRunnerSocketRoute } from "./runner-socket.js";
 export function registerWebSocketRoutes(
   app: FastifyInstance,
   context: AppContext,
-  authToken: string | undefined,
+  publicOrigin?: string,
 ): void {
-  registerClientStreamRoute(app, context, authToken);
-  registerRunnerSocketRoute(app, context, authToken);
+  registerClientStreamRoute(app, context, publicOrigin);
+  registerRunnerSocketRoute(app, context);
 }

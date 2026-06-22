@@ -5,8 +5,8 @@ export interface ServerConfig {
   host: string;
   port: number;
   dataDir: string;
-  authToken?: string;
-  approvalSecret?: string;
+  publicOrigin?: string;
+  resetOwner: boolean;
   webDistDir?: string;
   runnerRpcTimeoutMs: number;
 }
@@ -15,8 +15,8 @@ export interface ServerConfigInput {
   host?: string;
   port?: number;
   dataDir?: string;
-  authToken?: string;
-  approvalSecret?: string;
+  publicOrigin?: string;
+  resetOwner?: boolean;
   webDistDir?: string | false;
   runnerRpcTimeoutMs?: number;
 }
@@ -35,19 +35,20 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
     configuredWebDist === false
       ? undefined
       : (configuredWebDist ?? defaultWebDist);
-  const authToken = input.authToken ?? process.env.ROAMCLI_AUTH_TOKEN;
-  const approvalSecret =
-    input.approvalSecret ?? process.env.ROAMCLI_APPROVAL_SECRET ?? authToken;
-
+  const publicOrigin = input.publicOrigin ?? process.env.ROAMCLI_PUBLIC_ORIGIN;
   return {
     host: input.host ?? process.env.HOST ?? "127.0.0.1",
     port: input.port ?? Number(process.env.PORT ?? 3000),
     dataDir,
+    resetOwner:
+      input.resetOwner ??
+      ["1", "true", "yes"].includes(
+        (process.env.ROAMCLI_RESET_OWNER ?? "").toLowerCase(),
+      ),
+    ...(publicOrigin ? { publicOrigin } : {}),
     runnerRpcTimeoutMs:
       input.runnerRpcTimeoutMs ??
       Number(process.env.ROAMCLI_RUNNER_RPC_TIMEOUT_MS ?? 5000),
-    ...(authToken ? { authToken } : {}),
-    ...(approvalSecret ? { approvalSecret } : {}),
     ...(webDistDir ? { webDistDir } : {}),
   };
 }

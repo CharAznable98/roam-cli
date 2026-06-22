@@ -3,16 +3,20 @@ import { createRoamApiClient } from "./client";
 
 describe("createRoamApiClient", () => {
   it("does not send a JSON content-type header for requests without a body", async () => {
-    const requests: Array<{ url: string; method: string; headers: Headers }> =
-      [];
+    const requests: Array<{
+      url: string;
+      method: string;
+      headers: Headers;
+      credentials: RequestCredentials | undefined;
+    }> = [];
     const client = createRoamApiClient({
       baseUrl: "http://127.0.0.1:8787",
-      token: "dev-token",
       fetchImpl: async (url, init) => {
         requests.push({
           url: String(url),
           method: init?.method ?? "GET",
           headers: new Headers(init?.headers),
+          credentials: init?.credentials,
         });
         if (String(url).endsWith("/v1/runners")) {
           return Response.json({ runners: [] });
@@ -41,10 +45,10 @@ describe("createRoamApiClient", () => {
       requests.every((request) => request.headers.get("content-type") === null),
     ).toBe(true);
     expect(
-      requests.every(
-        (request) =>
-          request.headers.get("authorization") === "Bearer dev-token",
-      ),
+      requests.every((request) => request.credentials === "same-origin"),
+    ).toBe(true);
+    expect(
+      requests.every((request) => request.headers.get("authorization") === null),
     ).toBe(true);
   });
 
@@ -86,7 +90,6 @@ describe("createRoamApiClient", () => {
     let requestInit: RequestInit | undefined;
     const client = createRoamApiClient({
       baseUrl: "http://127.0.0.1:8787",
-      token: "dev-token",
       fetchImpl: async (url, init) => {
         requestUrl = String(url);
         requestInit = init;
@@ -114,9 +117,8 @@ describe("createRoamApiClient", () => {
       "http://127.0.0.1:8787/v1/sessions/session%201/status/check",
     );
     expect(requestInit?.method).toBe("POST");
-    expect(new Headers(requestInit?.headers).get("authorization")).toBe(
-      "Bearer dev-token",
-    );
+    expect(requestInit?.credentials).toBe("same-origin");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBeNull();
     expect(session.status).toBe("stopped");
   });
 
@@ -125,7 +127,6 @@ describe("createRoamApiClient", () => {
     let requestInit: RequestInit | undefined;
     const client = createRoamApiClient({
       baseUrl: "http://127.0.0.1:8787",
-      token: "dev-token",
       fetchImpl: async (url, init) => {
         requestUrl = String(url);
         requestInit = init;
@@ -155,9 +156,8 @@ describe("createRoamApiClient", () => {
 
     expect(requestUrl).toBe("http://127.0.0.1:8787/v1/sessions/session%201");
     expect(requestInit?.method ?? "GET").toBe("GET");
-    expect(new Headers(requestInit?.headers).get("authorization")).toBe(
-      "Bearer dev-token",
-    );
+    expect(requestInit?.credentials).toBe("same-origin");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBeNull();
     expect(detail.session.status).toBe("completed");
   });
 
@@ -166,7 +166,6 @@ describe("createRoamApiClient", () => {
     let requestInit: RequestInit | undefined;
     const client = createRoamApiClient({
       baseUrl: "http://127.0.0.1:8787",
-      token: "dev-token",
       fetchImpl: async (url, init) => {
         requestUrl = String(url);
         requestInit = init;
@@ -197,9 +196,8 @@ describe("createRoamApiClient", () => {
     expect(new Headers(requestInit?.headers).get("content-type")).toBe(
       "application/json",
     );
-    expect(new Headers(requestInit?.headers).get("authorization")).toBe(
-      "Bearer dev-token",
-    );
+    expect(requestInit?.credentials).toBe("same-origin");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBeNull();
     expect(JSON.parse(String(requestInit?.body))).toEqual({
       title: "Renamed session",
     });
@@ -244,13 +242,13 @@ describe("createRoamApiClient", () => {
       baseUrl: "http://127.0.0.1:8787",
       fetchImpl: async () =>
         Response.json(
-          { message: "Invalid API token", debug: { requestId: "req-1" } },
+          { message: "Authentication required", debug: { requestId: "req-1" } },
           { status: 401, statusText: "Unauthorized" },
         ),
     });
 
     await expect(client.loadInitialState()).rejects.toThrow(
-      "RoamCli API request /v1/runners failed with 401 Unauthorized: Invalid API token.",
+      "RoamCli API request /v1/runners failed with 401 Unauthorized: Authentication required.",
     );
     await expect(client.loadInitialState()).rejects.not.toThrow(
       /"debug"|"requestId"/,

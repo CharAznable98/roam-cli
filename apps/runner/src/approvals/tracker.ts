@@ -1,22 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { ApprovalRequestDraft } from "@roamcli/agent-plugin-sdk";
-import type { Approval, RunnerCommand } from "@roamcli/shared/protocol";
+import type { Approval } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
-import { hashPayload, verifyApprovalSignature } from "@roamcli/shared/security";
 import type { RunnerEventSink, RunningSession } from "../sessions/types.js";
 
 export interface ApprovalTrackerOptions {
-  approvalSecret?: string;
   emit: RunnerEventSink;
 }
 
 export class ApprovalTracker {
-  readonly #approvalSecret: string | undefined;
   readonly #emit: RunnerEventSink;
   readonly #pending = new Map<string, RunningSession>();
 
   public constructor(options: ApprovalTrackerOptions) {
-    this.#approvalSecret = options.approvalSecret;
     this.#emit = options.emit;
   }
 
@@ -36,13 +32,13 @@ export class ApprovalTracker {
     await this.#emit({ type: "approvalRequested", approval });
   }
 
-  public resolve(approvalId: string, approved: boolean, signedAt: string, signature: string): void {
+  public resolve(approvalId: string, approved: boolean): void {
     const running = this.#pending.get(approvalId);
     if (running === undefined) {
       return;
     }
     this.#pending.delete(approvalId);
-    running.child.write(`${JSON.stringify({ type: "approvalResponse", approvalId, approved, signedAt, signature })}\n`);
+    running.child.write(`${JSON.stringify({ type: "approvalResponse", approvalId, approved })}\n`);
     void this.#emit({ type: "sessionStatus", sessionId: running.session.id, status: "running" });
   }
 
@@ -54,14 +50,4 @@ export class ApprovalTracker {
     }
   }
 
-  public verifyPatchSignature(command: Extract<RunnerCommand, { type: "applyPatch" }>): string | undefined {
-    if (this.#approvalSecret === undefined || this.#approvalSecret.length === 0) {
-      return undefined;
-    }
-    const target = `patch:${command.sessionId}:${hashPayload(command.patch)}`;
-    if (verifyApprovalSignature(this.#approvalSecret, target, true, command.signedAt, command.signature)) {
-      return undefined;
-    }
-    return "Patch signature is invalid";
-  }
 }

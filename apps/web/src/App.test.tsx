@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Approval,
   Artifact,
+  AuthStatus,
   Message,
   MessageAttachment,
 } from "@roamcli/shared/protocol";
@@ -153,6 +154,24 @@ const patchApproval = {
   requestedAt: "2026-06-05T00:00:00.000Z",
 } as const;
 
+const authSession = {
+  id: "auth-session-1",
+  createdAt: "2026-06-05T00:00:00.000Z",
+  lastSeenAt: "2026-06-05T00:00:00.000Z",
+  idleExpiresAt: "2026-06-06T00:00:00.000Z",
+  absoluteExpiresAt: "2026-07-05T00:00:00.000Z",
+  userAgent: "Vitest",
+  current: true,
+};
+
+const accountSecurity = {
+  sessions: [authSession],
+  runnerToken: "runner-token",
+  runnerTokenCreatedAt: "2026-06-05T00:00:00.000Z",
+  runnerTokenUpdatedAt: "2026-06-05T00:00:00.000Z",
+};
+
+let authStatus: AuthStatus;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -251,6 +270,9 @@ class TestWebSocket extends EventTarget {
   }
 
   close() {
+    if (this.readyState === TestWebSocket.CLOSED) {
+      return;
+    }
     this.dispatchEvent(new Event("close"));
   }
 
@@ -282,6 +304,14 @@ async function findSessionFile(name: RegExp) {
   return screen.findByRole("treeitem", { name });
 }
 
+async function flushAppEffects(rounds = 6) {
+  await act(async () => {
+    for (let index = 0; index < rounds; index += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
 function isSessionFileTreeRequest(
   url: string,
   path: string,
@@ -298,6 +328,30 @@ function isSessionFileTreeRequest(
 function openSessionActions() {
   fireEvent.click(screen.getByRole("button", { name: "Session actions" }));
   return within(screen.getByRole("menu", { name: "Session actions" }));
+}
+
+function authMockResponse(
+  pathname: string,
+  init?: RequestInit,
+): Response | undefined {
+  if (pathname === "/v1/auth/status") {
+    return jsonResponse({ auth: authStatus });
+  }
+  if (pathname === "/v1/auth/login" && init?.method === "POST") {
+    authStatus = {
+      status: "authenticated",
+      session: authSession,
+    };
+    return jsonResponse({ auth: authStatus, account: accountSecurity });
+  }
+  if (pathname === "/v1/auth/logout" && init?.method === "POST") {
+    authStatus = { status: "unauthenticated" };
+    return new Response(null, { status: 204 });
+  }
+  if (pathname === "/v1/auth/account") {
+    return jsonResponse({ account: accountSecurity });
+  }
+  return undefined;
 }
 
 describe("App", () => {
@@ -343,6 +397,10 @@ describe("App", () => {
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
     statusCheckResultStatus = "stopped";
+    authStatus = {
+      status: "authenticated",
+      session: authSession,
+    };
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
@@ -384,6 +442,10 @@ describe("App", () => {
         fetchRequests.push(url);
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
+        const authResponse = authMockResponse(requestUrl.pathname, init);
+        if (authResponse) {
+          return authResponse;
+        }
         if (requestUrl.pathname === "/v1/runners") {
           const queuedResponse = queuedRunnerResponses.shift();
           if (queuedResponse) {
@@ -840,6 +902,53 @@ describe("App", () => {
     });
   });
 
+  it("exposes account security from the mobile topbar", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Account & Security" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Account & Security",
+    });
+    expect(within(dialog).getByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(
+      within(dialog).getByText(/--token 'runner-token'/),
+    ).toBeInTheDocument();
+  });
+
+  it("closes account security after logout and does not reopen after login", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Account & Security",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Log out" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Owner Login" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Account & Security" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "correct horse battery staple" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Account & Security" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("retries the bootstrap API from connection recovery", async () => {
     failBootstrapRunners = true;
     render(<App />);
@@ -914,6 +1023,7 @@ describe("App", () => {
     vi.useFakeTimers();
     try {
       render(<App />);
+      await flushAppEffects();
       expect(sockets).toHaveLength(1);
 
       act(() => {
@@ -1088,10 +1198,7 @@ describe("App", () => {
     vi.useFakeTimers();
     try {
       render(<App />);
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+      await flushAppEffects();
       expect(screen.getByText("Loaded from API")).toBeInTheDocument();
 
       const countSessionDetailReads = () =>
@@ -1529,6 +1636,10 @@ describe("App", () => {
         fetchRequests.push(url);
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
+        const authResponse = authMockResponse(requestUrl.pathname, init);
+        if (authResponse) {
+          return authResponse;
+        }
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [runner] });
         }
@@ -2645,13 +2756,12 @@ describe("App", () => {
     expect(applyCall?.init?.method).toBe("POST");
     const body = JSON.parse(String(applyCall?.init?.body)) as {
       patch: string;
-      signedAt: string;
-      signature: string;
+      strip: number;
     };
     expect(body.patch).toContain("diff --git a/src/App.tsx b/src/App.tsx");
     expect(body.patch).toContain("@@ -1 +1 @@");
-    expect(body.signedAt).toMatch(/2026|20/);
-    expect(body.signature.length).toBeGreaterThan(16);
+    expect(body.strip).toBe(1);
+    expect(Object.keys(body)).toEqual(["patch", "strip"]);
     await waitFor(() =>
       expect(
         within(approvalCard as HTMLElement).getByText("approved"),

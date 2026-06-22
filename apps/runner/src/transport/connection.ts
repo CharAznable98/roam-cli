@@ -73,8 +73,7 @@ export class RunnerConnection {
   }
 
   async #connectOnce(): Promise<void> {
-    const url = withToken(this.#options.serverUrl, this.#options.token);
-    const socket = this.#options.createSocket(url);
+    const socket = this.#options.createSocket(this.#options.serverUrl);
     this.#socket = socket;
 
     await new Promise<void>((resolve) => {
@@ -101,7 +100,11 @@ export class RunnerConnection {
   }
 
   async #onOpen(): Promise<void> {
-    await this.#sendNow({ type: "registered", runner: this.#options.registration });
+    await this.#sendRaw({
+      type: "runnerAuthenticate",
+      token: this.#options.token ?? "",
+      runner: this.#options.registration,
+    });
     await this.#options.cache.drain((event) => this.#sendNow(event));
   }
 
@@ -133,19 +136,17 @@ export class RunnerConnection {
     }
     await this.#socket.send(JSON.stringify(event));
   }
+
+  async #sendRaw(value: unknown): Promise<void> {
+    if (this.#socket === undefined || this.#socket.readyState !== 1) {
+      return;
+    }
+    await this.#socket.send(JSON.stringify(value));
+  }
 }
 
 export function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
   return Math.min(maxMs, minMs * 2 ** Math.max(0, attempt));
-}
-
-function withToken(serverUrl: string, token: string | undefined): string {
-  if (token === undefined || token.length === 0) {
-    return serverUrl;
-  }
-  const url = new URL(serverUrl);
-  url.searchParams.set("token", token);
-  return url.toString();
 }
 
 function createGlobalWebSocket(url: string): WebSocketLike {

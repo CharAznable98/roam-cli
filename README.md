@@ -37,17 +37,18 @@ Start the Server first. The Server is the central service that the Web UI and Ru
 ```bash
 HOST=127.0.0.1 \
 PORT=8787 \
-ROAMCLI_AUTH_TOKEN=dev-token \
 ROAMCLI_DATA_DIR=.roamcli-server \
 pnpm --filter @roamcli/server dev
 ```
+
+On first start the Server prints a setup token and writes it to `.roamcli-server/setup-token.txt`. Open the Web UI, enter that setup token, and set the owner password. After setup, open **Account & Security** in the Web UI and copy the Runner token or full Runner command.
 
 In another shell, start a Runner from the directory you want to expose as the Runner workspace:
 
 ```bash
 pnpm --filter @roamcli/runner dev \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token dev-token \
+  --token <runner-token-from-account-security> \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted
@@ -58,8 +59,6 @@ Open the Web UI:
 ```text
 http://127.0.0.1:8787
 ```
-
-Use `dev-token` in the Web UI token field if it is not already filled.
 
 ## Use RoamCli
 
@@ -73,25 +72,26 @@ Use `dev-token` in the Web UI token field if it is not already filled.
 
 ## Server Configuration
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| `HOST` | Server bind host. | `127.0.0.1` |
-| `PORT` | Server bind port. | `3000` |
-| `ROAMCLI_AUTH_TOKEN` | Bearer token for HTTP and WebSocket access. | unset |
-| `ROAMCLI_DATA_DIR` | Directory for SQLite data and local artifacts. | `.roamcli-server` |
-| `ROAMCLI_WEB_DIST` | Path to built Web UI assets. | auto-detects `apps/web/dist` or `../web/dist` |
+| Variable                | Description                                                                                                                                                 | Default                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `HOST`                  | Server bind host.                                                                                                                                           | `127.0.0.1`                                   |
+| `PORT`                  | Server bind port.                                                                                                                                           | `3000`                                        |
+| `ROAMCLI_DATA_DIR`      | Directory for SQLite data and local artifacts.                                                                                                              | `.roamcli-server`                             |
+| `ROAMCLI_WEB_DIST`      | Path to built Web UI assets.                                                                                                                                | auto-detects `apps/web/dist` or `../web/dist` |
+| `ROAMCLI_PUBLIC_ORIGIN` | Public browser origin allowed for mutating API calls, for example `https://roam.example.com`.                                                               | inferred from request host                    |
+| `ROAMCLI_RESET_OWNER`   | Set to `1` on startup to clear owner credentials and Web sessions, then generate a new setup token. Runner tokens and project/session data are left intact. | unset                                         |
 
 ## Runner Configuration
 
-| CLI option | Environment variable | Description |
-| --- | --- | --- |
-| `--server` | `ROAM_RUNNER_SERVER` | Server WebSocket URL. `http` and `https` URLs are converted to `ws` and `wss`. |
-| `--token` | `ROAM_RUNNER_TOKEN` | Bearer token used when connecting to the Server. |
-| `--runner-id` | `ROAM_RUNNER_ID` | Stable Runner identifier. Defaults to hostname plus a generated UUID. |
-| `--workspace` | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory. |
-| `--data-dir` | `ROAM_RUNNER_DATA_DIR` | Relative runner data directory under the workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths and parent traversal are rejected. |
-| `--profile` | `ROAM_RUNNER_PROFILE` | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`. |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Agent plugin package to load. Repeatable by CLI, comma-separated by environment variable. |
+| CLI option       | Environment variable    | Description                                                                                                                                                       |
+| ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL. `http` and `https` URLs are converted to `ws` and `wss`.                                                                                    |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Runner token shown in Account & Security.                                                                                                                         |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | Stable Runner identifier. Defaults to hostname plus a generated UUID.                                                                                             |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory.                                                                                    |
+| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | Relative runner data directory under the workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths and parent traversal are rejected. |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`.                                                                                       |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                                         |
 
 ## Agent Plugins
 
@@ -121,7 +121,7 @@ Start a Runner against the compose Server:
 ```bash
 pnpm --filter @roamcli/runner dev \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token dev-token \
+  --token <runner-token-from-account-security> \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted

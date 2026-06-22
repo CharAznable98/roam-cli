@@ -12,13 +12,18 @@ interface RunnerConnection {
   socket: WebSocket;
 }
 
+interface StreamConnection {
+  socket: WebSocket;
+  authSessionId?: string;
+}
+
 export interface RunnerConnectionLifecycle {
   onRunnerReplaced?: (runnerId: string) => void;
   onRunnerDisconnected?: (runnerId: string) => void;
 }
 
 export class ConnectionHub {
-  private readonly streamClients = new Set<WebSocket>();
+  private readonly streamClients = new Set<StreamConnection>();
   private readonly runners = new Map<string, RunnerConnection>();
 
   constructor(
@@ -26,14 +31,27 @@ export class ConnectionHub {
     private readonly lifecycle: RunnerConnectionLifecycle = {},
   ) {}
 
-  addStream(socket: WebSocket): void {
-    this.streamClients.add(socket);
+  addStream(socket: WebSocket, authSessionId?: string): void {
+    const connection: StreamConnection = {
+      socket,
+      ...(authSessionId ? { authSessionId } : {}),
+    };
+    this.streamClients.add(connection);
     for (const runner of this.listOnlineRunners()) {
       sendJson(socket, { type: "runner:online", runner });
     }
     socket.once("close", () => {
-      this.streamClients.delete(socket);
+      this.streamClients.delete(connection);
     });
+  }
+
+  closeStreamsForAuthSessions(sessionIds: string[]): void {
+    const ids = new Set(sessionIds);
+    for (const connection of this.streamClients) {
+      if (connection.authSessionId && ids.has(connection.authSessionId)) {
+        connection.socket.close(1008, "session revoked");
+      }
+    }
   }
 
   registerRunner(runner: RunnerRegistration, socket: WebSocket): void {
@@ -98,8 +116,8 @@ export class ConnectionHub {
   }
 
   broadcast(event: ServerEvent): void {
-    for (const socket of this.streamClients) {
-      sendJson(socket, event);
+    for (const connection of this.streamClients) {
+      sendJson(connection.socket, event);
     }
   }
 

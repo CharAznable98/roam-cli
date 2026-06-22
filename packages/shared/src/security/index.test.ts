@@ -5,9 +5,7 @@ import {
   deriveSharedSecret,
   encryptJson,
   generateX25519KeyPair,
-  signApproval,
-  verifyApprovalSignature,
-  verifyAuditChain
+  verifyAuditChain,
 } from "./index.js";
 
 describe("security", () => {
@@ -17,12 +15,9 @@ describe("security", () => {
     const secretA = deriveSharedSecret(a.privateKey, b.publicKey);
     const secretB = deriveSharedSecret(b.privateKey, a.publicKey);
     const encrypted = encryptJson(secretA, { message: "hello" });
-    expect(decryptJson<{ message: string }>(secretB, encrypted).message).toBe("hello");
-  });
-
-  it("signs approval decisions", () => {
-    const signature = signApproval("secret", "approval-1", true, "2026-06-05T00:00:00.000Z");
-    expect(verifyApprovalSignature("secret", "approval-1", true, "2026-06-05T00:00:00.000Z", signature)).toBe(true);
+    expect(decryptJson<{ message: string }>(secretB, encrypted).message).toBe(
+      "hello",
+    );
   });
 
   it("verifies append-only audit chains", () => {
@@ -32,7 +27,7 @@ describe("security", () => {
       actor: "client",
       action: "approve",
       target: "approval-1",
-      payload: { approved: true }
+      payload: { approved: true },
     });
     const second = createAuditRecord({
       id: "2",
@@ -41,7 +36,7 @@ describe("security", () => {
       action: "execute",
       target: "approval-1",
       payload: { command: "pnpm test" },
-      previousHash: first.hash
+      previousHash: first.hash,
     });
     expect(verifyAuditChain([first, second])).toBe(true);
   });
