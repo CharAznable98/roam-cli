@@ -14,11 +14,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Approval,
   Artifact,
+  GitCommitSummary,
   Message,
   MessageAttachment,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
+
+const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 vi.mock("@monaco-editor/react", () => {
   function Editor({
@@ -47,8 +50,20 @@ vi.mock("@monaco-editor/react", () => {
     );
   }
 
-  function DiffEditor({ className }: { className?: string }) {
-    return <div className={className} data-testid="monaco-diff-editor" />;
+  function DiffEditor({
+    className,
+    modified = "",
+  }: {
+    className?: string;
+    modified?: string;
+  }) {
+    return (
+      <div
+        className={className}
+        data-testid="monaco-diff-editor"
+        data-modified={modified}
+      />
+    );
   }
 
   return { default: Editor, Editor, DiffEditor };
@@ -163,6 +178,7 @@ type Deferred<T> = {
 
 type MockGitChange = {
   path: string;
+  oldPath?: string;
   status: string;
   staged: boolean;
 };
@@ -191,23 +207,29 @@ function gitStatusPayload(
   context: unknown,
   clean: boolean,
   changes: MockGitChange[],
+  options: { unborn?: boolean } = {},
 ) {
+  const visibleChanges = clean ? [] : changes;
   return {
+    kind: "repository",
     requestId: "git-status-1",
     context,
     branch: "main",
     detached: false,
-    headSha: "abc123",
+    headSha: options.unborn ? undefined : "abc123",
     upstream: "origin/main",
     ahead: 0,
     behind: 0,
     clean,
-    unborn: false,
+    unborn: options.unborn ?? false,
     groups: [
-      { id: "staged", changes: [] },
+      {
+        id: "staged",
+        changes: visibleChanges.filter((change) => change.staged),
+      },
       {
         id: "changes",
-        changes: clean ? [] : changes,
+        changes: visibleChanges.filter((change) => !change.staged),
       },
       { id: "conflicts", changes: [] },
       { id: "untracked", changes: [] },
@@ -305,6 +327,8 @@ describe("App", () => {
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
   let deferredFileContent: Map<string, Deferred<Response>>;
   let deferredGitStatus: Map<string, Deferred<Response>>;
+  let deferredGitDiff: Map<string, Deferred<Response>>;
+  let deferredGitHistory: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let queuedRunnerResponses: Array<Deferred<Response>>;
   let failBootstrapRunners: boolean;
@@ -319,7 +343,10 @@ describe("App", () => {
   let remoteSessionExecutionFolder: string;
   let remoteSessionWorktreeDeletedAt: string | undefined;
   let gitStatusClean: boolean;
+  let gitStatusUnborn: boolean;
   let gitStatusChanges: MockGitChange[];
+  let gitHistoryCommits: GitCommitSummary[];
+  let gitHistoryNextCursor: string | undefined;
   let failNextGitStatus: boolean;
   let failNonGitStatus: boolean;
   let failGitBlame: boolean;
@@ -333,6 +360,8 @@ describe("App", () => {
     fetchCalls = [];
     deferredFileContent = new Map();
     deferredGitStatus = new Map();
+    deferredGitDiff = new Map();
+    deferredGitHistory = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
     failBootstrapRunners = false;
@@ -347,6 +376,7 @@ describe("App", () => {
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
     gitStatusClean = true;
+    gitStatusUnborn = false;
     gitStatusChanges = [
       {
         path: "src/App.tsx",
@@ -354,6 +384,24 @@ describe("App", () => {
         staged: false,
       },
     ];
+    gitHistoryCommits = [
+      {
+        sha: "abc123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Initial commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = undefined;
     failNextGitStatus = false;
     failNonGitStatus = false;
     failGitBlame = false;
@@ -698,13 +746,19 @@ describe("App", () => {
           }
           if (failNonGitStatus) {
             failNonGitStatus = false;
-            return jsonResponse(
-              { error: "Directory is not a git repository" },
-              502,
-            );
+            return jsonResponse({
+              result: {
+                kind: "not_git_repository",
+                requestId: "git-status-1",
+                context,
+                message: "This directory is not a Git repository.",
+              },
+            });
           }
           return jsonResponse({
-            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges),
+            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges, {
+              unborn: gitStatusUnborn,
+            }),
           });
         }
         if (requestUrl.pathname === "/v1/git/branches") {
@@ -719,20 +773,21 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/history") {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          const deferredResponse =
+            deferredGitHistory.get(
+              `${mockGitContextKey(body.context)}:${body.ref ?? ""}:${body.cursor ?? ""}`,
+            ) ?? deferredGitHistory.get(body.cursor ?? "");
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           return jsonResponse({
             result: {
               requestId: "git-history-1",
               context: body.context,
-              commits: [
-                {
-                  sha: "abc123",
-                  parents: [],
-                  authorName: "Test User",
-                  committerName: "Test User",
-                  summary: "Initial commit",
-                  refs: [],
-                },
-              ],
+              commits: gitHistoryCommits,
+              ...(gitHistoryNextCursor
+                ? { nextCursor: gitHistoryNextCursor }
+                : {}),
             },
           });
         }
@@ -756,14 +811,22 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/diff") {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          const requestedPath = body.path ?? "src/App.tsx";
+          const requestedMode = body.mode ?? "working_tree";
+          const deferredResponse =
+            deferredGitDiff.get(`${requestedMode}:${requestedPath}`) ??
+            deferredGitDiff.get(requestedPath);
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           return jsonResponse({
             result: {
               requestId: "git-diff-1",
               context: body.context,
-              path: body.path ?? "src/App.tsx",
-              mode: body.mode ?? "working_tree",
+              path: requestedPath,
+              mode: requestedMode,
               oldContent: "",
-              newContent: "",
+              newContent: `diff for ${requestedPath}`,
               language: "typescript",
               binary: false,
               tooLarge: false,
@@ -1177,9 +1240,8 @@ describe("App", () => {
     ).toEqual([{ kind: "project", projectId: "project-1" }]);
   });
 
-  it("renders blame fetch failures inside the Git panel", async () => {
+  it("loads current branch history and commit file diffs inside the Git panel", async () => {
     gitStatusClean = false;
-    failGitBlame = true;
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -1188,25 +1250,243 @@ describe("App", () => {
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
     await tools.findByText("src/App.tsx");
-    await waitFor(() =>
-      expect(
-        fetchCalls.some(
-          (call) => new URL(call.url).pathname === "/v1/git/diff",
-        ),
-      ).toBe(true),
-    );
-
-    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
     await waitFor(() =>
       expect(
         fetchCalls.some(
-          (call) => new URL(call.url).pathname === "/v1/git/blame",
+          (call) => new URL(call.url).pathname === "/v1/git/history",
         ),
       ).toBe(true),
     );
-    expect(await tools.findByText("Git blame failed")).toBeInTheDocument();
-    expect(await tools.findByText(/blame_failed/)).toBeInTheDocument();
+    expect((await tools.findAllByText("Initial commit")).length).toBeGreaterThan(0);
+    expect(await tools.findByText("Changed files")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "commit" &&
+            body.path === "src/App.tsx" &&
+            body.oldRef === "parent123" &&
+            body.newRef === "abc123"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("renders children under changed file path nodes in tree view", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "foo",
+        status: "deleted",
+        staged: false,
+      },
+      {
+        path: "foo/bar",
+        status: "added",
+        staged: false,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+
+    expect(await tools.findByRole("button", { name: "foo" })).toBeInTheDocument();
+    expect(
+      await tools.findByRole("button", { name: "foo/bar" }),
+    ).toBeInTheDocument();
+  });
+
+  it("passes oldPath when diffing renamed changes", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/New.tsx",
+        oldPath: "src/Old.tsx",
+        status: "renamed",
+        staged: true,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/New.tsx");
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "staged" &&
+            body.path === "src/New.tsx" &&
+            body.oldPath === "src/Old.tsx"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("includes old paths when unstaging staged rename groups", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/New.tsx",
+        oldPath: "src/Old.tsx",
+        status: "renamed",
+        staged: true,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/New.tsx");
+    fireEvent.click(tools.getByLabelText("Staged actions"));
+    fireEvent.click(tools.getByRole("button", { name: "Unstage all" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/unstage") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            Array.isArray(body.paths) &&
+            body.paths.join("\n") === "src/Old.tsx\nsrc/New.tsx"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("shows empty history without fetching commits for unborn repositories", async () => {
+    gitStatusUnborn = true;
+    gitStatusClean = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect(await tools.findByText("No commits found.")).toBeInTheDocument();
+    expect(
+      fetchCalls.some((call) => new URL(call.url).pathname === "/v1/git/history"),
+    ).toBe(false);
+  });
+
+  it("diffs root history commits against the empty tree", async () => {
+    gitHistoryCommits = [
+      {
+        sha: "root123",
+        parents: [],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Root commit",
+        refs: [],
+        files: [
+          {
+            path: "README.md",
+            status: "added",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "commit" &&
+            body.path === "README.md" &&
+            body.oldRef === GIT_EMPTY_TREE_SHA &&
+            body.newRef === "root123"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("uses oldPath when diffing renamed history files", async () => {
+    gitHistoryCommits = [
+      {
+        sha: "rename123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Rename file",
+        refs: [],
+        files: [
+          {
+            path: "src/New.tsx",
+            oldPath: "src/Old.tsx",
+            status: "renamed",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "commit" &&
+            body.path === "src/New.tsx" &&
+            body.oldPath === "src/Old.tsx" &&
+            body.oldRef === "parent123" &&
+            body.newRef === "rename123"
+          );
+        }),
+      ).toBe(true),
+    );
   });
 
   it("clears stale selected Git changes after refresh", async () => {
@@ -1227,8 +1507,6 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
-    expect(await tools.findByText("Blame for src/App.tsx")).toBeInTheDocument();
 
     gitStatusClean = true;
     fireEvent.click(tools.getByRole("button", { name: "Refresh Git" }));
@@ -1248,7 +1526,6 @@ describe("App", () => {
         toolsPanel.querySelector(".git-surface .git-diff-pane h3"),
       ).toHaveTextContent("No file selected"),
     );
-    expect(tools.queryByText("Blame for src/App.tsx")).not.toBeInTheDocument();
   });
 
   it("surfaces Git status reload failures after jobs", async () => {
@@ -1270,6 +1547,7 @@ describe("App", () => {
     );
 
     failNextGitStatus = true;
+    fireEvent.click(tools.getByLabelText("File actions"));
     fireEvent.click(tools.getByRole("button", { name: "Stage" }));
 
     expect(await tools.findByText("Git status failed")).toBeInTheDocument();
@@ -1286,8 +1564,12 @@ describe("App", () => {
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
 
-    expect(await tools.findByText("Git status failed")).toBeInTheDocument();
-    expect(await tools.findByText(/not a git repository/)).toBeInTheDocument();
+    expect(
+      await tools.findByText("This project is not a Git repository."),
+    ).toBeInTheDocument();
+    expect(
+      await tools.findByText("This directory is not a Git repository."),
+    ).toBeInTheDocument();
     expect(
       tools.getByRole("button", { name: "Init repository" }),
     ).toBeInTheDocument();
@@ -1348,7 +1630,104 @@ describe("App", () => {
     expect(tools.getByText("Working tree is clean.")).toBeInTheDocument();
   });
 
-  it("ignores stale Git blame responses after changing selected file", async () => {
+  it("ignores stale Git history load-more responses after switching context", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    gitHistoryCommits = [
+      {
+        sha: "session123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Session commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = "cursor-2";
+    const staleHistoryPage = deferred<Response>();
+    deferredGitHistory.set("cursor-2", staleHistoryPage);
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+    expect((await tools.findAllByText("Session commit")).length).toBeGreaterThan(
+      0,
+    );
+
+    fireEvent.click(tools.getByRole("button", { name: "Load more" }));
+    gitHistoryCommits = [
+      {
+        sha: "project123",
+        parents: ["parent456"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Project commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = undefined;
+    fireEvent.change(tools.getByRole("combobox"), {
+      target: { value: "project:project-1" },
+    });
+
+    expect((await tools.findAllByText("Project commit")).length).toBeGreaterThan(
+      0,
+    );
+
+    await act(async () => {
+      staleHistoryPage.resolve(
+        jsonResponse({
+          result: {
+            requestId: "git-history-stale",
+            context: { kind: "session_worktree", sessionId: "session-1" },
+            commits: [
+              {
+                sha: "stale123",
+                parents: ["parent123"],
+                authorName: "Test User",
+                committerName: "Test User",
+                summary: "Stale commit",
+                refs: [],
+                files: [
+                  {
+                    path: "src/Stale.tsx",
+                    status: "modified",
+                    staged: false,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+    });
+
+    expect(tools.queryByText("Stale commit")).not.toBeInTheDocument();
+    expect(tools.getAllByText("Project commit").length).toBeGreaterThan(0);
+  });
+
+  it("ignores stale Git diff responses after changing selected file", async () => {
     gitStatusClean = false;
     gitStatusChanges = [
       {
@@ -1362,10 +1741,10 @@ describe("App", () => {
         staged: false,
       },
     ];
-    const appBlame = deferred<Response>();
-    const slowBlame = deferred<Response>();
-    deferredGitBlame.set("src/App.tsx", appBlame);
-    deferredGitBlame.set("src/Slow.tsx", slowBlame);
+    const appDiff = deferred<Response>();
+    const slowDiff = deferred<Response>();
+    deferredGitDiff.set("working_tree:src/App.tsx", appDiff);
+    deferredGitDiff.set("working_tree:src/Slow.tsx", slowDiff);
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -1374,11 +1753,10 @@ describe("App", () => {
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
     await tools.findByText("src/App.tsx");
-    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
-          if (new URL(call.url).pathname !== "/v1/git/blame") return false;
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
           const body = JSON.parse(String(call.init?.body ?? "{}"));
           return body.path === "src/App.tsx";
         }),
@@ -1386,11 +1764,10 @@ describe("App", () => {
     );
 
     fireEvent.click(tools.getByRole("button", { name: "src/Slow.tsx" }));
-    fireEvent.click(tools.getByRole("button", { name: "Load blame" }));
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
-          if (new URL(call.url).pathname !== "/v1/git/blame") return false;
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
           const body = JSON.parse(String(call.init?.body ?? "{}"));
           return body.path === "src/Slow.tsx";
         }),
@@ -1398,33 +1775,52 @@ describe("App", () => {
     );
 
     await act(async () => {
-      slowBlame.resolve(
+      slowDiff.resolve(
         jsonResponse({
-          result: gitBlamePayload(
-            { kind: "project", projectId: "project-1" },
-            "src/Slow.tsx",
-            "Current slow blame",
-          ),
-        }),
-      );
-    });
-    expect(await tools.findByText("Current slow blame")).toBeInTheDocument();
-
-    await act(async () => {
-      appBlame.resolve(
-        jsonResponse({
-          result: gitBlamePayload(
-            { kind: "project", projectId: "project-1" },
-            "src/App.tsx",
-            "Stale app blame",
-          ),
+          result: {
+            requestId: "git-diff-slow",
+            context: { kind: "project", projectId: "project-1" },
+            path: "src/Slow.tsx",
+            mode: "working_tree",
+            oldContent: "",
+            newContent: "Current slow diff",
+            language: "typescript",
+            binary: false,
+            tooLarge: false,
+          },
         }),
       );
     });
     await waitFor(() =>
-      expect(tools.queryByText("Stale app blame")).not.toBeInTheDocument(),
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "Current slow diff",
+      ),
     );
-    expect(tools.getByText("Current slow blame")).toBeInTheDocument();
+
+    await act(async () => {
+      appDiff.resolve(
+        jsonResponse({
+          result: {
+            requestId: "git-diff-app",
+            context: { kind: "project", projectId: "project-1" },
+            path: "src/App.tsx",
+            mode: "working_tree",
+            oldContent: "",
+            newContent: "Stale app diff",
+            language: "typescript",
+            binary: false,
+            tooLarge: false,
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "Current slow diff",
+      ),
+    );
   });
 
   it("renames the selected session", async () => {
@@ -1937,12 +2333,12 @@ describe("App", () => {
     const dialog = screen.getByRole("dialog", {
       name: "New Session - Real Project",
     });
-    expect(within(dialog).getByDisplayValue("/workspace")).toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText("Prompt"), {
+    expect(await within(dialog).findByDisplayValue("/workspace")).toBeInTheDocument();
+    fireEvent.change(await within(dialog).findByLabelText("Prompt"), {
       target: { value: "Run the focused task" },
     });
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Create session" }),
+      await within(dialog).findByRole("button", { name: "Create session" }),
     );
 
     await waitFor(() =>
@@ -1977,7 +2373,9 @@ describe("App", () => {
       name: "New Session - Real Project",
     });
     fireEvent.click(
-      within(sessionDialog).getByRole("button", { name: "Create session" }),
+      await within(sessionDialog).findByRole("button", {
+        name: "Create session",
+      }),
     );
     expect(within(sessionDialog).getByRole("alert")).toHaveTextContent(
       "Prompt is required.",
@@ -2033,14 +2431,16 @@ describe("App", () => {
     const sessionDialog = screen.getByRole("dialog", {
       name: "New Session - Real Project",
     });
-    fireEvent.change(within(sessionDialog).getByLabelText("Title"), {
+    fireEvent.change(await within(sessionDialog).findByLabelText("Title"), {
       target: { value: "Keep this title" },
     });
-    fireEvent.change(within(sessionDialog).getByLabelText("Prompt"), {
+    fireEvent.change(await within(sessionDialog).findByLabelText("Prompt"), {
       target: { value: "Keep this prompt after failure" },
     });
     fireEvent.click(
-      within(sessionDialog).getByRole("button", { name: "Create session" }),
+      await within(sessionDialog).findByRole("button", {
+        name: "Create session",
+      }),
     );
 
     expect(
@@ -2137,11 +2537,13 @@ describe("App", () => {
     const sessionDialog = screen.getByRole("dialog", {
       name: "New Session - Real Project",
     });
-    fireEvent.change(within(sessionDialog).getByLabelText("Prompt"), {
+    fireEvent.change(await within(sessionDialog).findByLabelText("Prompt"), {
       target: { value: "Run from the mobile controls" },
     });
     fireEvent.click(
-      within(sessionDialog).getByRole("button", { name: "Create session" }),
+      await within(sessionDialog).findByRole("button", {
+        name: "Create session",
+      }),
     );
     await waitFor(() =>
       expect(

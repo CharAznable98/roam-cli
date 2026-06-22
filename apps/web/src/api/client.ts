@@ -28,7 +28,7 @@ import type {
   GitCommitPage,
   GitFileDiff,
   GitJob,
-  GitStatus,
+  GitStatusResult,
   ImageAttachmentUpload,
   Message,
   MessageAttachment,
@@ -102,7 +102,7 @@ export interface RoamApiClient {
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
   listAgentSkills(input: ApiAgentSkillList): Promise<AgentSkillListResult>;
   searchWorkspacePaths(input: ApiPathSearch): Promise<PathSearchResult>;
-  fetchGitStatus(context: ApiGitContext): Promise<GitStatus>;
+  fetchGitStatus(context: ApiGitContext): Promise<GitStatusResult>;
   fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
   fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
   fetchGitHistory(query: ApiGitHistoryQuery): Promise<GitCommitPage>;
@@ -189,7 +189,7 @@ interface PathSearchResponse {
 }
 
 interface GitStatusResponse {
-  result: GitStatus;
+  result: GitStatusResult;
 }
 
 interface GitDiffResponse {

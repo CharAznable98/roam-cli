@@ -18,6 +18,7 @@ import type {
   GitFileDiff,
   GitJob,
   GitStatus,
+  GitStatusResult,
 } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
 import {
@@ -56,6 +57,7 @@ export interface GitHistoryOptions extends GitWorkspaceScope {
 }
 
 export interface GitFileDiffOptions extends GitPathScope {
+  oldPath?: string;
   mode: GitDiffMode;
   oldRef?: string;
   newRef?: string;
@@ -79,9 +81,16 @@ export interface GitRemoteOperationOptions extends GitMutatingOptions {
 
 export async function readGitStatus(
   options: GitWorkspaceScope,
-): Promise<GitStatus> {
+): Promise<GitStatusResult> {
   const cwd = await resolveGitCwd(options.workspace, options.cwd);
-  await assertGitWorkTree(cwd);
+  if (!(await isGitWorkTree(cwd))) {
+    return {
+      kind: "not_git_repository",
+      requestId: options.requestId,
+      context: options.context,
+      message: "This directory is not a Git repository.",
+    };
+  }
   const git = simpleGit(cwd);
   const [status, headSha, unborn] = await Promise.all([
     git.status(["--ignored=matching"]),
@@ -89,6 +98,7 @@ export async function readGitStatus(
     isUnborn(cwd),
   ]);
   return {
+    kind: "repository",
     requestId: options.requestId,
     context: options.context,
     ...(status.current ? { branch: status.current } : {}),
@@ -109,10 +119,12 @@ export async function readGitFileDiff(
   const cwd = await resolveGitCwd(options.workspace, options.cwd);
   await assertGitWorkTree(cwd);
   const path = normalizeGitPath(options.path);
+  const oldPath =
+    options.oldPath === undefined ? path : normalizeGitPath(options.oldPath);
   const targetPath = resolveSessionChild(cwd, path);
   const oldRef = resolveOldRef(options.mode, options.oldRef);
   const newRef = resolveNewRef(options.mode, options.newRef);
-  const oldContent = await readDiffSide(cwd, path, oldRef, "old");
+  const oldContent = await readDiffSide(cwd, oldPath, oldRef, "old");
   const newContent =
     newRef === "WORKTREE"
       ? await readWorktreeSide(targetPath)
@@ -123,6 +135,7 @@ export async function readGitFileDiff(
     requestId: options.requestId,
     context: options.context,
     path,
+    ...(oldPath !== path ? { oldPath } : {}),
     mode: options.mode,
     ...(oldRef !== "HEAD" && oldRef !== "INDEX" && oldRef !== "WORKTREE"
       ? { oldRef }
@@ -189,10 +202,16 @@ export async function readGitCommitPage(
   const { stdout } = await git(cwd, args);
   const commits = parseLog(stdout);
   const visible = commits.slice(0, limit);
+  const commitsWithFiles = await Promise.all(
+    visible.map(async (commit) => ({
+      ...commit,
+      files: await readCommitFiles(cwd, commit),
+    })),
+  );
   return {
     requestId: options.requestId,
     context: options.context,
-    commits: visible,
+    commits: commitsWithFiles,
     ...(commits.length > limit ? { nextCursor: String(skip + limit) } : {}),
   };
 }
@@ -352,12 +371,16 @@ async function resolveGitCwd(workspace: string, cwd: string): Promise<string> {
 }
 
 async function assertGitWorkTree(cwd: string): Promise<void> {
+  if (!(await isGitWorkTree(cwd))) {
+    throw new Error("Directory is not a git repository");
+  }
+}
+
+async function isGitWorkTree(cwd: string): Promise<boolean> {
   const inside = await git(cwd, ["rev-parse", "--is-inside-work-tree"])
     .then(({ stdout }) => stdout.trim())
     .catch(() => "false");
-  if (inside !== "true") {
-    throw new Error("Directory is not a git repository");
-  }
+  return inside === "true";
 }
 
 async function revParse(cwd: string, ref: string): Promise<string> {
@@ -644,6 +667,66 @@ function parseLog(stdout: string): GitCommitSummary[] {
         refs: [],
       };
     });
+}
+
+async function readCommitFiles(
+  cwd: string,
+  commit: GitCommitSummary,
+): Promise<GitChange[]> {
+  const firstParent = commit.parents[0];
+  const args = firstParent
+    ? [
+        "diff-tree",
+        "--no-commit-id",
+        "--name-status",
+        "-r",
+        "--find-renames",
+        firstParent,
+        commit.sha,
+      ]
+    : [
+        "diff-tree",
+        "--no-commit-id",
+        "--name-status",
+        "-r",
+        "--root",
+        "--find-renames",
+        commit.sha,
+      ];
+  const { stdout } = await git(cwd, args);
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line): GitChange[] => {
+      const parts = line.split("\t");
+      const code = parts[0] ?? "";
+      const status = commitStatusFromCode(code);
+      if (!status) {
+        return [];
+      }
+      if (status === "renamed" || status === "copied") {
+        const oldPath = parts[1];
+        const path = parts[2];
+        return oldPath && path
+          ? [{ path, oldPath, status, staged: false }]
+          : [];
+      }
+      const path = parts[1];
+      return path ? [{ path, status, staged: false }] : [];
+    });
+}
+
+function commitStatusFromCode(code: string): GitChangeStatus | undefined {
+  const status = code[0];
+  if (status === "M") return "modified";
+  if (status === "A") return "added";
+  if (status === "D") return "deleted";
+  if (status === "R") return "renamed";
+  if (status === "C") return "copied";
+  if (status === "T") return "submodule";
+  if (status === "U") return "conflicted";
+  return undefined;
 }
 
 function branchSummaryToList(summary: BranchSummary): GitBranch[] {

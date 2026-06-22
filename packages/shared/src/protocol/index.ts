@@ -114,6 +114,7 @@ export const GitChangeGroupSchema = z.object({
 export type GitChangeGroup = z.infer<typeof GitChangeGroupSchema>;
 
 export const GitStatusSchema = z.object({
+  kind: z.literal("repository").default("repository"),
   requestId: z.string().min(1),
   context: GitContextRefSchema,
   branch: z.string().min(1).optional(),
@@ -127,6 +128,38 @@ export const GitStatusSchema = z.object({
   groups: z.array(GitChangeGroupSchema),
 });
 export type GitStatus = z.infer<typeof GitStatusSchema>;
+
+export const GitNotRepositoryStatusSchema = z.object({
+  kind: z.literal("not_git_repository"),
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  message: z.string().min(1),
+});
+export type GitNotRepositoryStatus = z.infer<
+  typeof GitNotRepositoryStatusSchema
+>;
+
+const GitStatusResultDiscriminatedSchema = z.discriminatedUnion("kind", [
+  GitStatusSchema,
+  GitNotRepositoryStatusSchema,
+]);
+export const GitStatusResultSchema = z.preprocess(
+  (value) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as { kind?: unknown }).kind === undefined &&
+      "clean" in value &&
+      "groups" in value
+    ) {
+      return { ...value, kind: "repository" };
+    }
+    return value;
+  },
+  GitStatusResultDiscriminatedSchema,
+);
+export type GitStatusResult = z.infer<typeof GitStatusResultSchema>;
 
 export const GitDiffModeSchema = z.enum([
   "working_tree",
@@ -190,6 +223,7 @@ export const GitCommitSummarySchema = z.object({
   changedFiles: z.number().int().nonnegative().optional(),
   insertions: z.number().int().nonnegative().optional(),
   deletions: z.number().int().nonnegative().optional(),
+  files: z.array(GitChangeSchema).optional(),
 });
 export type GitCommitSummary = z.infer<typeof GitCommitSummarySchema>;
 
@@ -730,6 +764,7 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     context: GitContextRefSchema,
     cwd: z.string().min(1),
     path: z.string().min(1),
+    oldPath: z.string().min(1).optional(),
     mode: GitDiffModeSchema.default("working_tree"),
     oldRef: z.string().min(1).optional(),
     newRef: z.string().min(1).optional(),
@@ -868,7 +903,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("patch:applied"),
     result: PatchApplyResultSchema,
   }),
-  z.object({ type: z.literal("git:status"), result: GitStatusSchema }),
+  z.object({ type: z.literal("git:status"), result: GitStatusResultSchema }),
   z.object({ type: z.literal("git:diff"), result: GitFileDiffSchema }),
   z.object({ type: z.literal("git:blame"), result: GitBlameSchema }),
   z.object({ type: z.literal("git:history"), result: GitCommitPageSchema }),
@@ -947,7 +982,10 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     type: z.literal("patchApplyResult"),
     result: PatchApplyResultSchema,
   }),
-  z.object({ type: z.literal("gitStatusResult"), result: GitStatusSchema }),
+  z.object({
+    type: z.literal("gitStatusResult"),
+    result: GitStatusResultSchema,
+  }),
   z.object({ type: z.literal("gitFileDiffResult"), result: GitFileDiffSchema }),
   z.object({ type: z.literal("gitBlameResult"), result: GitBlameSchema }),
   z.object({
@@ -1050,6 +1088,7 @@ export type ApiGitContext = z.infer<typeof ApiGitContextSchema>;
 export const ApiGitFileDiffQuerySchema = z.object({
   context: GitContextRefSchema,
   path: z.string().min(1),
+  oldPath: z.string().min(1).optional(),
   mode: GitDiffModeSchema.default("working_tree"),
   oldRef: z.string().min(1).optional(),
   newRef: z.string().min(1).optional(),

@@ -12,7 +12,7 @@ import type {
   GitCommitPage,
   GitFileDiff,
   GitJob,
-  GitStatus,
+  GitStatusResult,
   PatchApplyResult,
   PathSearchResult,
   RunnerCommand,
@@ -32,7 +32,7 @@ type RunnerRpcResult =
   | PatchApplyResult
   | PathSearchResult
   | SessionStatusCheckResult
-  | GitStatus
+  | GitStatusResult
   | GitFileDiff
   | GitBlame
   | GitCommitPage
