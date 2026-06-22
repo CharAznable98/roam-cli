@@ -202,6 +202,7 @@ declare module "@roamcli/shared/protocol" {
   export interface AgentSkillSummary {
     name: string;
     description?: string;
+    insertText?: string;
     sourceType: AgentSkillSourceType;
     sourcePath: string;
   }

@@ -371,7 +371,7 @@ describe("claude code agent plugin", () => {
     await mkdir(basePath, { recursive: true });
     const realBasePath = await realpath(basePath);
     sdk.query.mockReturnValue(
-      fakeQuery([], [{ name: "plan", description: "Local plan" }]),
+      fakeQuery([], [{ name: "/plan", description: "Local plan" }]),
     );
 
     const skills = await claudeCodeAgent.listSkills?.({
@@ -394,6 +394,7 @@ describe("claude code agent plugin", () => {
       {
         name: "plan",
         description: "Local plan",
+        insertText: "/plan",
         sourceType: "project",
         sourcePath: realBasePath,
       },

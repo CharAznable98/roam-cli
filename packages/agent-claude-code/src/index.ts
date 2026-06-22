@@ -393,18 +393,31 @@ async function listClaudeCodeSkills(
     });
     try {
       const commands = await sdkQuery.supportedCommands();
-      return commands.map((command) => ({
-        name: command.name,
-        description: command.description,
-        sourceType: "project",
-        sourcePath: basePath,
-      }));
+      return commands.flatMap((command) => {
+        const name = claudeCommandName(command.name);
+        if (!name) {
+          return [];
+        }
+        return [
+          {
+            name,
+            description: command.description,
+            insertText: `/${name}`,
+            sourceType: "project",
+            sourcePath: basePath,
+          },
+        ];
+      });
     } finally {
       sdkQuery.close();
     }
   } catch {
     return [];
   }
+}
+
+function claudeCommandName(name: string): string {
+  return name.trim().replace(/^\/+/, "");
 }
 
 function supportedImageMimeType(mimeType: string): SupportedImageMimeType {

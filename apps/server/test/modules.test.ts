@@ -339,6 +339,47 @@ describe("SessionCommandService", () => {
     expect(runnerMessages).toHaveLength(1);
   });
 
+  it.each(["pending", "running", "waiting_approval"] as const)(
+    "rejects active Claude Code messages before persistence when %s",
+    async (status) => {
+      const hub = new ConnectionHub(store);
+      const approvals = new ApprovalService(
+        store,
+        hub,
+        new ApprovalSignatureVerifier(undefined),
+      );
+      const service = new SessionCommandService(
+        store,
+        hub,
+        approvals,
+        new RunnerRpcClient(hub),
+        100,
+      );
+      const runnerMessages: RunnerCommand[] = [];
+      store.createProject(projectRecord());
+      hub.registerRunner(
+        claudeRunnerRegistration(),
+        fakeSocket(runnerMessages),
+      );
+      store.createSession({
+        ...sessionRecord(),
+        agent: "claude-code",
+        status,
+      });
+
+      const result = await service.createUserMessage("session-1", {
+        content: "follow up",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: "session_turn_active",
+      });
+      expect(store.listMessages("session-1")).toEqual([]);
+      expect(runnerMessages).toEqual([]);
+    },
+  );
+
   it("rolls back session creation when startSession cannot be delivered", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(
@@ -1297,6 +1338,23 @@ function imageRunnerRegistration(): RunnerRegistration {
         supportedImageMimeTypes: ["image/png"],
         maxImagesPerTurn: 2,
         maxImageBytes: 1024,
+      },
+    ],
+  };
+}
+
+function claudeRunnerRegistration(): RunnerRegistration {
+  const runner = runnerRegistration();
+  return {
+    ...runner,
+    capabilities: [
+      {
+        ...runner.capabilities[0]!,
+        kind: "claude-code",
+        label: "Claude Code",
+        command: "claude",
+        parser: "claude-agent-sdk",
+        supportsResume: true,
       },
     ],
   };

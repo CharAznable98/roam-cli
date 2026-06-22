@@ -259,9 +259,12 @@ function registerSessionRoutes(
         if (
           result.error === "runner_offline" ||
           result.error === "session_not_running" ||
-          result.error === "attachments_require_idle"
+          result.error === "attachments_require_idle" ||
+          result.error === "session_turn_active"
         ) {
-          return reply.code(409).send({ error: result.error });
+          return reply
+            .code(409)
+            .send({ error: result.error, message: result.message });
         }
         if (result.error === "runner_timeout") {
           return reply.code(504).send({ error: "runner_timeout" });
