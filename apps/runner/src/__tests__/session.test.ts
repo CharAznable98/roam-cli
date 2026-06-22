@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
-  AgentOutputParser,
-  AgentParseResult,
+  AgentSession,
+  AgentSessionContext,
 } from "@roamcli/agent-plugin-sdk";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
@@ -777,31 +777,21 @@ function artifactCodexAgent(): LoadedAgent {
       buildCapability() {
         return capability;
       },
-      buildLaunch() {
-        return {
-          command: process.execPath,
-          args: ["-e", "process.stdout.write('artifact-ready\\n')"],
-          preferPty: false,
-          requirePty: false,
-          promptDelivery: "argument",
-        };
-      },
-      createParser(): AgentOutputParser {
-        return {
-          feed(): AgentParseResult {
-            if (emitted) {
-              return { text: "", approvals: [], artifacts: [] };
-            }
+      createSession(context) {
+        return new TestAgentSession(context, async () => {
+          if (!emitted) {
             emitted = true;
-            return {
-              text: "",
-              approvals: [],
-              artifacts: [
-                { path: "result.log", kind: "log", mimeType: "text/plain" },
-              ],
-            };
-          },
-        };
+            await context.emit({
+              type: "artifact",
+              draft: {
+                path: "result.log",
+                kind: "log",
+                mimeType: "text/plain",
+              },
+            });
+          }
+          await context.emit({ type: "status", status: "completed" });
+        });
       },
     },
   };
@@ -831,35 +821,18 @@ function approvalCodexAgent(): LoadedAgent {
       buildCapability() {
         return capability;
       },
-      buildLaunch() {
-        return {
-          command: process.execPath,
-          args: ["-e", "process.stdout.write('approval-ready\\n')"],
-          preferPty: false,
-          requirePty: false,
-          promptDelivery: "argument",
-        };
-      },
-      createParser(): AgentOutputParser {
-        return {
-          feed(): AgentParseResult {
-            if (emitted) {
-              return { text: "", approvals: [], artifacts: [] };
-            }
+      createSession(context) {
+        return new TestAgentSession(context, async () => {
+          if (!emitted) {
             emitted = true;
-            return {
-              text: "",
-              approvals: [
-                {
-                  kind: "execCommand",
-                  summary: "Approve stale command",
-                  payload: { command: "echo ok" },
-                },
-              ],
-              artifacts: [],
-            };
-          },
-        };
+            void context.requestApproval({
+              kind: "execCommand",
+              summary: "Approve stale command",
+              payload: { command: "echo ok" },
+            });
+          }
+          await context.emit({ type: "status", status: "completed" });
+        });
       },
     },
   };
@@ -888,21 +861,10 @@ function throwingParserCodexAgent(): LoadedAgent {
       buildCapability() {
         return capability;
       },
-      buildLaunch() {
-        return {
-          command: process.execPath,
-          args: ["-e", "process.stdout.write('malformed output\\n')"],
-          preferPty: false,
-          requirePty: false,
-          promptDelivery: "argument",
-        };
-      },
-      createParser(): AgentOutputParser {
-        return {
-          feed(): AgentParseResult {
-            throw new Error("parser failed");
-          },
-        };
+      createSession(context) {
+        return new TestAgentSession(context, async () => {
+          await context.emit({ type: "status", status: "completed" });
+        });
       },
     },
   };
@@ -931,24 +893,38 @@ function longRunningCodexAgent(): LoadedAgent {
       buildCapability() {
         return capability;
       },
-      buildLaunch() {
-        return {
-          command: process.execPath,
-          args: ["-e", "setInterval(() => {}, 1000)"],
-          preferPty: false,
-          requirePty: false,
-          promptDelivery: "argument",
-        };
-      },
-      createParser(): AgentOutputParser {
-        return {
-          feed(): AgentParseResult {
-            return { text: "", approvals: [], artifacts: [] };
-          },
-        };
+      createSession(context) {
+        return new TestAgentSession(context);
       },
     },
   };
+}
+
+class TestAgentSession implements AgentSession {
+  readonly #context: AgentSessionContext;
+  readonly #start: (() => Promise<void> | void) | undefined;
+
+  public constructor(
+    context: AgentSessionContext,
+    start?: () => Promise<void> | void,
+  ) {
+    this.#context = context;
+    this.#start = start;
+  }
+
+  public async start(): Promise<void> {
+    await this.#start?.();
+  }
+
+  public deliverInput(): void {}
+
+  public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
+    if (signal === "stop") {
+      await this.#context.emit({ type: "status", status: "stopped" });
+    }
+  }
+
+  public close(): void {}
 }
 
 function makeSession(workspace: string): Session {

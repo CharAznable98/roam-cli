@@ -39,6 +39,18 @@ const runner: RunnerRegistration = {
       maxImagesPerTurn: 2,
       maxImageBytes: 1024,
     },
+    {
+      kind: "claude-code",
+      label: "Claude Code",
+      command: "claude",
+      args: [],
+      parser: "claude-agent-sdk",
+      supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: ["image/png", "image/jpeg", "image/webp"],
+      maxImagesPerTurn: 4,
+      maxImageBytes: 2048,
+    },
   ],
 };
 
@@ -99,6 +111,28 @@ describe("NewSessionForm image attachments", () => {
         ],
       }),
     );
+  });
+
+  it("clears stale image validation errors when switching to an agent that supports the image type", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <NewSessionForm project={project} runner={runner} onCreate={onCreate} />,
+    );
+
+    fireEvent.change(fileInput(container), {
+      target: {
+        files: [new File(["hello"], "screen.webp", { type: "image/webp" })],
+      },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "image/webp is not supported.",
+    );
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "claude-code" },
+    });
+
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });
 

@@ -180,7 +180,10 @@ export function NewSessionForm({
         <span>Agent</span>
         <select
           value={agent}
-          onChange={(event) => setAgent(event.target.value as AgentKind)}
+          onChange={(event) => {
+            setAgent(event.target.value as AgentKind);
+            setError("");
+          }}
         >
           {agentOptions.map((option: AgentKind) => (
             <option key={option} value={option}>

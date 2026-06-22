@@ -10,8 +10,14 @@ describe("capabilities", () => {
   it("registers the default codex plugin", async () => {
     const registry = await loadAgentRegistry("standard");
 
-    expect(registry.capabilities.map((capability) => capability.kind)).toEqual(["codex"]);
-    expect(registry.agents.map((agent) => agent.definition.kind)).toEqual(["codex"]);
+    expect(registry.capabilities.map((capability) => capability.kind)).toEqual([
+      "codex",
+      "claude-code",
+    ]);
+    expect(registry.agents.map((agent) => agent.definition.kind)).toEqual([
+      "codex",
+      "claude-code",
+    ]);
   });
 
   it("defines strict, standard, and trusted permission templates", () => {
@@ -54,6 +60,27 @@ describe("capabilities", () => {
     const codex = (await loadAgentRegistry("standard")).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex?.args).toEqual(["--one", "two words"]);
+  });
+
+  it("registers Claude Code as a first-party default plugin", async () => {
+    const claudeCode = (await loadAgentRegistry("trusted")).capabilities.find(
+      (capability) => capability.kind === "claude-code",
+    );
+
+    expect(claudeCode).toMatchObject({
+      command: "claude",
+      args: [],
+      parser: "claude-agent-sdk",
+      supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+      ],
+      pluginName: "@roamcli/agent-claude-code",
+    });
   });
 
   it("fails clearly when an external plugin cannot be loaded", async () => {

@@ -3,18 +3,21 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type {
+  AgentRuntimeEvent,
+  ArtifactDraft,
+} from "@roamcli/agent-plugin-sdk";
+import type {
   AgentKind,
   RunnerAttachmentRef,
   RunnerCommand,
   RunnerProfile,
   Session,
 } from "@roamcli/shared/protocol";
-import { spawnAgentProcess, type AgentProcess } from "../agents/process.js";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";
+import { buildArtifact } from "../persistence/artifacts.js";
 import { resolveWorkspaceChild } from "../workspace/scope.js";
 import { SessionAttachmentStore } from "./attachments.js";
-import { SessionOutputHandler } from "./output.js";
 import type { RunnerEventSink, RunningSession } from "./types.js";
 import { WorkspaceCommandHandler } from "./workspace-commands.js";
 
@@ -36,7 +39,6 @@ export class SessionManager {
   readonly #agents: Map<AgentKind, LoadedAgent>;
   readonly #emit: RunnerEventSink;
   readonly #approvals: ApprovalTracker;
-  readonly #output: SessionOutputHandler;
   readonly #workspaceCommands: WorkspaceCommandHandler;
   readonly #sessions = new Map<string, RunningSession>();
   readonly #startingSessionIds = new Set<string>();
@@ -57,10 +59,6 @@ export class SessionManager {
       ...(options.approvalSecret === undefined
         ? {}
         : { approvalSecret: options.approvalSecret }),
-    });
-    this.#output = new SessionOutputHandler({
-      approvals: this.#approvals,
-      emit: this.#emit,
     });
     this.#workspaceCommands = new WorkspaceCommandHandler({
       workspace: this.#workspace,
@@ -270,11 +268,12 @@ export class SessionManager {
       return;
     }
 
-    let child: AgentProcess;
     try {
-      const launch = agent.definition.buildLaunch({
+      const agentSession = agent.definition.createSession({
         profile: this.#profile,
         env: process.env,
+        session,
+        cwd,
         prompt,
         attachments: attachments.map((attachment) => ({
           kind: attachment.kind,
@@ -284,52 +283,27 @@ export class SessionManager {
             attachment.runnerStoragePath,
           ),
         })),
+        emit: (event) => this.#handleAgentEvent(session.id, event),
+        requestApproval: (draft) => this.#approvals.request(session, draft),
         ...(resumeThreadId ? { resumeThreadId } : {}),
-      });
-      child = await spawnAgentProcess(launch.command, launch.args, {
-        cwd,
-        env: process.env,
-        preferPty: launch.preferPty,
-        requirePty: launch.requirePty,
       });
       const running: RunningSession = {
         session: { ...session, cwd },
-        child,
-        parser: agent.definition.createParser(),
+        agentSession,
         stopRequested: false,
-        outputTasks: new Set(),
       };
       this.#sessions.set(session.id, running);
       this.#sessionCwds.set(session.id, cwd);
-
-      child.onData((chunk) => this.#trackOutput(running, chunk));
-      child.onError((error) => {
-        void this.#emit({
-          type: "error",
-          sessionId: session.id,
-          message: error.message,
-          code: "SPAWN_ERROR",
-        });
-      });
-      child.onExit(({ code, signal }) => {
-        void this.#finishSession(running, code, signal);
-      });
 
       await this.#emit({
         type: "sessionStatus",
         sessionId: session.id,
         status: "running",
       });
-      if (launch.promptDelivery === "stdin") {
-        child.write(prompt);
-        if (!prompt.endsWith("\n")) {
-          child.write("\n");
-        }
-      } else {
-        child.endInput();
-      }
+      await agentSession.start();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+      this.#sessions.delete(session.id);
       await this.#emit({
         type: "error",
         sessionId: session.id,
@@ -404,10 +378,16 @@ export class SessionManager {
       });
       return;
     }
-    running.child.write(content);
-    if (!content.endsWith("\n")) {
-      running.child.write("\n");
-    }
+    void Promise.resolve(running.agentSession.deliverInput({ content })).catch(
+      (error: unknown) => {
+        void this.#emit({
+          type: "error",
+          sessionId,
+          message: error instanceof Error ? error.message : String(error),
+          code: "AGENT_INPUT_ERROR",
+        });
+      },
+    );
   }
 
   public async readFileTree(
@@ -491,17 +471,44 @@ export class SessionManager {
       return;
     }
     if (signal === "interrupt") {
-      running.child.interrupt();
+      void Promise.resolve(running.agentSession.control("interrupt")).catch(
+        (error: unknown) => {
+          void this.#emit({
+            type: "error",
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+            code: "AGENT_CONTROL_ERROR",
+          });
+        },
+      );
     } else if (signal === "stop") {
       running.stopRequested = true;
-      running.child.kill("SIGTERM");
+      void Promise.resolve(running.agentSession.control("stop")).catch(
+        (error: unknown) => {
+          void this.#emit({
+            type: "error",
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+            code: "AGENT_CONTROL_ERROR",
+          });
+        },
+      );
       running.stopTimer ??= setTimeout(() => {
-        running.child.kill("SIGKILL");
+        void Promise.resolve(running.agentSession.close()).catch(
+          () => undefined,
+        );
       }, 1500);
       running.stopTimer.unref?.();
     } else {
-      running.child.write(
-        `${JSON.stringify({ type: "controlSignal", signal: "resume" })}\n`,
+      void Promise.resolve(running.agentSession.control("resume")).catch(
+        (error: unknown) => {
+          void this.#emit({
+            type: "error",
+            sessionId,
+            message: error instanceof Error ? error.message : String(error),
+            code: "AGENT_CONTROL_ERROR",
+          });
+        },
       );
     }
   }
@@ -520,38 +527,109 @@ export class SessionManager {
     });
   }
 
-  #trackOutput(running: RunningSession, chunk: string | Buffer): void {
-    const task = this.#output.handle(running, chunk);
-    running.outputTasks.add(task);
-    void task
-      .finally(() => {
-        running.outputTasks.delete(task);
-      })
-      .catch(() => undefined);
+  async #handleAgentEvent(
+    sessionId: string,
+    event: AgentRuntimeEvent,
+  ): Promise<void> {
+    switch (event.type) {
+      case "status":
+        await this.#emit({
+          type: "sessionStatus",
+          sessionId,
+          status: event.status,
+        });
+        if (isTerminalStatus(event.status)) {
+          this.#finishRunningSession(sessionId);
+        }
+        return;
+      case "thread":
+        await this.#emit({
+          type: "sessionThread",
+          sessionId,
+          threadId: event.threadId,
+        });
+        return;
+      case "message":
+        await this.#emit({
+          type: "assistantMessage",
+          sessionId,
+          content: event.content,
+          encrypted: event.encrypted ?? false,
+        });
+        return;
+      case "token":
+        await this.#emit({
+          type: "token",
+          sessionId,
+          content: event.content,
+          encrypted: event.encrypted ?? false,
+        });
+        return;
+      case "approval":
+        {
+          const running = this.#sessions.get(sessionId);
+          if (running !== undefined) {
+            void this.#approvals.request(running.session, event.draft);
+          }
+        }
+        return;
+      case "artifact":
+        await this.#emitArtifact(sessionId, event.draft);
+        return;
+      case "error":
+        await this.#emit({
+          type: "error",
+          sessionId,
+          message: event.message,
+          ...(event.code === undefined ? {} : { code: event.code }),
+        });
+        return;
+    }
   }
 
-  async #finishSession(
-    running: RunningSession,
-    code: number | null,
-    signal: NodeJS.Signals | null,
+  async #emitArtifact(
+    sessionId: string,
+    draft: ArtifactDraft,
   ): Promise<void> {
-    this.#sessions.delete(running.session.id);
-    await Promise.allSettled([...running.outputTasks]);
-    this.#approvals.clear(running);
+    const cwd = this.#sessionCwds.get(sessionId);
+    if (cwd === undefined) {
+      await this.#emit({
+        type: "error",
+        sessionId,
+        message: "Session cwd is unavailable for artifact",
+        code: "ARTIFACT_ERROR",
+      });
+      return;
+    }
+    try {
+      const artifact = await buildArtifact(
+        sessionId,
+        resolveWorkspaceChild(cwd, draft.path),
+        draft.kind ?? "file",
+        draft.mimeType ?? "application/octet-stream",
+      );
+      await this.#emit({ type: "artifactCreated", artifact });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({
+        type: "error",
+        sessionId,
+        message,
+        code: "ARTIFACT_ERROR",
+      });
+    }
+  }
+
+  #finishRunningSession(sessionId: string): void {
+    const running = this.#sessions.get(sessionId);
+    if (running === undefined) {
+      return;
+    }
+    this.#sessions.delete(sessionId);
+    this.#approvals.clear(sessionId);
     if (running.stopTimer !== undefined) {
       clearTimeout(running.stopTimer);
     }
-    const status =
-      code === 0
-        ? "completed"
-        : running.stopRequested || signal === "SIGTERM" || signal === "SIGINT"
-          ? "stopped"
-          : "failed";
-    await this.#emit({
-      type: "sessionStatus",
-      sessionId: running.session.id,
-      status,
-    });
   }
 
   #resolveCwd(cwd: string): string {
@@ -675,4 +753,12 @@ export class SessionManager {
     this.#sessionCwds.set(sessionId, resolved);
     return resolved;
   }
+}
+
+function isTerminalStatus(status: Session["status"]): boolean {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "stopped"
+  );
 }

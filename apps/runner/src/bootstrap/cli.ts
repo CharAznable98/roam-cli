@@ -115,7 +115,7 @@ function helpText(): string {
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
     "  --workspace   Workspace root exposed to sessions. Default: cwd.",
     "  --data-dir    Relative runner state directory under workspace. Default: .roam-runner.",
-    "  --agent-plugin Agent plugin package to load. Repeatable. Default: @roamcli/agent-codex.",
+    "  --agent-plugin Agent plugin package to load. Repeatable. Default: built-in first-party agents.",
   ].join("\n");
 }
 

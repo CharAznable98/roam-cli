@@ -235,7 +235,10 @@
     z-index: 40;
     display: grid;
     width: min(360px, calc(100vw - 28px));
+    max-height: min(36vh, 240px);
     gap: 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .notification-card {
@@ -261,11 +264,15 @@
   }
 
   .notification-card p {
+    display: -webkit-box;
     margin: 3px 0 0;
     overflow-wrap: anywhere;
+    overflow: hidden;
     color: var(--text-main);
     font-size: 12px;
     line-height: 1.4;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .notification-close {
@@ -319,8 +326,8 @@
 
   .mobile-icon-button {
     display: inline-flex;
-    height: 36px;
-    width: 36px;
+    height: 44px;
+    width: 44px;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
@@ -1827,8 +1834,8 @@
 
   .icon-button,
   .primary-icon-button {
-    height: 40px;
-    width: 40px;
+    height: 44px;
+    width: 44px;
     flex-shrink: 0;
   }
 
@@ -2157,8 +2164,8 @@
   }
 
   .git-panel-header .icon-button {
-    height: 32px;
-    width: 32px;
+    height: 44px;
+    width: 44px;
   }
 
   .git-header-actions,
@@ -2174,8 +2181,8 @@
   }
 
   .git-toolbar {
-    flex-wrap: nowrap;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: stretch;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-muted);
     padding: 5px 10px;
@@ -2183,7 +2190,7 @@
 
   .git-context-field {
     display: flex;
-    flex: 1 1 auto;
+    flex: 1 1 100%;
     align-items: center;
     gap: 8px;
     margin: 0;
@@ -2198,9 +2205,24 @@
   }
 
   .git-context-field select {
+    flex: 1 1 auto;
+    min-width: 0;
     padding-right: 34px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-context-badge {
+    flex: 0 0 auto;
+    border: 1px solid rgba(19, 143, 189, 0.24);
+    border-radius: var(--radius-control);
+    background: #e9f7fb;
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 6px 8px;
     white-space: nowrap;
   }
 
@@ -2912,8 +2934,15 @@
 
 @media (min-width: 768px) {
   .notification-stack {
-    top: 188px;
-    bottom: auto;
+    right: 18px;
+    bottom: 18px;
+    max-height: min(32vh, 260px);
+  }
+
+  .notification-card p {
+    display: block;
+    overflow: visible;
+    -webkit-line-clamp: unset;
   }
 
   .app-shell {

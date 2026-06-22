@@ -2,19 +2,23 @@ import type {
   AgentSkillSummary,
   RunnerCapability,
   RunnerProfile,
+  Session,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
-
-export type PromptDelivery = "argument" | "stdin";
 
 export interface AgentPluginContext {
   profile: RunnerProfile;
   env: NodeJS.ProcessEnv;
 }
 
-export interface AgentLaunchContext extends AgentPluginContext {
+export interface AgentSessionContext extends AgentPluginContext {
+  session: Session;
+  cwd: string;
   prompt: string;
   resumeThreadId?: string;
   attachments?: readonly AgentLaunchAttachment[];
+  emit(event: AgentRuntimeEvent): Promise<void>;
+  requestApproval(draft: ApprovalRequestDraft): Promise<ApprovalDecision>;
 }
 
 export interface AgentSkillListContext extends AgentPluginContext {
@@ -29,18 +33,16 @@ export interface AgentLaunchAttachment {
   localPath: string;
 }
 
-export interface AgentLaunch {
-  command: string;
-  args: string[];
-  preferPty: boolean;
-  requirePty: boolean;
-  promptDelivery: PromptDelivery;
-}
-
 export interface ApprovalRequestDraft {
   kind: "execCommand" | "applyPatch";
   summary: string;
   payload: Record<string, unknown>;
+}
+
+export interface ApprovalDecision {
+  approved: boolean;
+  signedAt: string;
+  signature: string;
 }
 
 export interface ArtifactDraft {
@@ -48,6 +50,15 @@ export interface ArtifactDraft {
   kind?: "patch" | "file" | "log";
   mimeType?: string;
 }
+
+export type AgentRuntimeEvent =
+  | { type: "status"; status: SessionStatus }
+  | { type: "thread"; threadId: string }
+  | { type: "message"; content: string; encrypted?: boolean }
+  | { type: "token"; content: string; encrypted?: boolean }
+  | { type: "approval"; draft: ApprovalRequestDraft }
+  | { type: "artifact"; draft: ArtifactDraft }
+  | { type: "error"; message: string; code?: string };
 
 export interface AgentParseResult {
   text: string;
@@ -61,12 +72,22 @@ export interface AgentOutputParser {
   feed(chunk: string | Buffer): AgentParseResult;
 }
 
+export interface AgentInput {
+  content: string;
+}
+
+export interface AgentSession {
+  start(): Promise<void>;
+  deliverInput(input: AgentInput): Promise<void> | void;
+  control(signal: "interrupt" | "stop" | "resume"): Promise<void> | void;
+  close(): Promise<void> | void;
+}
+
 export interface AgentDefinition {
   kind: string;
   label: string;
   buildCapability(context: AgentPluginContext): RunnerCapability;
-  buildLaunch(context: AgentLaunchContext): AgentLaunch;
-  createParser(): AgentOutputParser;
+  createSession(context: AgentSessionContext): AgentSession;
   listSkills?(
     context: AgentSkillListContext,
   ): Promise<readonly AgentSkillSummary[]>;

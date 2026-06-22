@@ -44,6 +44,7 @@ type GitContextOption = {
   key: string;
   label: string;
   context: ApiGitContext;
+  isDefault: boolean;
 };
 
 type GitPanelProps = {
@@ -116,6 +117,10 @@ export function GitPanel({
   const contextOptions = useMemo(
     () => buildContextOptions(project, sessions, defaultContextKey),
     [defaultContextKey, project, sessions],
+  );
+  const activeContextKey = selectedContextKey || defaultContextKey;
+  const selectedContextOption = contextOptions.find(
+    (option) => option.key === activeContextKey,
   );
   const selectedContext =
     contextFromKey(selectedContextKey, contextOptions) ?? defaultContext;
@@ -358,7 +363,9 @@ export function GitPanel({
       <div className="git-toolbar">
         <label className="field git-context-field">
           <select
-            value={selectedContextKey || defaultContextKey}
+            aria-label="Git context"
+            title={selectedContextOption?.label}
+            value={activeContextKey}
             onChange={(event) => setSelectedContextKey(event.target.value)}
           >
             {contextOptions.map((option) => (
@@ -367,6 +374,9 @@ export function GitPanel({
               </option>
             ))}
           </select>
+          {selectedContextOption?.isDefault ? (
+            <span className="git-context-badge">Current</span>
+          ) : null}
         </label>
         <div className="git-remote-actions">
           <button
@@ -785,7 +795,8 @@ function buildContextOptions(
   const options: GitContextOption[] = [
     {
       key: contextKey({ kind: "project", projectId: project.id }),
-      label: `Project - ${project.name}${defaultKey === `project:${project.id}` ? " (selected session)" : ""}`,
+      label: `Project - ${project.name}`,
+      isDefault: defaultKey === `project:${project.id}`,
       context: {
         kind: "project",
         projectId: project.id,
@@ -803,7 +814,8 @@ function buildContextOptions(
     const key = contextKey({ kind: "session_worktree", sessionId: session.id });
     options.push({
       key,
-      label: `Worktree - ${session.title}${defaultKey === key ? " (selected session)" : ""}`,
+      label: `Worktree - ${session.title}`,
+      isDefault: defaultKey === key,
       context: { kind: "session_worktree", sessionId: session.id },
     });
   }
@@ -873,7 +885,11 @@ function useCompactDiff(): boolean {
 }
 
 async function copyText(value: string): Promise<void> {
-  await navigator.clipboard?.writeText(value);
+  try {
+    await navigator.clipboard?.writeText(value);
+  } catch {
+    // Clipboard permission can be unavailable in browser automation or mobile UIs.
+  }
 }
 
 function errorMessage(error: unknown): string {
