@@ -17,7 +17,6 @@ import { RunnerRpcClient } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";
 import { fail, ok, type ServiceResult } from "../result.js";
-import type { ApprovalSignatureVerifier } from "../approvals/approval-signatures.js";
 
 export interface FileTreeQuery {
   clientRequestId?: string;
@@ -39,7 +38,6 @@ export class WorkspaceService {
   constructor(
     private readonly store: ServerStore,
     private readonly rpc: RunnerRpcClient,
-    private readonly signatures: ApprovalSignatureVerifier,
     private readonly runnerRpcTimeoutMs: number,
   ) {}
 
@@ -196,17 +194,6 @@ export class WorkspaceService {
     if (unavailable) {
       return unavailable;
     }
-    if (
-      !this.signatures.isPatchSignatureValid(
-        session.id,
-        body.patch,
-        body.signedAt,
-        body.signature,
-      )
-    ) {
-      return fail("invalid_signature");
-    }
-
     const result = await this.rpc.requestRunner<PatchApplyResult>(
       session.runnerId,
       {
@@ -215,8 +202,6 @@ export class WorkspaceService {
         sessionId: session.id,
         patch: body.patch,
         strip: body.strip,
-        signedAt: body.signedAt,
-        signature: body.signature,
       },
       this.runnerRpcTimeoutMs,
     );

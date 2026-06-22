@@ -110,7 +110,7 @@ function helpText(): string {
     "",
     "Options:",
     "  --server      Server websocket URL. http/https are converted to ws/wss.",
-    "  --token       Bearer token used during websocket registration.",
+    "  --token       Runner token used during websocket registration.",
     "  --profile     Permission profile: strict, standard, trusted. Default: standard.",
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
     "  --workspace   Workspace root exposed to sessions. Default: cwd.",

@@ -1,15 +1,19 @@
 import websocketPlugin from "@fastify/websocket";
 import Fastify from "fastify";
-import { requireAuth } from "../auth.js";
 import { loadConfig, type ServerConfigInput } from "../config.js";
 import { registerApiRoutes } from "../http/api-routes.js";
 import { ConnectionHub } from "../infra/connection-hub.js";
+import {
+  isHttpOriginAllowed,
+  isLoopbackHost,
+  isTrustedProxyAddress,
+} from "../infra/http-security.js";
 import { ArtifactStorage } from "../infra/local-artifact-storage.js";
 import { RunnerRpcClient, RunnerRpcError } from "../infra/runner-rpc-client.js";
 import { ServerStore } from "../infra/sqlite-store.js";
 import { ApprovalService } from "../modules/approvals/approval-service.js";
-import { ApprovalSignatureVerifier } from "../modules/approvals/approval-signatures.js";
 import { ArtifactService } from "../modules/artifacts/artifact-service.js";
+import { AuthService } from "../modules/auth/auth-service.js";
 import { GitService } from "../modules/git/git-service.js";
 import { RunnerEventService } from "../modules/runners/runner-event-service.js";
 import { SessionCommandService } from "../modules/sessions/session-command-service.js";
@@ -22,9 +26,16 @@ export async function createServer(
   input: ServerConfigInput = {},
 ): Promise<RoamServer> {
   const config = loadConfig(input);
-  const app = Fastify({ logger: false }) as unknown as RoamServer;
+  const app = Fastify({
+    logger: false,
+    trustProxy: (address) =>
+      isTrustedProxyAddress(address, config.trustedProxyIps),
+  }) as unknown as RoamServer;
   const store = new ServerStore(config.dataDir);
   const artifacts = new ArtifactStorage(config.dataDir);
+  const authService = new AuthService(store, config.dataDir);
+  authService.initialize({ resetOwner: config.resetOwner });
+  let insecureHttpWarningLogged = false;
   let rpc: RunnerRpcClient;
   const hub = new ConnectionHub(store, {
     onRunnerReplaced: (runnerId) => {
@@ -41,8 +52,7 @@ export async function createServer(
     },
   });
   rpc = new RunnerRpcClient(hub);
-  const signatures = new ApprovalSignatureVerifier(config.approvalSecret);
-  const approvalService = new ApprovalService(store, hub, signatures);
+  const approvalService = new ApprovalService(store, hub);
   const artifactService = new ArtifactService(store, artifacts, hub);
   const sessionService = new SessionCommandService(
     store,
@@ -54,7 +64,6 @@ export async function createServer(
   const workspaceService = new WorkspaceService(
     store,
     rpc,
-    signatures,
     config.runnerRpcTimeoutMs,
   );
   const gitService = new GitService(store, hub, rpc, config.runnerRpcTimeoutMs);
@@ -67,6 +76,7 @@ export async function createServer(
     rpc,
     services: {
       approvals: approvalService,
+      auth: authService,
       artifacts: artifactService,
       git: gitService,
       runnerEvents: runnerEventService,
@@ -84,13 +94,51 @@ export async function createServer(
 
   app.addHook("preHandler", async (request, reply) => {
     const pathname = new URL(request.url, "http://localhost").pathname;
-    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
-      await requireAuth(config.authToken, request, reply);
+    if (!pathname.startsWith("/v1/")) {
+      return;
+    }
+    if (!isHttpOriginAllowed(request, config.publicOrigin)) {
+      await reply.code(403).send({ error: "invalid_origin" });
+      return;
+    }
+    if (
+      pathname === "/v1/auth/status" ||
+      pathname === "/v1/auth/setup" ||
+      pathname === "/v1/auth/login" ||
+      pathname === "/v1/stream" ||
+      pathname === "/v1/runner"
+    ) {
+      return;
+    }
+    if (!authService.requireSession(request, reply)) {
+      return reply;
+    }
+  });
+
+  app.addHook("onRequest", async (request, _reply) => {
+    if (insecureHttpWarningLogged) {
+      return;
+    }
+    const proto = request.protocol;
+    const host = request.host;
+    if (
+      proto === "http" &&
+      host &&
+      !isLoopbackHost(host)
+    ) {
+      console.warn(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          event: "auth.insecure_http_warning",
+          host,
+        }),
+      );
+      insecureHttpWarningLogged = true;
     }
   });
 
   await registerApiRoutes(app, context);
-  registerWebSocketRoutes(app, context, config.authToken);
+  registerWebSocketRoutes(app, context, config.publicOrigin);
 
   if (config.webDistDir) {
     await registerWebDist(app, config.webDistDir);

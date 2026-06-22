@@ -74,7 +74,7 @@ describe("RunnerConnection", () => {
         handled.push(command.type);
       },
       createSocket: (url) => {
-        expect(url).toBe("wss://example.test/runners?token=secret");
+        expect(url).toBe("wss://example.test/runners");
         return socket;
       },
       minBackoffMs: 1,
@@ -97,7 +97,9 @@ describe("RunnerConnection", () => {
     connection.stop();
 
     expect(JSON.parse(socket.sent[0] ?? "{}")).toMatchObject({
-      type: "registered",
+      type: "runnerAuthenticate",
+      token: "secret",
+      runner: { runnerId: "r1" },
     });
     await expect(started).resolves.toBeInstanceOf(Error);
   });
@@ -136,7 +138,7 @@ describe("RunnerConnection", () => {
     expect(handled).toEqual([]);
     expect(
       socket.sent.map((item) => JSON.parse(item) as { type: string }),
-    ).toEqual([expect.objectContaining({ type: "registered" })]);
+    ).toEqual([expect.objectContaining({ type: "runnerAuthenticate" })]);
     await expect(started).resolves.toBeInstanceOf(Error);
   });
 });

@@ -3,10 +3,14 @@ import {
   ApiApplyPatchSchema,
   ApiAgentSkillListSchema,
   ApiApprovalResponseSchema,
+  ApiChangePasswordSchema,
   ApiCreateMessageSchema,
   ApiCreateProjectSchema,
   ApiPathSearchSchema,
   ApiCreateSessionSchema,
+  ApiLoginSchema,
+  ApiRegenerateRunnerTokenSchema,
+  ApiSetupOwnerSchema,
   ApiGitBlameQuerySchema,
   ApiGitCommitSchema,
   ApiGitContextSchema,
@@ -65,6 +69,7 @@ export async function registerApiRoutes(
   app: FastifyInstance,
   context: AppContext,
 ): Promise<void> {
+  registerAuthRoutes(app, context);
   registerRunnerRoutes(app, context);
   registerProjectRoutes(app, context);
   registerSessionRoutes(app, context);
@@ -72,6 +77,139 @@ export async function registerApiRoutes(
   registerGitRoutes(app, context);
   registerApprovalRoutes(app, context);
   registerArtifactRoutes(app, context);
+}
+
+function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
+  app.get("/v1/auth/status", async (request) => ({
+    auth: context.services.auth.getStatus(request),
+  }));
+
+  app.post("/v1/auth/setup", async (request, reply) => {
+    const parsed = ApiSetupOwnerSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const result = context.services.auth.setupOwner(parsed.data, request);
+    if (!result.ok) {
+      return sendAuthError(reply, result.error);
+    }
+    context.services.auth.setSessionCookie(
+      reply,
+      result.value.token,
+      request,
+    );
+    return reply.code(201).send({
+      auth: {
+        status: "authenticated",
+        session: result.value.account.sessions.find(
+          (session) => session.current,
+        ),
+      },
+      account: result.value.account,
+    });
+  });
+
+  app.post("/v1/auth/login", async (request, reply) => {
+    const parsed = ApiLoginSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const result = context.services.auth.login(parsed.data, request);
+    if (!result.ok) {
+      return sendAuthError(reply, result.error);
+    }
+    context.services.auth.setSessionCookie(
+      reply,
+      result.value.token,
+      request,
+    );
+    return {
+      auth: {
+        status: "authenticated",
+        session: result.value.account.sessions.find(
+          (session) => session.current,
+        ),
+      },
+      account: result.value.account,
+    };
+  });
+
+  app.post("/v1/auth/logout", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
+    context.services.auth.logout(session.record.id, request);
+    context.hub.closeStreamsForAuthSessions([session.record.id]);
+    context.services.auth.clearSessionCookie(reply, request);
+    return reply.code(204).send();
+  });
+
+  app.post("/v1/auth/logout-all", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
+    const ids = context.services.auth.logoutAll(request, session.record.id);
+    context.hub.closeStreamsForAuthSessions(ids);
+    context.services.auth.clearSessionCookie(reply, request);
+    return reply.code(204).send();
+  });
+
+  app.get("/v1/auth/account", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
+    return {
+      account: context.services.auth.getAccountState(session.record.id),
+    };
+  });
+
+  app.post("/v1/auth/password", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
+    const parsed = ApiChangePasswordSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const result = context.services.auth.changePassword(
+      session.record.id,
+      parsed.data,
+      request,
+    );
+    if (!result.ok) {
+      return sendAuthError(reply, result.error);
+    }
+    context.hub.closeStreamsForAuthSessions(result.value.revokedSessionIds);
+    context.services.auth.clearSessionCookie(reply, request);
+    return reply.code(204).send();
+  });
+
+  app.post("/v1/auth/runner-token/regenerate", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
+    const parsed = ApiRegenerateRunnerTokenSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    context.services.auth.regenerateRunnerToken(request, session.record.id);
+    return {
+      account: context.services.auth.getAccountState(session.record.id),
+    };
+  });
 }
 
 function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
@@ -557,9 +695,6 @@ function registerWorkspaceRoutes(
         if (result.error === "session_not_found") {
           return reply.code(404).send({ error: "session_not_found" });
         }
-        if (result.error === "invalid_signature") {
-          return reply.code(403).send({ error: "invalid_signature" });
-        }
         return reply.code(400).send({ error: result.error });
       }
       return result.value;
@@ -801,6 +936,10 @@ function registerApprovalRoutes(
   context: AppContext,
 ): void {
   app.post("/v1/approvals/:id", async (request, reply) => {
+    const session = context.services.auth.requireSession(request, reply);
+    if (!session) {
+      return reply;
+    }
     const params = ApprovalParamsSchema.parse(request.params);
     const parsed = ApiApprovalResponseSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -812,13 +951,11 @@ function registerApprovalRoutes(
     const result = context.services.approvals.respondToApproval(
       params.id,
       parsed.data,
+      session.record.id,
     );
     if (!result.ok) {
       if (result.error === "approval_not_found") {
         return reply.code(404).send({ error: "approval_not_found" });
-      }
-      if (result.error === "invalid_signature") {
-        return reply.code(403).send({ error: "invalid_signature" });
       }
       if (result.error === "approval_already_resolved") {
         return reply.code(409).send({ error: "approval_already_resolved" });
@@ -830,6 +967,22 @@ function registerApprovalRoutes(
     }
     return result.value;
   });
+}
+
+function sendAuthError(reply: FastifyReply, error: string): FastifyReply {
+  if (error === "already_setup") {
+    return reply.code(409).send({ error });
+  }
+  if (error === "setup_required") {
+    return reply.code(401).send({ error });
+  }
+  if (error === "invalid_credentials") {
+    return reply.code(401).send({ error });
+  }
+  if (error === "rate_limited") {
+    return reply.code(429).send({ error });
+  }
+  return reply.code(400).send({ error });
 }
 
 function sendServiceError(

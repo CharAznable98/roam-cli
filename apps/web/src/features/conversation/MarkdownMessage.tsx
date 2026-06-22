@@ -2,8 +2,10 @@ import { Check, Copy } from "lucide-react";
 import {
   cloneElement,
   isValidElement,
+  memo,
   useEffect,
   useId,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -26,26 +28,32 @@ type MarkdownMessageProps = {
   onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
 };
 
-export function MarkdownMessage({
+export const MarkdownMessage = memo(function MarkdownMessage({
   content,
   fileLinkContext,
   onOpenFileLink,
 }: MarkdownMessageProps) {
+  const components = useMemo(
+    () =>
+      createMarkdownComponents({
+        fileLinkContext,
+        onOpenFileLink,
+      }),
+    [fileLinkContext, onOpenFileLink],
+  );
+
   return (
     <div className="markdown-message">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
-        components={createMarkdownComponents({
-          fileLinkContext,
-          onOpenFileLink,
-        })}
+        components={components}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function createMarkdownComponents(options: {
   fileLinkContext: MarkdownFileLinkContext | undefined;
@@ -108,18 +116,58 @@ function createMarkdownComponents(options: {
       }
       return <blockquote>{children}</blockquote>;
     },
-    code({ children, className }) {
-      const code = String(children).replace(/\n$/, "");
+    pre({ children }) {
+      const codeElement = markdownCodeElement(children);
+      if (!codeElement) {
+        return <pre>{children}</pre>;
+      }
+      const code = markdownText(codeElement.props.children).replace(/\n$/, "");
+      const className = codeElement.props.className;
       const language = /language-([\w-]+)/.exec(className ?? "")?.[1];
       if (!language) {
-        return <code>{children}</code>;
+        return <pre>{children}</pre>;
       }
       if (language === "mermaid") {
         return <MermaidBlock chart={code} />;
       }
       return <CodeBlock code={code} language={language} />;
     },
+    code({ children, className }) {
+      return <code className={className}>{children}</code>;
+    },
   };
+}
+
+function markdownCodeElement(children: ReactNode) {
+  const items = Array.isArray(children) ? children : [children];
+  const [first] = items;
+  if (items.length !== 1) {
+    return undefined;
+  }
+  if (!isValidElement<{ children?: ReactNode; className?: string }>(first)) {
+    return undefined;
+  }
+  return first;
+}
+
+function markdownText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") {
+    return "";
+  }
+  if (
+    typeof node === "string" ||
+    typeof node === "number" ||
+    typeof node === "bigint"
+  ) {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(markdownText).join("");
+  }
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return markdownText(node.props.children);
+  }
+  return "";
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {

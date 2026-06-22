@@ -13,12 +13,10 @@ import {
   type RunnerEvent,
   type Session,
 } from "@roamcli/shared/protocol";
-import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
 import { SessionManager } from "../sessions/manager.js";
 
-const approvalSecret = "runner-test-secret";
 const execFileAsync = promisify(execFile);
 
 describe("SessionManager", () => {
@@ -33,7 +31,6 @@ describe("SessionManager", () => {
       workspace,
       profile: "standard",
       agents: await fakeCodexAgents(workspace),
-      approvalSecret,
       emit: (event) => {
         events.push(event);
       },
@@ -467,12 +464,7 @@ describe("SessionManager", () => {
       throw new Error("approval was not emitted");
     }
 
-    manager.resolveApproval(
-      approval.approval.id,
-      true,
-      "2026-06-05T00:00:00.000Z",
-      "signature",
-    );
+    manager.resolveApproval(approval.approval.id, true);
 
     const statusEvents = events.filter(
       (event) => event.type === "sessionStatus",
@@ -801,7 +793,7 @@ describe("SessionManager", () => {
       "+new",
       "",
     ].join("\n");
-    await manager.handle(signedPatchCommand(patch));
+    await manager.handle(patchCommand(patch));
 
     expect(events).toContainEqual({
       type: "patchApplyResult",
@@ -819,51 +811,6 @@ describe("SessionManager", () => {
     );
   });
 
-  it("rejects patch commands whose forwarded signature does not match the patch body", async () => {
-    const workspace = await mkdtemp(
-      join(tmpdir(), "roam-runner-session-patch-signature-"),
-    );
-    await writeFile(join(workspace, "README.md"), "old\n");
-    const events: RunnerEvent[] = [];
-    const manager = new SessionManager({
-      workspace,
-      profile: "standard",
-      agents: await fakeCodexAgents(workspace),
-      approvalSecret,
-      emit: (event) => {
-        events.push(event);
-      },
-    });
-
-    const patch = [
-      "diff --git a/README.md b/README.md",
-      "--- a/README.md",
-      "+++ b/README.md",
-      "@@ -1 +1 @@",
-      "-old",
-      "+new",
-      "",
-    ].join("\n");
-    await manager.start(makeSession(workspace), "ready");
-    await manager.handle(
-      signedPatchCommand(patch, `${patch}\n# tampered-target`),
-    );
-
-    expect(events).toContainEqual({
-      type: "patchApplyResult",
-      result: {
-        requestId: "patch1",
-        sessionId: "s1",
-        applied: false,
-        changedFiles: [],
-        message: "Patch signature is invalid",
-        rejected: ["Patch signature is invalid"],
-      },
-    });
-    await expect(readFile(join(workspace, "README.md"), "utf8")).resolves.toBe(
-      "old\n",
-    );
-  });
 });
 
 async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
@@ -1219,19 +1166,11 @@ function makeSession(workspace: string): Session {
   };
 }
 
-function signedPatchCommand(patch: string, signedPatch = patch) {
-  const signedAt = "2026-06-05T00:00:00.000Z";
+function patchCommand(patch: string) {
   return {
     type: "applyPatch" as const,
     requestId: "patch1",
     sessionId: "s1",
     patch,
-    signedAt,
-    signature: signApproval(
-      approvalSecret,
-      `patch:s1:${hashPayload(signedPatch)}`,
-      true,
-      signedAt,
-    ),
   };
 }

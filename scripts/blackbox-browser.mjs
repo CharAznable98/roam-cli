@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const token = process.env.ROAMCLI_BLACKBOX_TOKEN ?? "dev-token";
+const ownerPassword =
+  process.env.ROAMCLI_BLACKBOX_PASSWORD ?? "roamcli-blackbox-password";
 const suppliedBaseUrl = process.env.ROAMCLI_BLACKBOX_BASE_URL;
 const timeoutMs = Number(process.env.ROAMCLI_BLACKBOX_TIMEOUT_MS ?? 45_000);
 const runNonce = `${process.pid}-${Date.now().toString(36)}`;
@@ -28,6 +29,8 @@ const artifactDir = resolve(
 const reportRows = [];
 const screenshots = [];
 let baseUrl = suppliedBaseUrl?.replace(/\/$/, "");
+let cookieHeader = "";
+let runnerToken = "";
 let workspace =
   process.env.ROAMCLI_BLACKBOX_WORKSPACE === undefined
     ? undefined
@@ -84,15 +87,16 @@ async function run() {
       {
         HOST: "127.0.0.1",
         PORT: String(port),
-        ROAMCLI_AUTH_TOKEN: token,
         ROAMCLI_DATA_DIR: dataDir,
         ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "30000",
       },
     );
-    await waitForHttp("/v1/runners");
+    await waitForHttp("/v1/auth/status");
+    await authenticate({ setupDataDir: dataDir });
     pass(`server online at ${baseUrl}`);
   } else {
-    await waitForHttp("/v1/runners");
+    await waitForHttp("/v1/auth/status");
+    await authenticate({});
     pass(`connected to existing server at ${baseUrl}`);
   }
 
@@ -124,6 +128,16 @@ async function run() {
       mobile: true,
       tablet: false,
     });
+    await runAccountSecurityJourney(browser, {
+      name: "desktop",
+      viewport: { width: 1440, height: 960 },
+      mobile: false,
+    });
+    await runAccountSecurityJourney(browser, {
+      name: "mobile",
+      viewport: { width: 390, height: 844 },
+      mobile: true,
+    });
   } finally {
     await browser.close();
   }
@@ -141,6 +155,78 @@ async function launchBrowser() {
       `${hint}\n${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+async function authenticate({ setupDataDir }) {
+  const statusPayload = await requestJson("/v1/auth/status");
+  const status = statusPayload.auth?.status;
+  if (status === "setup_required") {
+    if (!setupDataDir) {
+      throw new Error(
+        "Server requires setup. Run against a local server started by this script, or complete setup before using ROAMCLI_BLACKBOX_BASE_URL.",
+      );
+    }
+    const setupToken = await waitForSetupToken(setupDataDir);
+    await requestJson("/v1/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ setupToken, password: ownerPassword }),
+    });
+    pass("owner setup completed");
+  } else if (status === "unauthenticated") {
+    await requestJson("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password: ownerPassword }),
+    });
+    pass("owner login completed");
+  }
+
+  const accountPayload = await requestJson("/v1/auth/account");
+  runnerToken = accountPayload.account?.runnerToken ?? "";
+  if (runnerToken.length === 0) {
+    throw new Error("account security state did not include a runner token");
+  }
+}
+
+async function waitForSetupToken(dataDir) {
+  return waitFor(async () => {
+    try {
+      const value = (
+        await readFile(resolve(dataDir, "setup-token.txt"), "utf8")
+      ).trim();
+      return value || undefined;
+    } catch {
+      return undefined;
+    }
+  }, "setup token file");
+}
+
+async function addAuthCookie(context) {
+  if (!cookieHeader) {
+    throw new Error("owner session cookie is not available");
+  }
+  const [name, ...valueParts] = cookieHeader.split("=");
+  const value = valueParts.join("=");
+  if (!name || !value) {
+    throw new Error("owner session cookie is malformed");
+  }
+  await context.addCookies([
+    {
+      name,
+      value,
+      url: baseUrl,
+      httpOnly: true,
+      sameSite: "Strict",
+    },
+  ]);
+}
+
+async function syncCookieFromContext(context) {
+  const cookies = await context.cookies(baseUrl);
+  const sessionCookie = cookies.find((cookie) => cookie.value.length > 0);
+  if (!sessionCookie) {
+    throw new Error("owner session cookie was not set after browser login");
+  }
+  cookieHeader = `${sessionCookie.name}=${sessionCookie.value}`;
 }
 
 function formatBrowserErrors(scenario, consoleErrors, browserHttpErrors) {
@@ -179,6 +265,7 @@ async function runUserJourney(browser, scenario) {
   tempDirs.push(projectDir);
 
   const context = await browser.newContext({ viewport: scenario.viewport });
+  await addAuthCookie(context);
   const page = await context.newPage();
   const consoleErrors = [];
   const browserHttpErrors = [];
@@ -215,9 +302,6 @@ async function runUserJourney(browser, scenario) {
   });
 
   try {
-    await page.addInitScript((authToken) => {
-      window.localStorage.setItem("roamcli.token", authToken);
-    }, token);
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     if (scenario.mobile) {
       await expectText(page, "Online");
@@ -306,6 +390,7 @@ async function runUserJourney(browser, scenario) {
     pass(`${scenario.name}: file browse/edit/save`);
 
     await assertProjectGitUi(page, scenario, project, fileName);
+    await assertMobileGitTouchTargets(page, scenario);
     await captureScreenshot(page, scenario, "git-project-diff");
     pass(`${scenario.name}: project Git tab diff`);
 
@@ -422,7 +507,7 @@ async function assertManagedWorktreeGitUi(
   await captureScreenshot(page, scenario, "git-worktree-diff");
 
   await clickGitActionAndExpectJob(page, "/v1/git/stage", () =>
-    page.getByRole("button", { name: "Stage", exact: true }).click(),
+    clickGitMenuItem(page, "File actions", "Stage"),
   );
   await waitForGitStatus(gitContext, (status) =>
     status.groups.some(
@@ -443,9 +528,10 @@ async function assertManagedWorktreeGitUi(
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-commit");
 
+  await page.getByRole("tab", { name: "Branch & Sync" }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await clickGitActionAndExpectJob(page, "/v1/git/worktree/remove", () =>
-    page.getByRole("button", { name: "Remove worktree" }).click(),
+    clickGitMenuItem(page, "Branch actions", "Remove worktree"),
   );
   await waitFor(async () => {
     const payload = await requestJson(`/v1/sessions/${session.id}`);
@@ -494,10 +580,20 @@ async function waitForGitStatus(gitContext, predicate) {
         body: JSON.stringify(gitContext),
       });
       const status = payload.result;
-      return status !== undefined && predicate(status);
+      return status?.kind === "repository" && predicate(status);
     },
     `Git status ${JSON.stringify(gitContext)}`,
   );
+}
+
+async function clickGitMenuItem(page, menuLabel, itemName) {
+  const menu = page
+    .locator(".git-action-menu", {
+      has: page.locator(`summary[aria-label="${menuLabel}"]`),
+    })
+    .last();
+  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: itemName, exact: true }).click();
 }
 
 async function clickGitActionAndExpectJob(page, path, click) {
@@ -540,6 +636,68 @@ async function waitForGitDiffReady(page) {
 async function assertNoRunnerRequestFailed(page) {
   if (await hasVisibleText(page, "Runner request failed")) {
     throw new Error("Runner request failed notification is visible");
+  }
+}
+
+async function assertMobileGitTouchTargets(page, scenario) {
+  if (!scenario.mobile) {
+    return;
+  }
+  const firstActionMenu = page.locator(".git-panel .git-action-menu").first();
+  if ((await firstActionMenu.count()) > 0) {
+    await firstActionMenu.locator("summary").click();
+  }
+  const failures = await page.evaluate(() => {
+    const minSize = 44;
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none"
+      );
+    };
+    const targets = [
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-action-menu > summary"),
+      ).map((element, index) => ({
+        name: `Git action summary ${index + 1}`,
+        element,
+      })),
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-action-menu-content button"),
+      )
+        .filter(visible)
+        .map((element, index) => ({
+          name: `Git action menu item ${index + 1}`,
+          element,
+        })),
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-tree-folder summary"),
+      ).map((element, index) => ({
+        name: `Git tree folder ${index + 1}`,
+        element,
+      })),
+    ];
+    return targets
+      .map(({ name, element }) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          name,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          tooSmall: rect.width < minSize || rect.height < minSize,
+        };
+      })
+      .filter((target) => target.tooSmall);
+  });
+  await page.keyboard.press("Escape");
+  if (failures.length > 0) {
+    throw new Error(
+      `mobile Git touch targets below 44px: ${JSON.stringify(failures)}`,
+    );
   }
 }
 
@@ -620,11 +778,9 @@ async function runNoRunnerJourney(browser) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 760 },
   });
+  await addAuthCookie(context);
   const page = await context.newPage();
   try {
-    await page.addInitScript((authToken) => {
-      window.localStorage.setItem("roamcli.token", authToken);
-    }, token);
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await expectText(page, "No runners are online");
     await expectText(page, "pnpm --filter @roamcli/runner dev");
@@ -636,6 +792,125 @@ async function runNoRunnerJourney(browser) {
       throw new Error("no-runner command still hardcodes 127.0.0.1:8787");
     }
     await captureScreenshot(page, { name: "no-runner" }, "empty-runner-state");
+  } finally {
+    await context.close();
+  }
+}
+
+async function runAccountSecurityJourney(browser, scenario) {
+  await authenticate({});
+  const context = await browser.newContext({ viewport: scenario.viewport });
+  await addAuthCookie(context);
+  const page = await context.newPage();
+  const consoleErrors = [];
+  const browserHttpErrors = [];
+  const browserHttpErrorReads = new Set();
+  page.on("console", (message) => {
+    const text = message.text();
+    if (message.type() === "error" && !isExpectedBrowserCancellation(text)) {
+      consoleErrors.push(text);
+    }
+  });
+  page.on("pageerror", (error) => {
+    if (!isExpectedBrowserCancellation(error.message)) {
+      consoleErrors.push(error.message);
+    }
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) {
+      return;
+    }
+    const read = response
+      .text()
+      .then((body) => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}: ${body.slice(0, 500)}`,
+        );
+      })
+      .catch(() => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}`,
+        );
+      })
+      .finally(() => browserHttpErrorReads.delete(read));
+    browserHttpErrorReads.add(read);
+  });
+
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    if (scenario.mobile) {
+      await expectText(page, "Online");
+      await page
+        .getByRole("button", { name: "Open Account & Security" })
+        .click();
+    } else {
+      await expectText(page, "stream connected");
+      await page.getByRole("button", { name: "Account & Security" }).click();
+    }
+
+    const dialog = page.getByRole("dialog", { name: "Account & Security" });
+    await dialog.waitFor();
+    await expectTextIn(dialog, "Runner Token");
+    await expectTextIn(dialog, runnerToken);
+    await expectTextIn(dialog, "--token");
+    await expectTextIn(dialog, "Copy command");
+    await captureScreenshot(
+      page,
+      { name: `account-${scenario.name}` },
+      "account-security-open",
+    );
+
+    await dialog.getByRole("button", { name: "Log out", exact: true }).click();
+    await expectText(page, "Owner Login");
+    await waitFor(
+      async () =>
+        (await page
+          .getByRole("dialog", { name: "Account & Security" })
+          .count()) === 0,
+      `${scenario.name} account security modal to close after logout`,
+    );
+
+    await page.getByLabel("Password").fill(ownerPassword);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    if (scenario.mobile) {
+      await expectText(page, "Online");
+    } else {
+      await expectText(page, "stream connected");
+    }
+    await waitFor(
+      async () =>
+        (await page
+          .getByRole("dialog", { name: "Account & Security" })
+          .count()) === 0,
+      `${scenario.name} account security modal to stay closed after login`,
+    );
+    await captureScreenshot(
+      page,
+      { name: `account-${scenario.name}` },
+      "account-security-login",
+    );
+    await syncCookieFromContext(context);
+
+    await Promise.allSettled(browserHttpErrorReads);
+    if (consoleErrors.length > 0 || browserHttpErrors.length > 0) {
+      throw new Error(
+        formatBrowserErrors(scenario, consoleErrors, browserHttpErrors),
+      );
+    }
+    pass(`${scenario.name}: account security logout/login`);
+  } catch (error) {
+    const screenshot = resolve(
+      artifactDir,
+      `account-${scenario.name}-failure.png`,
+    );
+    await page
+      .screenshot({ path: screenshot, fullPage: true })
+      .catch(() => undefined);
+    throw new Error(
+      `${scenario.name} account security journey failed. Screenshot: ${screenshot}\n${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }`,
+    );
   } finally {
     await context.close();
   }
@@ -845,6 +1120,7 @@ async function createSessionFromUi(page, scenario, values) {
       name: `New Session - ${values.projectName}`,
     });
     await dialog.waitFor();
+    await waitForNewSessionFormReady(dialog);
     await dialog
       .locator('input[placeholder="Optional task name"]')
       .fill(values.title);
@@ -884,6 +1160,7 @@ async function createSessionFromUi(page, scenario, values) {
     name: `New Session - ${values.projectName}`,
   });
   await dialog.waitFor();
+  await waitForNewSessionFormReady(dialog);
   await dialog
     .locator('input[placeholder="Optional task name"]')
     .fill(values.title);
@@ -909,6 +1186,23 @@ async function createSessionFromUi(page, scenario, values) {
         session.title === values.title,
     );
   }, `session ${values.title} to be persisted`);
+}
+
+async function waitForNewSessionFormReady(dialog) {
+  await waitFor(async () => {
+    const loading = await dialog
+      .locator(".new-session-loading")
+      .isVisible()
+      .catch(() => false);
+    if (loading) {
+      return false;
+    }
+    return dialog
+      .locator("label.field:visible", { hasText: "Execution" })
+      .locator("select")
+      .isVisible()
+      .catch(() => false);
+  }, "new session form to finish loading");
 }
 
 async function assertMobileConnectionSheet(page) {
@@ -1071,7 +1365,7 @@ async function ensureRunnerOnline() {
       "--server",
       wsUrl.toString(),
       "--token",
-      token,
+      runnerToken,
       "--runner-id",
       runnerId,
       "--workspace",
@@ -1081,7 +1375,7 @@ async function ensureRunnerOnline() {
     ],
     {
       ROAM_RUNNER_SERVER: wsUrl.toString(),
-      ROAM_RUNNER_TOKEN: token,
+      ROAM_RUNNER_TOKEN: runnerToken,
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_PROFILE: "trusted",
@@ -1261,14 +1555,21 @@ async function waitForHttp(path) {
 }
 
 async function requestJson(path, init = {}) {
+  const method = init.method ?? "GET";
+  const mutating = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
   const response = await fetch(new URL(path, baseUrl), {
     ...init,
     headers: {
-      authorization: `Bearer ${token}`,
       "content-type": "application/json",
+      ...(cookieHeader ? { cookie: cookieHeader } : {}),
+      ...(mutating ? { origin: baseUrl } : {}),
       ...init.headers,
     },
   });
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) {
+    cookieHeader = setCookie.split(";")[0] ?? cookieHeader;
+  }
   const text = await response.text();
   const payload = text.length > 0 ? JSON.parse(text) : {};
   if (!response.ok) {

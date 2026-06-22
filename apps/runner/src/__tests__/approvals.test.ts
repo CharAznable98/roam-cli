@@ -40,12 +40,7 @@ describe("ApprovalTracker", () => {
       settled = true;
     });
 
-    tracker.resolve(
-      approval.approval.id,
-      true,
-      "2026-06-21T00:00:00.000Z",
-      "sig",
-    );
+    tracker.resolve(approval.approval.id, true);
     await Promise.resolve();
 
     expect(events).toContainEqual({
@@ -60,8 +55,8 @@ describe("ApprovalTracker", () => {
     await expect(decisionPromise).resolves.toEqual({
       approvalId: approval.approval.id,
       approved: true,
-      signedAt: "2026-06-21T00:00:00.000Z",
-      signature: "sig",
+      signedAt: expect.any(String),
+      signature: "",
     });
     expect(settled).toBe(true);
   });

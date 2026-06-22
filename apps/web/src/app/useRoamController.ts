@@ -1,5 +1,7 @@
 import type {
+  AccountSecurityState,
   AgentKind,
+  ApiChangePassword,
   ApiAgentSkillList,
   ApiGitBlameQuery,
   ApiGitCommit,
@@ -61,15 +63,23 @@ export type StreamReconnectInfo = {
   nextAttemptAt?: number;
 };
 
+export type AuthViewState =
+  | "checking"
+  | "setup_required"
+  | "login"
+  | "authenticated";
+
 export function useRoamController() {
   const [state, dispatch] = useReducer(
     appReducer,
     initialAppState,
     hydrateInitialSelection,
   );
-  const [token, setToken] = useState(
-    () => localStorage.getItem("roamcli.token") ?? "dev-token",
-  );
+  const [authView, setAuthView] = useState<AuthViewState>("checking");
+  const [authEpoch, setAuthEpoch] = useState(0);
+  const [accountSecurity, setAccountSecurity] = useState<
+    AccountSecurityState | undefined
+  >();
   const [streamReconnect, setStreamReconnect] = useState<StreamReconnectInfo>({
     mode: "connecting",
     attempt: 0,
@@ -84,8 +94,7 @@ export function useRoamController() {
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    localStorage.setItem("roamcli.token", token);
-    const api = createRoamApiClient({ token });
+    const api = createRoamApiClient();
     apiRef.current = api;
     let cancelled = false;
     let socketGeneration = 0;
@@ -98,6 +107,25 @@ export function useRoamController() {
     let latestNotificationRequestId = 0;
     let pendingBootstrapRequestId: number | undefined;
     let bootstrapReady = false;
+
+    function transitionToUnauthenticated(
+      nextView: Extract<AuthViewState, "setup_required" | "login"> = "login",
+      message?: string,
+    ) {
+      bootstrapReady = false;
+      pendingBootstrapRequestId = undefined;
+      streamRef.current?.close();
+      setAccountSecurity(undefined);
+      setAuthView(nextView);
+      dispatch({ type: "connectionChanged", status: "closed" });
+      if (message) {
+        dispatch({
+          type: "errorChanged",
+          title: "Session expired",
+          message,
+        });
+      }
+    }
 
     function loadRemoteState(failureMode: "bootstrap" | "notification") {
       const requestId = ++nextRemoteStateRequestId;
@@ -140,6 +168,13 @@ export function useRoamController() {
             return;
           }
           const message = errorMessage(loadError);
+          if (isAuthErrorMessage(message)) {
+            transitionToUnauthenticated(
+              authViewFromErrorMessage(message),
+              message,
+            );
+            return;
+          }
           if (isBootstrap) {
             if (requestId !== latestBootstrapRequestId) {
               return;
@@ -159,8 +194,6 @@ export function useRoamController() {
           });
         });
     }
-
-    loadRemoteState("bootstrap");
 
     function clearRetryTimer() {
       if (retryTimer) {
@@ -227,6 +260,13 @@ export function useRoamController() {
             }
             return;
           }
+          void api.fetchAuthStatus().then((auth) => {
+            if (!cancelled && auth.status !== "authenticated") {
+              transitionToUnauthenticated(
+                auth.status === "setup_required" ? "setup_required" : "login",
+              );
+            }
+          });
           scheduleReconnect();
         },
       );
@@ -244,14 +284,48 @@ export function useRoamController() {
       }
     }
 
+    void api
+      .fetchAuthStatus()
+      .then(async (auth) => {
+        if (cancelled) {
+          return;
+        }
+        if (auth.status === "setup_required") {
+          setAccountSecurity(undefined);
+          setAuthView("setup_required");
+          dispatch({ type: "connectionChanged", status: "closed" });
+          return;
+        }
+        if (auth.status === "unauthenticated") {
+          setAccountSecurity(undefined);
+          setAuthView("login");
+          dispatch({ type: "connectionChanged", status: "closed" });
+          return;
+        }
+        setAuthView("authenticated");
+        try {
+          setAccountSecurity(await api.fetchAccountSecurity());
+        } catch {
+          // The main bootstrap below will surface auth/API failures.
+        }
+        loadRemoteState("bootstrap");
+        connectStream();
+      })
+      .catch((authError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        const message = errorMessage(authError);
+        dispatch({ type: "bootstrapFailed", message });
+        setAuthView(authViewFromErrorMessage(message));
+      });
+
     reconnectStreamRef.current = () => {
       retryDelayMs = INITIAL_RECONNECT_DELAY_MS;
       retryAttempt = 0;
       loadRemoteState("bootstrap");
       connectStream();
     };
-    connectStream();
-
     return () => {
       cancelled = true;
       reconnectStreamRef.current = undefined;
@@ -261,7 +335,86 @@ export function useRoamController() {
         streamRef.current = undefined;
       }
     };
-  }, [token]);
+  }, [authEpoch]);
+
+  const refreshAuth = useCallback(() => {
+    setAuthView("checking");
+    setAuthEpoch((epoch) => epoch + 1);
+  }, []);
+
+  const setupOwner = useCallback(
+    async (input: { setupToken: string; password: string }) => {
+      const api = apiRef.current ?? createRoamApiClient();
+      apiRef.current = api;
+      const result = await api.setupOwner(input);
+      setAccountSecurity(result.account);
+      refreshAuth();
+    },
+    [refreshAuth],
+  );
+
+  const loginOwner = useCallback(
+    async (password: string) => {
+      const api = apiRef.current ?? createRoamApiClient();
+      apiRef.current = api;
+      const result = await api.login({ password });
+      setAccountSecurity(result.account);
+      refreshAuth();
+    },
+    [refreshAuth],
+  );
+
+  const logoutOwner = useCallback(async () => {
+    const api = apiRef.current;
+    if (api) {
+      await api.logout();
+    }
+    streamRef.current?.close();
+    setAccountSecurity(undefined);
+    setAuthView("login");
+    refreshAuth();
+  }, [refreshAuth]);
+
+  const logoutAllOwnerSessions = useCallback(async () => {
+    const api = apiRef.current;
+    if (!api) return;
+    await api.logoutAll();
+    streamRef.current?.close();
+    setAccountSecurity(undefined);
+    setAuthView("login");
+    refreshAuth();
+  }, [refreshAuth]);
+
+  const changeOwnerPassword = useCallback(
+    async (input: ApiChangePassword) => {
+      const api = apiRef.current;
+      if (!api) {
+        throw new Error("API client is not ready.");
+      }
+      await api.changePassword(input);
+      streamRef.current?.close();
+      setAccountSecurity(undefined);
+      setAuthView("login");
+      refreshAuth();
+    },
+    [refreshAuth],
+  );
+
+  const regenerateRunnerToken = useCallback(async () => {
+    const api = apiRef.current;
+    if (!api) {
+      throw new Error("API client is not ready.");
+    }
+    setAccountSecurity(await api.regenerateRunnerToken());
+  }, []);
+
+  const refreshAccountSecurity = useCallback(async () => {
+    const api = apiRef.current;
+    if (!api) {
+      throw new Error("API client is not ready.");
+    }
+    setAccountSecurity(await api.fetchAccountSecurity());
+  }, []);
 
   const reconnectStream = () => reconnectStreamRef.current?.();
 
@@ -573,7 +726,7 @@ export function useRoamController() {
         type: "errorChanged",
         title: "Event stream is disconnected",
         message:
-          "Message was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
+          "Message was not sent. Reload the page, then check that your login session and /v1/stream are connected.",
       });
       throw new Error("Event stream is disconnected.");
     }
@@ -704,7 +857,7 @@ export function useRoamController() {
         type: "errorChanged",
         title: "Event stream is disconnected",
         message:
-          "Control signal was not sent. Reload the page, then check that /v1/stream is connected with the current token.",
+          "Control signal was not sent. Reload the page, then check that your login session and /v1/stream are connected.",
       });
     }
   };
@@ -901,13 +1054,6 @@ export function useRoamController() {
         return await api.fetchGitStatus(context);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        if (!isNonGitRepositoryError(message)) {
-          dispatch({
-            type: "errorChanged",
-            title: "Git status failed",
-            message,
-          });
-        }
         throw new Error(message);
       }
     },
@@ -921,7 +1067,6 @@ export function useRoamController() {
         return await api.fetchGitDiff(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({ type: "errorChanged", title: "Git diff failed", message });
         throw new Error(message);
       }
     },
@@ -935,7 +1080,6 @@ export function useRoamController() {
         return await api.fetchGitBlame(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({ type: "errorChanged", title: "Git blame failed", message });
         throw new Error(message);
       }
     },
@@ -949,11 +1093,6 @@ export function useRoamController() {
         return await api.fetchGitHistory(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git history failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -967,11 +1106,6 @@ export function useRoamController() {
         return await api.fetchGitBranches(context);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git branches failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -991,22 +1125,9 @@ export function useRoamController() {
       run: () => Promise<Awaited<ReturnType<RoamApiClient["stageGitPaths"]>>>,
     ) => {
       try {
-        const job = await run();
-        if (job.status === "failed") {
-          dispatch({
-            type: "errorChanged",
-            title: "Git operation failed",
-            message: job.errorSummary ?? `${job.operation} failed`,
-          });
-        }
-        return job;
+        return await run();
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git operation failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -1083,10 +1204,17 @@ export function useRoamController() {
 
   return {
     state,
-    token,
-    setToken,
+    authView,
+    accountSecurity,
     streamReconnect,
     reconnectStream,
+    setupOwner,
+    loginOwner,
+    logoutOwner,
+    logoutAllOwnerSessions,
+    changeOwnerPassword,
+    regenerateRunnerToken,
+    refreshAccountSecurity,
     sessionStatusCheckState,
     checkSelectedSessionStatus,
     dispatch,
@@ -1101,7 +1229,7 @@ export function useRoamController() {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
-    runnerCommand: buildRunnerCommand(token),
+    runnerCommand: buildRunnerCommand(accountSecurity?.runnerToken ?? ""),
     selectRunner,
     selectProject,
     createProject,
@@ -1143,8 +1271,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isNonGitRepositoryError(message: string): boolean {
-  return message.toLowerCase().includes("not a git repository");
+function isAuthErrorMessage(message: string): boolean {
+  return (
+    message.includes("401") ||
+    message.includes("unauthorized") ||
+    message.includes("setup_required")
+  );
+}
+
+function authViewFromErrorMessage(
+  message: string,
+): Extract<AuthViewState, "setup_required" | "login"> {
+  return message.includes("setup_required") ? "setup_required" : "login";
 }
 
 function hydrateInitialSelection(state: AppState): AppState {

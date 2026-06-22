@@ -172,7 +172,10 @@ export class SessionCommandService {
     }
   }
 
-  async handleClientCommand(command: ClientCommand): Promise<void> {
+  async handleClientCommand(
+    command: ClientCommand,
+    resolverSessionId?: string,
+  ): Promise<void> {
     if (command.type === "createSession") {
       const result = await this.createAndStartSession(command);
       if (!result.ok) {
@@ -193,11 +196,11 @@ export class SessionCommandService {
       const result = this.approvals.respondToApproval(
         command.approvalId,
         command,
+        resolverSessionId,
       );
       if (!result.ok) {
         const messages: Record<string, string> = {
           approval_not_found: "approval not found",
-          invalid_signature: "invalid approval signature",
           approval_already_resolved: "approval already resolved",
           runner_offline: "runner is offline",
         };

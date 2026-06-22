@@ -37,17 +37,18 @@ pnpm build
 ```bash
 HOST=127.0.0.1 \
 PORT=8787 \
-ROAMCLI_AUTH_TOKEN=dev-token \
 ROAMCLI_DATA_DIR=.roamcli-server \
 pnpm --filter @roamcli/server dev
 ```
+
+首次启动时 Server 会在日志中打印 setup token，并写入 `.roamcli-server/setup-token.txt`。打开 Web UI，输入 setup token 并设置 owner 密码。完成后在 Web UI 的 **Account & Security** 中复制 Runner token 或完整 Runner 命令。
 
 另开一个 shell，在你希望暴露为 Runner workspace 的目录下启动 Runner：
 
 ```bash
 pnpm --filter @roamcli/runner dev \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token dev-token \
+  --token <runner-token-from-account-security> \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted
@@ -58,8 +59,6 @@ pnpm --filter @roamcli/runner dev \
 ```text
 http://127.0.0.1:8787
 ```
-
-如果 Web UI 的 token 输入框没有自动填充，请输入 `dev-token`。
 
 ## 使用 RoamCli
 
@@ -73,24 +72,25 @@ http://127.0.0.1:8787
 
 ## Server 配置
 
-| 变量 | 说明 | 默认值 |
-| --- | --- | --- |
-| `HOST` | Server 绑定地址。 | `127.0.0.1` |
-| `PORT` | Server 绑定端口。 | `3000` |
-| `ROAMCLI_AUTH_TOKEN` | HTTP 和 WebSocket 访问使用的 Bearer token。 | 未设置 |
-| `ROAMCLI_DATA_DIR` | SQLite 数据和本地 artifacts 目录。 | `.roamcli-server` |
-| `ROAMCLI_WEB_DIST` | 构建后的 Web UI 资源路径。 | 自动查找 `apps/web/dist` 或 `../web/dist` |
+| 变量                    | 说明                                                                                                               | 默认值                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| `HOST`                  | Server 绑定地址。                                                                                                  | `127.0.0.1`                               |
+| `PORT`                  | Server 绑定端口。                                                                                                  | `3000`                                    |
+| `ROAMCLI_DATA_DIR`      | SQLite 数据和本地 artifacts 目录。                                                                                 | `.roamcli-server`                         |
+| `ROAMCLI_WEB_DIST`      | 构建后的 Web UI 资源路径。                                                                                         | 自动查找 `apps/web/dist` 或 `../web/dist` |
+| `ROAMCLI_PUBLIC_ORIGIN` | 允许执行写操作的浏览器公开 origin，例如 `https://roam.example.com`。                                               | 根据请求 host 推断                        |
+| `ROAMCLI_RESET_OWNER`   | 启动时设为 `1` 会清空 owner 凭据和 Web session，并生成新的 setup token。Runner token 和项目/session 数据保持不变。 | 未设置                                    |
 
 ## Runner 配置
 
-| CLI 参数 | 环境变量 | 说明 |
-| --- | --- | --- |
-| `--server` | `ROAM_RUNNER_SERVER` | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。 |
-| `--token` | `ROAM_RUNNER_TOKEN` | 连接 Server 时使用的 Bearer token。 |
-| `--runner-id` | `ROAM_RUNNER_ID` | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。 |
-| `--workspace` | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。 |
-| `--profile` | `ROAM_RUNNER_PROFILE` | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。 |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 要加载的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。 |
+| CLI 参数         | 环境变量                | 说明                                                                   |
+| ---------------- | ----------------------- | ---------------------------------------------------------------------- |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。       |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                             |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                      |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。           |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。 |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 要加载的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。            |
 
 ## Agent 插件
 
@@ -120,7 +120,7 @@ compose 配置会把 Server 暴露在 `8787` 端口，并把 Server 数据持久
 ```bash
 pnpm --filter @roamcli/runner dev \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token dev-token \
+  --token <runner-token-from-account-security> \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted

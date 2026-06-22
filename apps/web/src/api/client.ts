@@ -1,6 +1,8 @@
 import type {
+  AccountSecurityState,
   AgentSkillListResult,
   AgentKind,
+  ApiChangePassword,
   ApiAgentSkillList,
   ApiCreateProject,
   ApiCreateSession,
@@ -14,8 +16,11 @@ import type {
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
   ApiPathSearch,
+  ApiLogin,
+  ApiSetupOwner,
   ApiUpdateProject,
   ApiUpdateSession,
+  AuthStatus,
   Approval,
   ClientCommand,
   DirectoryCreateResult,
@@ -28,7 +33,7 @@ import type {
   GitCommitPage,
   GitFileDiff,
   GitJob,
-  GitStatus,
+  GitStatusResult,
   ImageAttachmentUpload,
   Message,
   MessageAttachment,
@@ -44,12 +49,25 @@ import { toUiMessage } from "../features/conversation/model";
 
 export interface RoamApiOptions {
   baseUrl?: string;
-  token?: string;
   fetchImpl?: typeof fetch;
   WebSocketImpl?: typeof WebSocket;
 }
 
 export interface RoamApiClient {
+  fetchAuthStatus(): Promise<AuthStatus>;
+  setupOwner(input: ApiSetupOwner): Promise<{
+    auth: AuthStatus;
+    account: AccountSecurityState;
+  }>;
+  login(input: ApiLogin): Promise<{
+    auth: AuthStatus;
+    account: AccountSecurityState;
+  }>;
+  logout(): Promise<void>;
+  logoutAll(): Promise<void>;
+  fetchAccountSecurity(): Promise<AccountSecurityState>;
+  changePassword(input: ApiChangePassword): Promise<void>;
+  regenerateRunnerToken(): Promise<AccountSecurityState>;
   loadInitialState(): Promise<InitialRemoteState>;
   fetchRunnerDirectoryTree(
     runnerId: string,
@@ -102,7 +120,7 @@ export interface RoamApiClient {
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
   listAgentSkills(input: ApiAgentSkillList): Promise<AgentSkillListResult>;
   searchWorkspacePaths(input: ApiPathSearch): Promise<PathSearchResult>;
-  fetchGitStatus(context: ApiGitContext): Promise<GitStatus>;
+  fetchGitStatus(context: ApiGitContext): Promise<GitStatusResult>;
   fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
   fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
   fetchGitHistory(query: ApiGitHistoryQuery): Promise<GitCommitPage>;
@@ -189,7 +207,7 @@ interface PathSearchResponse {
 }
 
 interface GitStatusResponse {
-  result: GitStatus;
+  result: GitStatusResult;
 }
 
 interface GitDiffResponse {
@@ -216,19 +234,28 @@ interface GitJobsResponse {
   jobs: GitJob[];
 }
 
+interface AuthStatusResponse {
+  auth: AuthStatus;
+}
+
+interface AuthAccountResponse {
+  auth: AuthStatus;
+  account: AccountSecurityState;
+}
+
+interface AccountSecurityResponse {
+  account: AccountSecurityState;
+}
+
 export function createRoamApiClient(
   options: RoamApiOptions = {},
 ): RoamApiClient {
   const baseUrl = options.baseUrl ?? window.location.origin;
-  const token = options.token;
   const fetchImpl = options.fetchImpl ?? fetch;
   const WebSocketImpl = options.WebSocketImpl ?? globalThis.WebSocket;
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    if (token) {
-      headers.set("authorization", `Bearer ${token}`);
-    }
     if (init.body !== undefined && !headers.has("content-type")) {
       headers.set("content-type", "application/json");
     }
@@ -236,6 +263,7 @@ export function createRoamApiClient(
     const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
       headers,
+      credentials: init.credentials ?? "same-origin",
     });
     if (!response.ok) {
       const body = await response.text();
@@ -257,11 +285,9 @@ export function createRoamApiClient(
   }
 
   async function requestBlob(path: string): Promise<Blob> {
-    const headers = new Headers();
-    if (token) {
-      headers.set("authorization", `Bearer ${token}`);
-    }
-    const response = await fetchImpl(`${baseUrl}${path}`, { headers });
+    const response = await fetchImpl(`${baseUrl}${path}`, {
+      credentials: "same-origin",
+    });
     if (!response.ok) {
       throw new Error("Attachment is unavailable.");
     }
@@ -277,6 +303,57 @@ export function createRoamApiClient(
   }
 
   return {
+    async fetchAuthStatus() {
+      const { auth } = await request<AuthStatusResponse>("/v1/auth/status");
+      return auth;
+    },
+
+    async setupOwner(input) {
+      return request<AuthAccountResponse>("/v1/auth/setup", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+
+    async login(input) {
+      return request<AuthAccountResponse>("/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+
+    async logout() {
+      await request<void>("/v1/auth/logout", { method: "POST" });
+    },
+
+    async logoutAll() {
+      await request<void>("/v1/auth/logout-all", { method: "POST" });
+    },
+
+    async fetchAccountSecurity() {
+      const { account } =
+        await request<AccountSecurityResponse>("/v1/auth/account");
+      return account;
+    },
+
+    async changePassword(input) {
+      await request<void>("/v1/auth/password", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+
+    async regenerateRunnerToken() {
+      const { account } = await request<AccountSecurityResponse>(
+        "/v1/auth/runner-token/regenerate",
+        {
+          method: "POST",
+          body: JSON.stringify({ confirm: true }),
+        },
+      );
+      return account;
+    },
+
     async loadInitialState() {
       const [{ runners }, { projects }, { sessions }] = await Promise.all([
         request<RunnersResponse>("/v1/runners"),
@@ -476,18 +553,11 @@ export function createRoamApiClient(
     },
 
     async applyPatch(sessionId, patch) {
-      const signedAt = new Date().toISOString();
-      const signature = await signApprovalLike(
-        token,
-        `patch:${sessionId}:${await sha256Hex(patch)}`,
-        true,
-        signedAt,
-      );
       const { result } = await request<PatchApplyResponse>(
         `/v1/sessions/${encodeURIComponent(sessionId)}/patches/apply`,
         {
           method: "POST",
-          body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
+          body: JSON.stringify({ patch, strip: 1 }),
         },
       );
       return result;
@@ -622,18 +692,11 @@ export function createRoamApiClient(
     },
 
     async resolveApproval(approvalId, approved) {
-      const signedAt = new Date().toISOString();
-      const signature = await signApprovalLike(
-        token,
-        approvalId,
-        approved,
-        signedAt,
-      );
       const { approval } = await request<ApprovalResponse>(
         `/v1/approvals/${approvalId}`,
         {
           method: "POST",
-          body: JSON.stringify({ approved, signedAt, signature }),
+          body: JSON.stringify({ approved }),
         },
       );
       return approval;
@@ -646,9 +709,6 @@ export function createRoamApiClient(
       }
       const url = new URL("/v1/stream", baseUrl);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      if (token) {
-        url.searchParams.set("token", token);
-      }
       const socket = new WebSocketImpl(url);
       socket.addEventListener("open", () => onStatus?.("open"));
       socket.addEventListener("close", () => onStatus?.("closed"));
@@ -773,51 +833,4 @@ function isHtmlResponse(contentType: string, body: string): boolean {
     /^\s*<!doctype html/i.test(body) ||
     /^\s*<html/i.test(body)
   );
-}
-
-async function signApprovalLike(
-  secret: string | undefined,
-  approvalId: string,
-  approved: boolean,
-  signedAt: string,
-): Promise<string> {
-  if (!secret) {
-    throw new Error("API token is required to sign approvals");
-  }
-  const key = await globalThis.crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await globalThis.crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(
-      `${approvalId}.${approved ? "1" : "0"}.${signedAt}`,
-    ),
-  );
-  return base64Url(new Uint8Array(signature));
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
 }

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { createHash, createHmac } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import net from "node:net";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const token = process.env.ROAMCLI_SMOKE_TOKEN ?? "dev-token";
+const ownerPassword =
+  process.env.ROAMCLI_SMOKE_PASSWORD ?? "roamcli-smoke-password";
 const workspace = resolve(process.env.ROAMCLI_SMOKE_WORKSPACE ?? repoRoot);
 const suppliedBaseUrl = process.env.ROAMCLI_SMOKE_BASE_URL;
 const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? 30_000);
@@ -29,13 +29,15 @@ const tempDirs = [];
 const tempPaths = [];
 
 let baseUrl = suppliedBaseUrl?.replace(/\/$/, "");
+let cookieHeader = "";
+let runnerToken = "";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`Usage: pnpm smoke:e2e
 
 Environment:
   ROAMCLI_SMOKE_BASE_URL        Connect to an existing server instead of starting one.
-  ROAMCLI_SMOKE_TOKEN           Bearer token. Default: dev-token.
+  ROAMCLI_SMOKE_PASSWORD        Owner password for login/setup. Default: roamcli-smoke-password.
   ROAMCLI_SMOKE_RUNNER_ID       Runner id to use or start. Default: smoke-<pid>.
   ROAMCLI_SMOKE_WORKSPACE       Workspace exposed to the runner. Default: repo root.
   ROAMCLI_SMOKE_SKIP_BUILD=1    Skip shared package prebuild.
@@ -43,12 +45,6 @@ Environment:
   ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0
                                 Skip patch apply assertion.`);
   process.exit(0);
-}
-
-if (typeof WebSocket !== "function") {
-  fail(
-    "This Node.js runtime does not provide a global WebSocket implementation.",
-  );
 }
 
 process.on("SIGINT", () => {
@@ -106,68 +102,108 @@ async function runSmoke() {
       {
         HOST: "127.0.0.1",
         PORT: String(port),
-        ROAMCLI_AUTH_TOKEN: token,
         ROAMCLI_DATA_DIR: dataDir,
         ROAMCLI_RUNNER_RPC_TIMEOUT_MS: "10000",
       },
     );
-    await waitForHttp("/v1/runners");
+    await waitForHttp("/v1/auth/status");
+    await authenticate({ setupDataDir: dataDir });
     pass(`server online at ${baseUrl}`);
   } else {
-    await waitForHttp("/v1/runners");
+    await waitForHttp("/v1/auth/status");
+    await authenticate({});
     pass(`connected to existing server at ${baseUrl}`);
   }
 
-  const stream = await connectStream();
-  try {
-    const runner = await ensureRunnerOnline();
-    pass(`runner online: ${runner.runnerId}`);
+  const runner = await ensureRunnerOnline();
+  pass(`runner online: ${runner.runnerId}`);
 
-    const project = await createProject(runner.runnerId);
-    pass(`project created: ${project.id}`);
+  const project = await createProject(runner.runnerId);
+  pass(`project created: ${project.id}`);
 
-    const prompt = `roamcli smoke prompt ${Date.now()}`;
-    const session = await createSession(project.id, prompt);
-    pass(`session created: ${session.id}`);
+  const prompt = `roamcli smoke prompt ${Date.now()}`;
+  const session = await createSession(project.id, prompt);
+  pass(`session created: ${session.id}`);
 
-    await waitForPersistedAssistantMessage(session.id, prompt);
-    pass("assistant message persisted");
+  await waitForPersistedAssistantMessage(session.id, prompt);
+  pass("assistant message persisted");
 
-    await imageAttachmentAssertionEntry(project.id, runner);
+  await imageAttachmentAssertionEntry(project.id, runner);
 
-    const tree = await requestJson(
-      `/v1/sessions/${session.id}/files?path=.&depth=2`,
-    );
-    const root = tree.result?.root;
-    assert(
-      root?.type === "directory",
-      "file tree response did not include a directory root",
-    );
-    assert(
-      hasTreePath(root, "package.json") || hasTreePath(root, "apps"),
-      "file tree did not include expected repo entries",
-    );
-    pass("file tree returned from runner");
+  const tree = await requestJson(
+    `/v1/sessions/${session.id}/files?path=.&depth=2`,
+  );
+  const root = tree.result?.root;
+  assert(
+    root?.type === "directory",
+    "file tree response did not include a directory root",
+  );
+  assert(
+    hasTreePath(root, "package.json") || hasTreePath(root, "apps"),
+    "file tree did not include expected repo entries",
+  );
+  pass("file tree returned from runner");
 
-    const content = await requestJson(
-      `/v1/sessions/${session.id}/files/content?path=package.json&maxBytes=8192`,
-    );
-    assert(
-      content.result?.content?.includes('"name": "roamcli"'),
-      "file content did not include root package.json contents",
-    );
-    assert(
-      content.result?.encoding === "utf8",
-      "file content response did not report utf8 encoding",
-    );
-    pass("file content returned from runner");
+  const content = await requestJson(
+    `/v1/sessions/${session.id}/files/content?path=package.json&maxBytes=8192`,
+  );
+  assert(
+    content.result?.content?.includes('"name": "roamcli"'),
+    "file content did not include root package.json contents",
+  );
+  assert(
+    content.result?.encoding === "utf8",
+    "file content response did not report utf8 encoding",
+  );
+  pass("file content returned from runner");
 
-    await fileSaveAssertionEntry(session.id);
+  await fileSaveAssertionEntry(session.id);
 
-    await patchApplyAssertionEntry(session.id);
-  } finally {
-    stream.close();
+  await patchApplyAssertionEntry(session.id);
+}
+
+async function authenticate({ setupDataDir }) {
+  const statusPayload = await requestJson("/v1/auth/status");
+  const status = statusPayload.auth?.status;
+  if (status === "setup_required") {
+    if (!setupDataDir) {
+      fail(
+        "Server requires setup. Provide ROAMCLI_SMOKE_PASSWORD and run against a server whose setup token is available locally.",
+      );
+    }
+    const setupToken = await waitForSetupToken(setupDataDir);
+    await requestJson("/v1/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ setupToken, password: ownerPassword }),
+    });
+    pass("owner setup completed");
+  } else if (status === "unauthenticated") {
+    await requestJson("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password: ownerPassword }),
+    });
+    pass("owner login completed");
   }
+
+  const accountPayload = await requestJson("/v1/auth/account");
+  runnerToken = accountPayload.account?.runnerToken ?? "";
+  assert(
+    runnerToken.length > 0,
+    "account security state did not include a runner token",
+  );
+}
+
+async function waitForSetupToken(dataDir) {
+  return waitFor(async () => {
+    try {
+      const value = (
+        await readFile(resolve(dataDir, "setup-token.txt"), "utf8")
+      ).trim();
+      return value || undefined;
+    } catch {
+      return undefined;
+    }
+  }, "setup token file");
 }
 
 async function ensureRunnerOnline() {
@@ -199,7 +235,7 @@ async function ensureRunnerOnline() {
       "--server",
       wsUrl.toString(),
       "--token",
-      token,
+      runnerToken,
       "--runner-id",
       runnerId,
       "--workspace",
@@ -209,7 +245,7 @@ async function ensureRunnerOnline() {
     ],
     {
       ROAM_RUNNER_SERVER: wsUrl.toString(),
-      ROAM_RUNNER_TOKEN: token,
+      ROAM_RUNNER_TOKEN: runnerToken,
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_PROFILE: "trusted",
@@ -448,33 +484,9 @@ async function patchApplyAssertionEntry(sessionId) {
     `+${newValue}`,
     "",
   ].join("\n");
-  const invalidSignature = await requestRaw(
-    `/v1/sessions/${sessionId}/patches/apply`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        patch,
-        strip: 1,
-        signedAt: new Date().toISOString(),
-        signature: "not-valid",
-      }),
-    },
-  );
-  assert(
-    invalidSignature.status === 403 &&
-      invalidSignature.payload?.error === "invalid_signature",
-    `invalid patch signature was not rejected: ${JSON.stringify(invalidSignature)}`,
-  );
-  pass("invalid patch apply signature rejected");
-  const signedAt = new Date().toISOString();
-  const signature = signApprovalLike(
-    `patch:${sessionId}:${sha256Hex(patch)}`,
-    true,
-    signedAt,
-  );
   const payload = await requestJson(`/v1/sessions/${sessionId}/patches/apply`, {
     method: "POST",
-    body: JSON.stringify({ patch, strip: 1, signedAt, signature }),
+    body: JSON.stringify({ patch, strip: 1 }),
   });
   assert(
     payload.result?.applied === true,
@@ -491,7 +503,7 @@ async function patchApplyAssertionEntry(sessionId) {
     content.result?.content === `${newValue}\n`,
     "patched file content was not returned by runner",
   );
-  pass("signed patch apply changed a real workspace file");
+  pass("owner-authorized patch apply changed a real workspace file");
 }
 
 async function fileSaveAssertionEntry(sessionId) {
@@ -523,71 +535,6 @@ async function fileSaveAssertionEntry(sessionId) {
     "saved file content was not returned by runner",
   );
   pass("file edit/save changed a real workspace file");
-}
-
-async function connectStream() {
-  const url = new URL("/v1/stream", baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("token", token);
-  const socket = new WebSocket(url.toString());
-  socket.__events = [];
-  socket.addEventListener("message", (message) => {
-    try {
-      socket.__events.push(JSON.parse(message.data));
-    } catch {
-      socket.__events.push({ type: "unparseable", raw: message.data });
-    }
-  });
-  await new Promise((resolveOpen, rejectOpen) => {
-    const timer = setTimeout(
-      () => rejectOpen(new Error(`Timed out opening stream ${url}`)),
-      timeoutMs,
-    );
-    socket.addEventListener(
-      "open",
-      () => {
-        clearTimeout(timer);
-        resolveOpen();
-      },
-      { once: true },
-    );
-    socket.addEventListener(
-      "error",
-      () => {
-        clearTimeout(timer);
-        rejectOpen(new Error(`Failed to open stream ${url}`));
-      },
-      { once: true },
-    );
-  });
-  return socket;
-}
-
-async function waitForStreamEvent(socket, predicate) {
-  const existing = socket.__events.find(predicate);
-  if (existing !== undefined) {
-    return existing;
-  }
-  return new Promise((resolveEvent, rejectEvent) => {
-    const timer = setTimeout(() => {
-      socket.removeEventListener("message", onMessage);
-      rejectEvent(new Error("Timed out waiting for stream event"));
-    }, timeoutMs);
-    function onMessage(message) {
-      let event;
-      try {
-        event = JSON.parse(message.data);
-      } catch {
-        return;
-      }
-      if (predicate(event)) {
-        clearTimeout(timer);
-        socket.removeEventListener("message", onMessage);
-        resolveEvent(event);
-      }
-    }
-    socket.addEventListener("message", onMessage);
-  });
 }
 
 async function waitForHttp(path) {
@@ -630,14 +577,21 @@ async function requestJson(path, init = {}) {
 }
 
 async function requestRaw(path, init = {}) {
+  const method = init.method ?? "GET";
+  const mutating = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
   const response = await fetch(new URL(path, baseUrl), {
     ...init,
     headers: {
-      authorization: `Bearer ${token}`,
       "content-type": "application/json",
+      ...(cookieHeader ? { cookie: cookieHeader } : {}),
+      ...(mutating ? { origin: baseUrl } : {}),
       ...init.headers,
     },
   });
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) {
+    cookieHeader = setCookie.split(";")[0] ?? cookieHeader;
+  }
   const text = await response.text();
   let payload;
   try {
@@ -755,14 +709,4 @@ function fail(message) {
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-}
-
-function sha256Hex(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function signApprovalLike(approvalId, approved, signedAt) {
-  return createHmac("sha256", token)
-    .update(`${approvalId}.${approved ? "1" : "0"}.${signedAt}`)
-    .digest("base64url");
 }

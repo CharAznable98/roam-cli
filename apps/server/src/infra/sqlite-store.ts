@@ -87,7 +87,8 @@ interface ApprovalRow {
   status: ApprovalStatus;
   requested_at: string;
   resolved_at: string | null;
-  client_signature: string | null;
+  resolved_by: "owner" | null;
+  resolver_session_id: string | null;
 }
 
 interface ArtifactRow {
@@ -123,9 +124,48 @@ interface GitJobRow {
   error_summary: string | null;
 }
 
+interface OwnerCredentialRow {
+  id: "owner";
+  password_record_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AuthSessionRow {
+  id: string;
+  token_hash: string;
+  created_at: string;
+  last_seen_at: string;
+  absolute_expires_at: string;
+  user_agent: string | null;
+  ip_hash: string | null;
+}
+
+interface AuthSettingRow {
+  key: string;
+  value: string;
+  updated_at: string;
+}
+
 export type StoredMessageAttachment = MessageAttachment & {
   runnerStoragePath: string;
 };
+
+export interface OwnerCredentialRecord {
+  passwordRecordJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthSessionRecord {
+  id: string;
+  tokenHash: string;
+  createdAt: string;
+  lastSeenAt: string;
+  absoluteExpiresAt: string;
+  userAgent?: string;
+  ipHash?: string;
+}
 
 export class ServerStore {
   readonly dbPath: string;
@@ -143,6 +183,118 @@ export class ServerStore {
   close(): void {
     this.closed = true;
     this.db.close();
+  }
+
+  getOwnerCredential(): OwnerCredentialRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM owner_credentials WHERE id = 'owner'")
+      .get() as OwnerCredentialRow | undefined;
+    return row
+      ? {
+          passwordRecordJson: row.password_record_json,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }
+      : undefined;
+  }
+
+  setOwnerCredential(passwordRecordJson: string, now: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO owner_credentials (id, password_record_json, created_at, updated_at)
+         VALUES ('owner', ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           password_record_json = excluded.password_record_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run(passwordRecordJson, now, now);
+  }
+
+  clearOwnerCredential(): void {
+    this.db.prepare("DELETE FROM owner_credentials WHERE id = 'owner'").run();
+  }
+
+  createAuthSession(session: AuthSessionRecord): AuthSessionRecord {
+    this.db
+      .prepare(
+        `INSERT INTO auth_sessions (id, token_hash, created_at, last_seen_at, absolute_expires_at, user_agent, ip_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        session.id,
+        session.tokenHash,
+        session.createdAt,
+        session.lastSeenAt,
+        session.absoluteExpiresAt,
+        session.userAgent ?? null,
+        session.ipHash ?? null,
+      );
+    return session;
+  }
+
+  getAuthSessionByTokenHash(tokenHash: string): AuthSessionRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM auth_sessions WHERE token_hash = ?")
+      .get(tokenHash) as AuthSessionRow | undefined;
+    return row ? toAuthSession(row) : undefined;
+  }
+
+  getAuthSession(id: string): AuthSessionRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM auth_sessions WHERE id = ?")
+      .get(id) as AuthSessionRow | undefined;
+    return row ? toAuthSession(row) : undefined;
+  }
+
+  listAuthSessions(): AuthSessionRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM auth_sessions ORDER BY last_seen_at DESC")
+      .all() as unknown as AuthSessionRow[];
+    return rows.map(toAuthSession);
+  }
+
+  touchAuthSession(id: string, lastSeenAt: string): void {
+    this.db
+      .prepare("UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?")
+      .run(lastSeenAt, id);
+  }
+
+  deleteAuthSession(id: string): void {
+    this.db.prepare("DELETE FROM auth_sessions WHERE id = ?").run(id);
+  }
+
+  clearAuthSessions(): string[] {
+    const ids = this.listAuthSessions().map((session) => session.id);
+    this.db.prepare("DELETE FROM auth_sessions").run();
+    return ids;
+  }
+
+  getAuthSetting(key: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM auth_settings WHERE key = ?")
+      .get(key) as AuthSettingRow | undefined;
+    return row?.value;
+  }
+
+  setAuthSetting(key: string, value: string, updatedAt: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO auth_settings (key, value, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = excluded.updated_at`,
+      )
+      .run(key, value, updatedAt);
+  }
+
+  deleteAuthSetting(key: string): void {
+    this.db.prepare("DELETE FROM auth_settings WHERE key = ?").run(key);
+  }
+
+  clearSetupToken(): void {
+    this.deleteAuthSetting("setup_token_hash");
+    this.deleteAuthSetting("setup_token_created_at");
   }
 
   createProject(project: Project): Project {
@@ -504,12 +656,13 @@ export class ServerStore {
   upsertApproval(approval: Approval): Approval {
     this.db
       .prepare(
-        `INSERT INTO approvals (id, session_id, runner_id, kind, summary, payload_json, status, requested_at, resolved_at, client_signature)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO approvals (id, session_id, runner_id, kind, summary, payload_json, status, requested_at, resolved_at, resolved_by, resolver_session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status,
            resolved_at = excluded.resolved_at,
-           client_signature = excluded.client_signature,
+           resolved_by = excluded.resolved_by,
+           resolver_session_id = excluded.resolver_session_id,
            payload_json = excluded.payload_json`,
       )
       .run(
@@ -522,7 +675,8 @@ export class ServerStore {
         approval.status,
         approval.requestedAt,
         approval.resolvedAt ?? null,
-        approval.clientSignature ?? null,
+        approval.resolvedBy ?? null,
+        approval.resolverSessionId ?? null,
       );
     return approval;
   }
@@ -734,7 +888,8 @@ export class ServerStore {
         status TEXT NOT NULL,
         requested_at TEXT NOT NULL,
         resolved_at TEXT,
-        client_signature TEXT,
+        resolved_by TEXT,
+        resolver_session_id TEXT,
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
 
@@ -773,6 +928,29 @@ export class ServerStore {
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE SET NULL
       );
+
+      CREATE TABLE IF NOT EXISTS owner_credentials (
+        id TEXT PRIMARY KEY,
+        password_record_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        absolute_expires_at TEXT NOT NULL,
+        user_agent TEXT,
+        ip_hash TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     this.addColumnIfMissing("sessions", "project_id", "TEXT");
     this.addColumnIfMissing(
@@ -788,7 +966,8 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
-    this.discardLegacySessionsWithoutProjects();
+    this.addColumnIfMissing("approvals", "resolved_by", "TEXT");
+    this.addColumnIfMissing("approvals", "resolver_session_id", "TEXT");
   }
 
   private addColumnIfMissing(
@@ -804,9 +983,6 @@ export class ServerStore {
     }
   }
 
-  private discardLegacySessionsWithoutProjects(): void {
-    this.db.prepare("DELETE FROM sessions WHERE project_id IS NULL").run();
-  }
 }
 
 function toProject(row: ProjectRow): Project {
@@ -854,6 +1030,18 @@ function toMessage(row: MessageRow): Message {
     content: row.content,
     encrypted: Boolean(row.encrypted),
     createdAt: row.created_at,
+  };
+}
+
+function toAuthSession(row: AuthSessionRow): AuthSessionRecord {
+  return {
+    id: row.id,
+    tokenHash: row.token_hash,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    absoluteExpiresAt: row.absolute_expires_at,
+    ...(row.user_agent ? { userAgent: row.user_agent } : {}),
+    ...(row.ip_hash ? { ipHash: row.ip_hash } : {}),
   };
 }
 
@@ -907,7 +1095,10 @@ function toApproval(row: ApprovalRow): Approval {
     status: row.status,
     requestedAt: row.requested_at,
     ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {}),
-    ...(row.client_signature ? { clientSignature: row.client_signature } : {}),
+    ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
+    ...(row.resolver_session_id
+      ? { resolverSessionId: row.resolver_session_id }
+      : {}),
   };
 }
 

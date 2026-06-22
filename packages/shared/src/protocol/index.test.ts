@@ -9,6 +9,7 @@ import {
   PatchApplyResultSchema,
   ApiCreateSessionSchema,
   DEFAULT_MAX_IMAGE_BYTES,
+  RunnerAuthenticateSchema,
   RunnerCommandSchema,
   RunnerRegistrationSchema,
   RunnerEventSchema,
@@ -162,6 +163,34 @@ describe("protocol schemas", () => {
     ).toBe("session:updated");
   });
 
+  it("accepts legacy git status runner events without a result kind", () => {
+    const event = RunnerEventSchema.parse({
+      type: "gitStatusResult",
+      result: {
+        requestId: "git-status-1",
+        context: { kind: "project", projectId: "project-1" },
+        branch: "main",
+        detached: false,
+        headSha: "abc123",
+        upstream: "origin/main",
+        ahead: 0,
+        behind: 0,
+        clean: true,
+        unborn: false,
+        groups: [{ id: "changes", changes: [] }],
+      },
+    });
+
+    expect(event).toMatchObject({
+      type: "gitStatusResult",
+      result: {
+        kind: "repository",
+        requestId: "git-status-1",
+        clean: true,
+      },
+    });
+  });
+
   it("validates file rpc payloads", () => {
     expect(
       FileTreeResultSchema.parse({
@@ -221,21 +250,16 @@ describe("protocol schemas", () => {
     ).toBe(5);
   });
 
-  it("validates patch apply and signed approval payloads", () => {
-    const signedAt = nowIso();
+  it("validates patch apply, approval, and runner auth payloads", () => {
     expect(
       ApiApprovalResponseSchema.parse({
         approved: true,
-        signedAt,
-        signature: "client-signature",
-      }).signedAt,
-    ).toBe(signedAt);
+      }).approved,
+    ).toBe(true);
 
     expect(
       ApiApplyPatchSchema.parse({
         patch: "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
-        signedAt,
-        signature: "patch-signature",
       }).strip,
     ).toBe(1);
 
@@ -253,14 +277,19 @@ describe("protocol schemas", () => {
       requestId: "patch-1",
       sessionId: "s1",
       patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
-      signedAt,
-      signature: "patch-signature",
     });
     expect(command.type).toBe("applyPatch");
     if (command.type === "applyPatch") {
       expect(command.strip).toBe(1);
-      expect(command.signature).toBe("patch-signature");
     }
+
+    expect(
+      RunnerAuthenticateSchema.parse({
+        type: "runnerAuthenticate",
+        token: "runner-token",
+        runner: runnerRegistration(),
+      }).runner.runnerId,
+    ).toBe("runner-1");
 
     expect(
       PatchApplyResultSchema.parse({
@@ -314,5 +343,25 @@ function sessionRecord() {
     cwd: "/workspace",
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function runnerRegistration() {
+  return {
+    runnerId: "runner-1",
+    displayName: "Local",
+    hostname: "devbox",
+    workspaceRoot: "/workspace",
+    profile: "standard",
+    publicKey: "0123456789abcdef",
+    capabilities: [
+      {
+        kind: "codex",
+        label: "Codex",
+        command: "codex",
+        parser: "jsonl",
+      },
+    ],
+    version: "1.0.0",
   };
 }
