@@ -113,6 +113,61 @@ describe("server", () => {
     expect(otherSource.statusCode).toBe(200);
   });
 
+  it("keeps setup rate limits scoped to the failing source", async () => {
+    const setupDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-setup-rate-"),
+    );
+    const setupApp = await createServer({
+      dataDir: setupDataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setupToken = readSetupToken(setupDataDir);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await setupApp.inject({
+          method: "POST",
+          url: "/v1/auth/setup",
+          headers: { origin: TEST_ORIGIN },
+          remoteAddress: "203.0.113.10",
+          payload: {
+            setupToken: "wrong-token",
+            password: OWNER_PASSWORD,
+          },
+        } as any);
+        expect(response.statusCode).toBe(401);
+      }
+
+      const sameSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.10",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(sameSource.statusCode).toBe(429);
+
+      const otherSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.20",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(otherSource.statusCode).toBe(201);
+    } finally {
+      await setupApp.close();
+      fs.rmSync(setupDataDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not list persisted online runners without live hub sockets", async () => {
     app.roam.store.setRunnerOnline(
       runnerRegistration(),
@@ -149,6 +204,43 @@ describe("server", () => {
     expect(runnerMessages).toEqual([]);
 
     runner.close();
+  });
+
+  it("checks the runner token before parsing runner registration", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const closed = nextClose(runner);
+
+    runner.send(
+      JSON.stringify({
+        type: "runnerAuthenticate",
+        token: "wrong-runner-token",
+        runner: {},
+      }),
+    );
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "unauthorized",
+    });
+    expect(app.roam.hub.isRunnerOnline("runner-1")).toBe(false);
+  });
+
+  it("caps unauthenticated runner auth frames before parsing", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const closed = nextClose(runner);
+
+    runner.send("x".repeat(64 * 1024 + 1));
+
+    await expect(closed).resolves.toEqual({
+      code: 1009,
+      reason: "runner authentication payload too large",
+    });
   });
 
   it("closes owner streams before broadcasting after their auth session is gone", async () => {
@@ -1828,7 +1920,10 @@ function localBaseUrl(app: RoamServer): string {
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function openSocket(url: string): Promise<WebSocket> {
+function openSocket(
+  url: string,
+  options: { authenticateRunner?: boolean } = {},
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const isStream = url.endsWith("/v1/stream");
     const isRunner = url.endsWith("/v1/runner");
@@ -1837,7 +1932,7 @@ function openSocket(url: string): Promise<WebSocket> {
         ? { cookie: authCookie, origin: TEST_ORIGIN }
         : undefined,
     });
-    if (isRunner) {
+    if (isRunner && options.authenticateRunner !== false) {
       wrapRunnerAuthSend(socket);
     }
     socket.once("open", () => resolve(socket));
@@ -1940,8 +2035,13 @@ function nextJson(socket: WebSocket): Promise<Record<string, any>> {
 function nextClose(
   socket: WebSocket,
 ): Promise<{ code: number; reason: string }> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("timed out waiting for websocket close")),
+      2000,
+    );
     socket.once("close", (code, reason) => {
+      clearTimeout(timer);
       resolve({ code, reason: reason.toString() });
     });
   });

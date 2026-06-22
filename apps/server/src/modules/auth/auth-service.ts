@@ -116,7 +116,7 @@ export class AuthService {
       return fail("already_setup");
     }
     const rateKey = this.rateKey("setup", request);
-    if (this.isRateLimited(rateKey) || this.isRateLimited("setup:global")) {
+    if (this.isRateLimited(rateKey)) {
       this.log("auth.setup_rate_limited", request);
       return fail("rate_limited");
     }
@@ -126,7 +126,6 @@ export class AuthService {
       !constantTimeEqual(hashSecret(input.setupToken), setupTokenHash)
     ) {
       this.recordFailure(rateKey);
-      this.recordFailure("setup:global");
       this.log("auth.setup_failed", request);
       return fail("invalid_credentials");
     }
@@ -142,7 +141,6 @@ export class AuthService {
       this.createRunnerToken(now);
     }
     this.recordSuccess(rateKey);
-    this.recordSuccess("setup:global");
     this.log("auth.setup_completed", request);
     const created = this.createSession(request);
     return ok({

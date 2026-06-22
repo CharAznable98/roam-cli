@@ -108,12 +108,15 @@ export function useRoamController() {
     let pendingBootstrapRequestId: number | undefined;
     let bootstrapReady = false;
 
-    function transitionToUnauthenticated(message?: string) {
+    function transitionToUnauthenticated(
+      nextView: Extract<AuthViewState, "setup_required" | "login"> = "login",
+      message?: string,
+    ) {
       bootstrapReady = false;
       pendingBootstrapRequestId = undefined;
       streamRef.current?.close();
       setAccountSecurity(undefined);
-      setAuthView("login");
+      setAuthView(nextView);
       dispatch({ type: "connectionChanged", status: "closed" });
       if (message) {
         dispatch({
@@ -166,7 +169,10 @@ export function useRoamController() {
           }
           const message = errorMessage(loadError);
           if (isAuthErrorMessage(message)) {
-            transitionToUnauthenticated(message);
+            transitionToUnauthenticated(
+              authViewFromErrorMessage(message),
+              message,
+            );
             return;
           }
           if (isBootstrap) {
@@ -256,7 +262,9 @@ export function useRoamController() {
           }
           void api.fetchAuthStatus().then((auth) => {
             if (!cancelled && auth.status !== "authenticated") {
-              transitionToUnauthenticated();
+              transitionToUnauthenticated(
+                auth.status === "setup_required" ? "setup_required" : "login",
+              );
             }
           });
           scheduleReconnect();
@@ -309,7 +317,7 @@ export function useRoamController() {
         }
         const message = errorMessage(authError);
         dispatch({ type: "bootstrapFailed", message });
-        setAuthView("login");
+        setAuthView(authViewFromErrorMessage(message));
       });
 
     reconnectStreamRef.current = () => {
@@ -1301,6 +1309,12 @@ function isAuthErrorMessage(message: string): boolean {
     message.includes("unauthorized") ||
     message.includes("setup_required")
   );
+}
+
+function authViewFromErrorMessage(
+  message: string,
+): Extract<AuthViewState, "setup_required" | "login"> {
+  return message.includes("setup_required") ? "setup_required" : "login";
 }
 
 function isNonGitRepositoryError(message: string): boolean {

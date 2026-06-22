@@ -949,6 +949,25 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows setup after an authenticated browser loses owner configuration", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    authStatus = { status: "setup_required" };
+
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("close"));
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Set Up Owner Access" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup token")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Owner Login" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("retries the bootstrap API from connection recovery", async () => {
     failBootstrapRunners = true;
     render(<App />);
