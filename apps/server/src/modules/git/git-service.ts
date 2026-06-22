@@ -84,6 +84,7 @@ export class GitService {
         context: resolved.value.context,
         cwd: resolved.value.cwd,
         path: query.path,
+        ...(query.oldPath === undefined ? {} : { oldPath: query.oldPath }),
         mode: query.mode,
         ...(query.oldRef === undefined ? {} : { oldRef: query.oldRef }),
         ...(query.newRef === undefined ? {} : { newRef: query.newRef }),

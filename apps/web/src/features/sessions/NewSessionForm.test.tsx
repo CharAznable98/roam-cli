@@ -151,6 +151,55 @@ describe("NewSessionForm Git options", () => {
     );
   });
 
+  it("disables managed worktrees for repositories without commits", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onFetchGitStatus={async (context) => ({
+          kind: "repository",
+          requestId: "git-status-1",
+          context,
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: true,
+          groups: [],
+        })}
+      />,
+    );
+
+    const execution = await screen.findByLabelText("Execution");
+    expect(execution).toHaveValue("direct");
+    expect(
+      screen.getByRole("option", { name: "New branch worktree" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "This repository has no commits yet. Local sessions are available until the first commit exists.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Base ref")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "local unborn task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "direct" }),
+    );
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        gitBaseRef: expect.any(String),
+      }),
+    );
+  });
+
   it("defaults base ref to the current branch while branch refs load asynchronously", async () => {
     let resolveBranches!: (value: GitBranchList) => void;
     const branchesPromise = new Promise<GitBranchList>((resolve) => {
@@ -188,12 +237,18 @@ describe("NewSessionForm Git options", () => {
     resolveBranches({
       requestId: "git-branches-1",
       context: { kind: "project", projectId: project.id },
-      branches: [
-        { name: "main", current: true, remote: false },
-        { name: "feature/git-ui", current: false, remote: false },
-        { name: "origin/main", current: false, remote: true },
-      ],
-    });
+          branches: [
+            { name: "main", current: true, remote: false },
+            { name: "feature/git-ui", current: false, remote: false },
+            { name: "origin/main", current: false, remote: true },
+            {
+              name: "origin/HEAD -> origin/main",
+              current: false,
+              remote: true,
+            },
+            { name: "origin/HEAD", current: false, remote: true },
+          ],
+        });
 
     expect(
       await screen.findByRole("option", { name: "feature/git-ui (local)" }),
@@ -201,6 +256,14 @@ describe("NewSessionForm Git options", () => {
     expect(
       screen.getByRole("option", { name: "origin/main (remote)" }),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", {
+        name: "origin/HEAD -> origin/main (remote)",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "origin/HEAD (remote)" }),
+    ).not.toBeInTheDocument();
     expect(baseRef).toHaveValue("main");
   });
 });

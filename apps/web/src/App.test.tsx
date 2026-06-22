@@ -14,11 +14,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Approval,
   Artifact,
+  GitCommitSummary,
   Message,
   MessageAttachment,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
+
+const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 vi.mock("@monaco-editor/react", () => {
   function Editor({
@@ -319,6 +322,7 @@ describe("App", () => {
   let deferredFileContent: Map<string, Deferred<Response>>;
   let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitDiff: Map<string, Deferred<Response>>;
+  let deferredGitHistory: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let queuedRunnerResponses: Array<Deferred<Response>>;
   let failBootstrapRunners: boolean;
@@ -334,6 +338,8 @@ describe("App", () => {
   let remoteSessionWorktreeDeletedAt: string | undefined;
   let gitStatusClean: boolean;
   let gitStatusChanges: MockGitChange[];
+  let gitHistoryCommits: GitCommitSummary[];
+  let gitHistoryNextCursor: string | undefined;
   let failNextGitStatus: boolean;
   let failNonGitStatus: boolean;
   let failGitBlame: boolean;
@@ -348,6 +354,7 @@ describe("App", () => {
     deferredFileContent = new Map();
     deferredGitStatus = new Map();
     deferredGitDiff = new Map();
+    deferredGitHistory = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
     failBootstrapRunners = false;
@@ -369,6 +376,24 @@ describe("App", () => {
         staged: false,
       },
     ];
+    gitHistoryCommits = [
+      {
+        sha: "abc123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Initial commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = undefined;
     failNextGitStatus = false;
     failNonGitStatus = false;
     failGitBlame = false;
@@ -738,27 +763,21 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/history") {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          const deferredResponse =
+            deferredGitHistory.get(
+              `${mockGitContextKey(body.context)}:${body.ref ?? ""}:${body.cursor ?? ""}`,
+            ) ?? deferredGitHistory.get(body.cursor ?? "");
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           return jsonResponse({
             result: {
               requestId: "git-history-1",
               context: body.context,
-              commits: [
-                {
-                  sha: "abc123",
-                  parents: ["parent123"],
-                  authorName: "Test User",
-                  committerName: "Test User",
-                  summary: "Initial commit",
-                  refs: [],
-                  files: [
-                    {
-                      path: "src/App.tsx",
-                      status: "modified",
-                      staged: false,
-                    },
-                  ],
-                },
-              ],
+              commits: gitHistoryCommits,
+              ...(gitHistoryNextCursor
+                ? { nextCursor: gitHistoryNextCursor }
+                : {}),
             },
           });
         }
@@ -1248,6 +1267,100 @@ describe("App", () => {
     );
   });
 
+  it("diffs root history commits against the empty tree", async () => {
+    gitHistoryCommits = [
+      {
+        sha: "root123",
+        parents: [],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Root commit",
+        refs: [],
+        files: [
+          {
+            path: "README.md",
+            status: "added",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "commit" &&
+            body.path === "README.md" &&
+            body.oldRef === GIT_EMPTY_TREE_SHA &&
+            body.newRef === "root123"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("uses oldPath when diffing renamed history files", async () => {
+    gitHistoryCommits = [
+      {
+        sha: "rename123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Rename file",
+        refs: [],
+        files: [
+          {
+            path: "src/New.tsx",
+            oldPath: "src/Old.tsx",
+            status: "renamed",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+
+    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/diff") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.mode === "commit" &&
+            body.path === "src/New.tsx" &&
+            body.oldPath === "src/Old.tsx" &&
+            body.oldRef === "parent123" &&
+            body.newRef === "rename123"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
   it("clears stale selected Git changes after refresh", async () => {
     gitStatusClean = false;
     render(<App />);
@@ -1387,6 +1500,103 @@ describe("App", () => {
 
     expect(tools.queryByText("src/Stale.tsx")).not.toBeInTheDocument();
     expect(tools.getByText("Working tree is clean.")).toBeInTheDocument();
+  });
+
+  it("ignores stale Git history load-more responses after switching context", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    gitHistoryCommits = [
+      {
+        sha: "session123",
+        parents: ["parent123"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Session commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = "cursor-2";
+    const staleHistoryPage = deferred<Response>();
+    deferredGitHistory.set("cursor-2", staleHistoryPage);
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    expect(
+      await tools.findByText("Working tree is clean."),
+    ).toBeInTheDocument();
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+    expect((await tools.findAllByText("Session commit")).length).toBeGreaterThan(
+      0,
+    );
+
+    fireEvent.click(tools.getByRole("button", { name: "Load more" }));
+    gitHistoryCommits = [
+      {
+        sha: "project123",
+        parents: ["parent456"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Project commit",
+        refs: [],
+        files: [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      },
+    ];
+    gitHistoryNextCursor = undefined;
+    fireEvent.change(tools.getByRole("combobox"), {
+      target: { value: "project:project-1" },
+    });
+
+    expect((await tools.findAllByText("Project commit")).length).toBeGreaterThan(
+      0,
+    );
+
+    await act(async () => {
+      staleHistoryPage.resolve(
+        jsonResponse({
+          result: {
+            requestId: "git-history-stale",
+            context: { kind: "session_worktree", sessionId: "session-1" },
+            commits: [
+              {
+                sha: "stale123",
+                parents: ["parent123"],
+                authorName: "Test User",
+                committerName: "Test User",
+                summary: "Stale commit",
+                refs: [],
+                files: [
+                  {
+                    path: "src/Stale.tsx",
+                    status: "modified",
+                    staged: false,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+    });
+
+    expect(tools.queryByText("Stale commit")).not.toBeInTheDocument();
+    expect(tools.getAllByText("Project commit").length).toBeGreaterThan(0);
   });
 
   it("ignores stale Git diff responses after changing selected file", async () => {

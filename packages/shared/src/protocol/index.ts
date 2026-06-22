@@ -748,6 +748,7 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     context: GitContextRefSchema,
     cwd: z.string().min(1),
     path: z.string().min(1),
+    oldPath: z.string().min(1).optional(),
     mode: GitDiffModeSchema.default("working_tree"),
     oldRef: z.string().min(1).optional(),
     newRef: z.string().min(1).optional(),
@@ -1071,6 +1072,7 @@ export type ApiGitContext = z.infer<typeof ApiGitContextSchema>;
 export const ApiGitFileDiffQuerySchema = z.object({
   context: GitContextRefSchema,
   path: z.string().min(1),
+  oldPath: z.string().min(1).optional(),
   mode: GitDiffModeSchema.default("working_tree"),
   oldRef: z.string().min(1).optional(),
   newRef: z.string().min(1).optional(),

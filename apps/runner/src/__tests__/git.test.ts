@@ -14,6 +14,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const context: GitContextRef = { kind: "project", projectId: "project-1" };
+const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 describe("runner git workspace operations", () => {
   it("reads status and diff, stages tracked paths, and discards untracked paths", async () => {
@@ -134,8 +135,72 @@ describe("runner git workspace operations", () => {
       message: "This directory is not a Git repository.",
     });
   });
+
+  it("reads root commit file diffs against the empty tree", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-root-diff-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    const diff = await readGitFileDiff({
+      workspace,
+      cwd: ".",
+      requestId: "diff-root",
+      projectId: "project-1",
+      context,
+      path: "README.md",
+      mode: "commit",
+      oldRef: GIT_EMPTY_TREE_SHA,
+      newRef: head,
+    });
+
+    expect(diff.oldContent).toBe("");
+    expect(diff.newContent).toBe("root\n");
+  });
+
+  it("uses oldPath for the old side of renamed commit file diffs", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-rename-diff-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "old.ts"), "old\n", "utf8");
+    await git(workspace, ["add", "old.ts"]);
+    await git(workspace, ["commit", "-m", "initial"]);
+    const parent = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+    await git(workspace, ["mv", "old.ts", "new.ts"]);
+    await writeFile(join(workspace, "new.ts"), "new\n", "utf8");
+    await git(workspace, ["add", "new.ts"]);
+    await git(workspace, ["commit", "-m", "rename"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    const diff = await readGitFileDiff({
+      workspace,
+      cwd: ".",
+      requestId: "diff-rename",
+      projectId: "project-1",
+      context,
+      path: "new.ts",
+      oldPath: "old.ts",
+      mode: "commit",
+      oldRef: parent,
+      newRef: head,
+    });
+
+    expect(diff.oldPath).toBe("old.ts");
+    expect(diff.oldContent).toBe("old\n");
+    expect(diff.newContent).toBe("new\n");
+  });
 });
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args]);
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
+  return String(stdout).trim();
 }

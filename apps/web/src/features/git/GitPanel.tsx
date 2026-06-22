@@ -49,6 +49,7 @@ import {
 type AsyncState = "idle" | "loading" | "ready" | "error";
 type GitTab = "changes" | "history" | "branch";
 type ChangeViewMode = "tree" | "list";
+const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 type GitContextOption = {
   key: string;
@@ -129,6 +130,7 @@ export function GitPanel({
   const [diffEditorMounted, setDiffEditorMounted] = useState(active);
   const panelRef = useRef<HTMLElement | null>(null);
   const statusContextKeyRef = useRef("");
+  const historyScopeRef = useRef("");
   const statusRequestSequenceRef = useRef(0);
   const compactDiff = useCompactDiff(panelRef);
 
@@ -154,6 +156,9 @@ export function GitPanel({
   const status = isRepositoryStatus(statusResult) ? statusResult : undefined;
   const nonGitStatus =
     statusResult?.kind === "not_git_repository" ? statusResult : undefined;
+  const historyScope = status
+    ? `${selectedContextIdentity}:${historyRef(status)}:${status.headSha ?? ""}`
+    : selectedContextIdentity;
   const stagedChanges =
     status?.groups.find((group) => group.id === "staged")?.changes ?? [];
   const selectedCommit = historyPage?.commits.find(
@@ -166,17 +171,24 @@ export function GitPanel({
   const diffTarget =
     selectedContext && activeTab === "history" && selectedCommit && selectedCommitFile
       ? {
-          key: `history:${selectedCommit.sha}:${selectedCommitFile.path}`,
+          key: [
+            "history",
+            selectedCommit.sha,
+            selectedCommit.parents[0] ?? GIT_EMPTY_TREE_SHA,
+            selectedCommitFile.oldPath ?? "",
+            selectedCommitFile.path,
+          ].join(":"),
           query: {
             context: selectedContext,
             path: selectedCommitFile.path,
-            mode: "commit",
-            ...(selectedCommit.parents[0]
-              ? { oldRef: selectedCommit.parents[0] }
+            ...(selectedCommitFile.oldPath
+              ? { oldPath: selectedCommitFile.oldPath }
               : {}),
+            mode: "commit",
+            oldRef: selectedCommit.parents[0] ?? GIT_EMPTY_TREE_SHA,
             newRef: selectedCommit.sha,
           } satisfies Partial<ApiGitFileDiffQuery>,
-      }
+        }
       : selectedContext && activeTab === "changes" && selectedChange
         ? {
             key: `changes:${selectedMode}:${selectedChange.path}`,
@@ -187,12 +199,19 @@ export function GitPanel({
             } satisfies Partial<ApiGitFileDiffQuery>,
           }
         : undefined;
+  const diffTargetQuery = diffTarget?.query as
+    | Partial<ApiGitFileDiffQuery>
+    | undefined;
   const hasCurrentDiff =
     diffTarget !== undefined &&
+    diffTargetQuery !== undefined &&
     diffState === "ready" &&
     diff !== undefined &&
-    diff.path === diffTarget.query.path &&
-    diff.mode === diffTarget.query.mode;
+    diff.path === diffTargetQuery.path &&
+    diff.mode === diffTargetQuery.mode &&
+    optionalValue(diff.oldPath) === optionalValue(diffTargetQuery.oldPath) &&
+    optionalValue(diff.oldRef) === optionalValue(diffTargetQuery.oldRef) &&
+    optionalValue(diff.newRef) === optionalValue(diffTargetQuery.newRef);
   const showTextDiff = hasCurrentDiff && !diff.binary && !diff.tooLarge;
   const diffLanguage = showTextDiff
     ? (diff.language ?? "plaintext")
@@ -204,6 +223,10 @@ export function GitPanel({
     statusContextKeyRef.current = selectedContextIdentity;
     statusRequestSequenceRef.current += 1;
   }, [selectedContextIdentity]);
+
+  useLayoutEffect(() => {
+    historyScopeRef.current = historyScope;
+  }, [historyScope]);
 
   useEffect(() => {
     if (!active) {
@@ -382,6 +405,7 @@ export function GitPanel({
 
   const loadMoreHistory = () => {
     if (!selectedContext || !status || !historyPage?.nextCursor) return;
+    const requestHistoryScope = historyScope;
     setHistoryState("loading");
     setHistoryError("");
     void onFetchHistory({
@@ -391,6 +415,9 @@ export function GitPanel({
       limit: 50,
     })
       .then((page) => {
+        if (historyScopeRef.current !== requestHistoryScope) {
+          return;
+        }
         setHistoryPage((current) =>
           current
             ? {
@@ -402,6 +429,9 @@ export function GitPanel({
         setHistoryState("ready");
       })
       .catch((error: unknown) => {
+        if (historyScopeRef.current !== requestHistoryScope) {
+          return;
+        }
         setHistoryState("error");
         setHistoryError(errorMessage(error));
       });
@@ -1570,6 +1600,10 @@ function groupLabel(groupId: string): string {
 
 function historyRef(status: GitStatus): string {
   return status.branch ?? "HEAD";
+}
+
+function optionalValue(value: string | undefined): string {
+  return value ?? "";
 }
 
 function stagedMessage(count: number): string {

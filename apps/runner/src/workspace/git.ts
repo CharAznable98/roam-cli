@@ -57,6 +57,7 @@ export interface GitHistoryOptions extends GitWorkspaceScope {
 }
 
 export interface GitFileDiffOptions extends GitPathScope {
+  oldPath?: string;
   mode: GitDiffMode;
   oldRef?: string;
   newRef?: string;
@@ -118,10 +119,12 @@ export async function readGitFileDiff(
   const cwd = await resolveGitCwd(options.workspace, options.cwd);
   await assertGitWorkTree(cwd);
   const path = normalizeGitPath(options.path);
+  const oldPath =
+    options.oldPath === undefined ? path : normalizeGitPath(options.oldPath);
   const targetPath = resolveSessionChild(cwd, path);
   const oldRef = resolveOldRef(options.mode, options.oldRef);
   const newRef = resolveNewRef(options.mode, options.newRef);
-  const oldContent = await readDiffSide(cwd, path, oldRef, "old");
+  const oldContent = await readDiffSide(cwd, oldPath, oldRef, "old");
   const newContent =
     newRef === "WORKTREE"
       ? await readWorktreeSide(targetPath)
@@ -132,6 +135,7 @@ export async function readGitFileDiff(
     requestId: options.requestId,
     context: options.context,
     path,
+    ...(oldPath !== path ? { oldPath } : {}),
     mode: options.mode,
     ...(oldRef !== "HEAD" && oldRef !== "INDEX" && oldRef !== "WORKTREE"
       ? { oldRef }

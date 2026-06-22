@@ -527,12 +527,13 @@ declare module "@roamcli/shared/protocol" {
       }
     | ({ type: "gitStatus" } & GitCommandBase)
     | ({
-        type: "gitFileDiff";
-        path: string;
-        mode?: GitDiffMode;
-        oldRef?: string;
-        newRef?: string;
-      } & GitCommandBase)
+      type: "gitFileDiff";
+      path: string;
+      oldPath?: string;
+      mode?: GitDiffMode;
+      oldRef?: string;
+      newRef?: string;
+    } & GitCommandBase)
     | ({ type: "gitBlame"; path: string; ref?: string } & GitCommandBase)
     | ({
         type: "gitCommitPage";

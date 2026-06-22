@@ -115,7 +115,9 @@ export function NewSessionForm({
   const repositoryStatus = isRepositoryStatus(gitStatusResult)
     ? gitStatusResult
     : undefined;
-  const canUseManagedWorktree = Boolean(repositoryStatus);
+  const canUseManagedWorktree = Boolean(
+    repositoryStatus && !repositoryStatus.unborn,
+  );
   const baseRefOptions = useMemo(
     () => buildBaseRefOptions(repositoryStatus, gitBranches),
     [repositoryStatus, gitBranches],
@@ -150,7 +152,7 @@ export function NewSessionForm({
         }
         setGitStatusResult(statusResult);
         setSessionOptionsState("ready");
-        if (isRepositoryStatus(statusResult)) {
+        if (isWorktreeCapableStatus(statusResult)) {
           setExecutionMode("managed_worktree");
           setGitBaseRef(defaultBaseRef(statusResult));
         } else {
@@ -177,7 +179,7 @@ export function NewSessionForm({
   }, [gitContext, onFetchGitStatus]);
 
   useEffect(() => {
-    if (!repositoryStatus) {
+    if (!repositoryStatus || repositoryStatus.unborn) {
       setGitBranches(undefined);
       setGitBranchesState("idle");
       setGitBranchesError("");
@@ -214,7 +216,7 @@ export function NewSessionForm({
   }, [gitContext, onFetchGitBranches, repositoryStatus]);
 
   useEffect(() => {
-    if (!repositoryStatus) {
+    if (!canUseManagedWorktree || !repositoryStatus) {
       return;
     }
     const fallbackRef = defaultBaseRef(repositoryStatus);
@@ -223,7 +225,7 @@ export function NewSessionForm({
         ? current
         : fallbackRef,
     );
-  }, [baseRefOptions, repositoryStatus]);
+  }, [baseRefOptions, canUseManagedWorktree, repositoryStatus]);
 
   useEffect(() => {
     const strip = draftImageStripRef.current;
@@ -274,7 +276,9 @@ export function NewSessionForm({
       return;
     }
     if (executionMode === "managed_worktree" && !canUseManagedWorktree) {
-      setError("New branch worktrees require a Git repository.");
+      setError(
+        "New branch worktrees require a Git repository with at least one commit.",
+      );
       return;
     }
 
@@ -360,10 +364,13 @@ export function NewSessionForm({
         </select>
       </label>
       {!canUseManagedWorktree ? (
-        <p className="field-help" role={sessionOptionsState === "error" ? "alert" : undefined}>
+        <p
+          className="field-help"
+          role={sessionOptionsState === "error" ? "alert" : undefined}
+        >
           {sessionOptionsState === "error"
             ? sessionOptionsError
-            : "This directory is not a Git repository. Local sessions are available."}
+            : managedWorktreeUnavailableMessage(repositoryStatus)}
         </p>
       ) : null}
       {executionMode === "managed_worktree" ? (
@@ -528,6 +535,24 @@ function isRepositoryStatus(
   return status?.kind === "repository";
 }
 
+function isWorktreeCapableStatus(
+  status: GitStatusResult | undefined,
+): status is GitStatus {
+  return isRepositoryStatus(status) && !status.unborn;
+}
+
+function managedWorktreeUnavailableMessage(
+  status: GitStatus | undefined,
+): string {
+  if (status?.unborn) {
+    return [
+      "This repository has no commits yet.",
+      "Local sessions are available until the first commit exists.",
+    ].join(" ");
+  }
+  return "This directory is not a Git repository. Local sessions are available.";
+}
+
 function defaultBaseRef(status: GitStatus): string {
   return status.branch ?? "HEAD";
 }
@@ -562,7 +587,9 @@ function buildBaseRefOptions(
   const localBranches =
     branches?.branches.filter((branch) => !branch.remote) ?? [];
   const remoteBranches =
-    branches?.branches.filter((branch) => branch.remote) ?? [];
+    branches?.branches.filter(
+      (branch) => branch.remote && isSelectableRemoteBranch(branch),
+    ) ?? [];
 
   for (const branch of localBranches) {
     add(branchRefOption(branch));
@@ -581,6 +608,11 @@ function branchRefOption(branch: GitBranch): BaseRefOption {
     label: `${branch.name} (${meta})`,
     meta,
   };
+}
+
+function isSelectableRemoteBranch(branch: GitBranch): boolean {
+  const name = branch.name.trim();
+  return !name.includes(" -> ") && !/\/HEAD(?:$|\s)/.test(name);
 }
 
 async function defaultGitStatus(
