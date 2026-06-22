@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { codeToHtml } from "shiki";
 import type {
   MessageAttachment,
   RunnerCapability,
@@ -16,9 +17,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPanel } from "./ChatPanel";
 import type { UiMessage } from "./model";
 
+vi.mock("shiki", () => ({
+  codeToHtml: vi.fn(async (code: string) => `<pre><code>${code}</code></pre>`),
+}));
+
 const originalCreateObjectUrl = URL.createObjectURL;
 const originalRevokeObjectUrl = URL.revokeObjectURL;
 const originalInnerWidth = window.innerWidth;
+const codeToHtmlMock = vi.mocked(codeToHtml);
 
 const baseSession: Session = {
   id: "session-1",
@@ -49,6 +55,7 @@ const imageCapability: RunnerCapability = {
 
 describe("ChatPanel", () => {
   beforeEach(() => {
+    codeToHtmlMock.mockClear();
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:preview"),
@@ -338,6 +345,31 @@ describe("ChatPanel", () => {
       "href",
       "https://example.test",
     );
+  });
+
+  it("keeps rendered assistant code blocks stable while composing drafts", async () => {
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "```ts\nconst value = 1;\n```",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel session={baseSession} messages={[message]} onSend={vi.fn()} />,
+    );
+
+    await waitFor(() => expect(codeToHtmlMock).toHaveBeenCalled());
+    const highlightCount = codeToHtmlMock.mock.calls.length;
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "first draft" } });
+    fireEvent.change(composer, { target: { value: "first draft update" } });
+
+    expect(composer).toHaveValue("first draft update");
+    expect(codeToHtmlMock).toHaveBeenCalledTimes(highlightCount);
   });
 
   it("groups session header actions in a text menu", () => {
