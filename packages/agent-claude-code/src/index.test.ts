@@ -1,7 +1,10 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKMessage,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentRuntimeEvent,
   AgentSessionContext,
@@ -96,6 +99,7 @@ describe("claude code agent plugin", () => {
       requestApproval: async (draft) => {
         approvals.push(draft);
         return {
+          approvalId: "approval-1",
           approved: false,
           signedAt: "2026-06-21T00:00:00.000Z",
           signature: "sig",
@@ -180,6 +184,137 @@ describe("claude code agent plugin", () => {
     });
   });
 
+  it("queues active user messages for the next resumed SDK query", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const firstQuery = deferredQuery([
+      {
+        type: "assistant",
+        session_id: "claude-session-1",
+        message: {
+          content: [{ type: "text", text: "First response" }],
+        },
+      },
+    ]);
+    sdk.query.mockReturnValueOnce(firstQuery.query).mockReturnValueOnce(
+      fakeQuery([
+        {
+          type: "assistant",
+          session_id: "claude-session-1",
+          message: {
+            content: [{ type: "text", text: "Follow-up response" }],
+          },
+        },
+      ]),
+    );
+    const session = claudeCodeAgent.createSession(
+      makeContext({
+        emit: async (event) => {
+          events.push(event);
+        },
+      }),
+    );
+
+    await session.start();
+    expect(sdk.query).toHaveBeenCalledTimes(1);
+    session.deliverInput({ content: "follow up" });
+    expect(sdk.query).toHaveBeenCalledTimes(1);
+    firstQuery.release();
+
+    await vi.waitFor(() => {
+      expect(sdk.query).toHaveBeenCalledTimes(2);
+    });
+    expect(sdk.query.mock.calls[1]?.[0]).toMatchObject({
+      prompt: "follow up",
+      options: expect.objectContaining({
+        resume: "claude-session-1",
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "message",
+        content: "Follow-up response",
+      });
+      expect(
+        events.filter(
+          (event) => event.type === "status" && event.status === "completed",
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
+  it("keeps stopped status when the SDK iterator rejects after stop", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const abortedQuery = deferredThrowingQuery(new Error("aborted"));
+    sdk.query.mockReturnValue(abortedQuery.query);
+    const session = claudeCodeAgent.createSession(
+      makeContext({
+        emit: async (event) => {
+          events.push(event);
+        },
+      }),
+    );
+
+    await session.start();
+    await session.control("stop");
+    abortedQuery.release();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "status",
+        status: "stopped",
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events).not.toContainEqual({ type: "status", status: "failed" });
+  });
+
+  it("does not emit a duplicate final assistant message after stream tokens", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    sdk.query.mockReturnValue(
+      fakeQuery([
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Claude response" },
+          },
+        },
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "Claude response" }],
+          },
+        },
+      ]),
+    );
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "token",
+        content: "Claude response",
+      });
+      expect(events).toContainEqual({
+        type: "status",
+        status: "completed",
+      });
+    });
+    expect(events).not.toContainEqual({
+      type: "message",
+      content: "Claude response",
+    });
+  });
+
   it("passes image attachments through SDK user-message content blocks", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-claude-agent-"));
     const imagePath = join(workspace, "image.png");
@@ -201,7 +336,8 @@ describe("claude code agent plugin", () => {
       )
       .start();
 
-    const prompt = sdk.query.mock.calls[0]?.[0]?.prompt as AsyncIterable<SDKUserMessage>;
+    const prompt = sdk.query.mock.calls[0]?.[0]
+      ?.prompt as AsyncIterable<SDKUserMessage>;
     const messages: SDKUserMessage[] = [];
     for await (const message of prompt) {
       messages.push(message);
@@ -228,9 +364,66 @@ describe("claude code agent plugin", () => {
       },
     ]);
   });
+
+  it("lists Claude Code skills with workspace scoping and command overrides", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-claude-skills-"));
+    const basePath = join(workspace, "project");
+    await mkdir(basePath, { recursive: true });
+    const realBasePath = await realpath(basePath);
+    sdk.query.mockReturnValue(
+      fakeQuery([], [{ name: "plan", description: "Local plan" }]),
+    );
+
+    const skills = await claudeCodeAgent.listSkills?.({
+      profile: "standard",
+      env: { ROAMCLI_AGENT_CLAUDE_CODE_COMMAND: "local-claude" },
+      workspace,
+      basePath,
+    });
+
+    expect(sdk.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: " ",
+        options: expect.objectContaining({
+          cwd: realBasePath,
+          pathToClaudeCodeExecutable: "local-claude",
+        }),
+      }),
+    );
+    expect(skills).toEqual([
+      {
+        name: "plan",
+        description: "Local plan",
+        sourceType: "project",
+        sourcePath: realBasePath,
+      },
+    ]);
+  });
+
+  it("does not list Claude Code skills outside the workspace", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-claude-skills-workspace-"),
+    );
+    const outside = await mkdtemp(
+      join(tmpdir(), "roam-claude-skills-outside-"),
+    );
+
+    await expect(
+      claudeCodeAgent.listSkills?.({
+        profile: "standard",
+        env: {},
+        workspace,
+        basePath: outside,
+      }),
+    ).resolves.toEqual([]);
+    expect(sdk.query).not.toHaveBeenCalled();
+  });
 });
 
-function fakeQuery(messages: readonly unknown[]) {
+function fakeQuery(
+  messages: readonly unknown[],
+  supportedCommands: readonly { name: string; description?: string }[] = [],
+) {
   return {
     async *[Symbol.asyncIterator]() {
       for (const message of messages) {
@@ -239,7 +432,47 @@ function fakeQuery(messages: readonly unknown[]) {
     },
     close: vi.fn(),
     interrupt: vi.fn(),
-    supportedCommands: vi.fn().mockResolvedValue([]),
+    supportedCommands: vi.fn().mockResolvedValue(supportedCommands),
+  };
+}
+
+function deferredQuery(messages: readonly unknown[]) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    release,
+    query: {
+      async *[Symbol.asyncIterator]() {
+        await released;
+        for (const message of messages) {
+          yield message as SDKMessage;
+        }
+      },
+      close: vi.fn(),
+      interrupt: vi.fn(),
+      supportedCommands: vi.fn().mockResolvedValue([]),
+    },
+  };
+}
+
+function deferredThrowingQuery(error: unknown) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    release,
+    query: {
+      async *[Symbol.asyncIterator]() {
+        await released;
+        throw error;
+      },
+      close: vi.fn(),
+      interrupt: vi.fn(),
+      supportedCommands: vi.fn().mockResolvedValue([]),
+    },
   };
 }
 
@@ -254,6 +487,7 @@ function makeContext(
     prompt: "hello",
     emit: async () => undefined,
     requestApproval: async () => ({
+      approvalId: "approval-1",
       approved: true,
       signedAt: "2026-06-21T00:00:00.000Z",
       signature: "sig",

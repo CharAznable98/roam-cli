@@ -2,6 +2,7 @@ import {
   nowIso,
   type Message,
   type RunnerEvent,
+  type SessionStatus,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import {
@@ -24,6 +25,12 @@ export class RunnerEventService {
     }
 
     if (event.type === "sessionStatus") {
+      if (
+        event.status === "waiting_approval" &&
+        this.isTerminalSession(event.sessionId)
+      ) {
+        return;
+      }
       const session = this.store.updateSessionStatus(
         event.sessionId,
         event.status,
@@ -178,13 +185,15 @@ export class RunnerEventService {
 
     if (event.type === "approvalRequested") {
       this.store.upsertApproval(event.approval);
-      const session = this.store.updateSessionStatus(
-        event.approval.sessionId,
-        "waiting_approval",
-        nowIso(),
-      );
-      if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
+      if (!this.isTerminalSession(event.approval.sessionId)) {
+        const session = this.store.updateSessionStatus(
+          event.approval.sessionId,
+          "waiting_approval",
+          nowIso(),
+        );
+        if (session) {
+          this.hub.broadcast({ type: "session:updated", session });
+        }
       }
       this.hub.broadcast({
         type: "approval:requested",
@@ -248,10 +257,19 @@ export class RunnerEventService {
       }
     }
   }
+
+  private isTerminalSession(sessionId: string): boolean {
+    const session = this.store.getSession(sessionId);
+    return session !== undefined && isTerminalStatus(session.status);
+  }
 }
 
 function isRunnerDirectoryResult(sessionId: string): boolean {
   return sessionId.startsWith("runner-directory-");
+}
+
+function isTerminalStatus(status: SessionStatus): boolean {
+  return status === "completed" || status === "failed" || status === "stopped";
 }
 
 function isInternalRunnerError(

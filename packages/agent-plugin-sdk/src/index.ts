@@ -40,6 +40,7 @@ export interface ApprovalRequestDraft {
 }
 
 export interface ApprovalDecision {
+  approvalId: string;
   approved: boolean;
   signedAt: string;
   signature: string;

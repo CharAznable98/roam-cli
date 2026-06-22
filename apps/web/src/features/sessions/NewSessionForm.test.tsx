@@ -134,6 +134,37 @@ describe("NewSessionForm image attachments", () => {
 
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
+
+  it("removes draft images that the newly selected agent does not support", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <NewSessionForm project={project} runner={runner} onCreate={onCreate} />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "claude-code" },
+    });
+    fireEvent.change(fileInput(container), {
+      target: {
+        files: [new File(["hello"], "screen.webp", { type: "image/webp" })],
+      },
+    });
+    await screen.findByLabelText("Attached images");
+
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "codex" },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Attached images")).toBeNull(),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "image/webp is not supported.",
+    );
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(
+      "blob:new-session-preview",
+    );
+  });
 });
 
 function fileInput(container: HTMLElement): HTMLInputElement {

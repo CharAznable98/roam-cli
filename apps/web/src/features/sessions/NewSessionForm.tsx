@@ -13,6 +13,7 @@ import {
   draftImagesToUploads,
   formatBytes,
   imageInputLimits,
+  revalidateDraftImages,
   revokeDraftPreview,
   type DraftImageAttachment,
 } from "../conversation/attachments";
@@ -181,8 +182,19 @@ export function NewSessionForm({
         <select
           value={agent}
           onChange={(event) => {
-            setAgent(event.target.value as AgentKind);
-            setError("");
+            const nextAgent = event.target.value as AgentKind;
+            const nextCapability = runner.capabilities.find(
+              (capability) => capability.kind === nextAgent,
+            );
+            const result = revalidateDraftImages(draftImages, nextCapability);
+            for (const attachment of draftImages) {
+              if (!result.attachments.includes(attachment)) {
+                revokeDraftPreview(attachment);
+              }
+            }
+            setAgent(nextAgent);
+            setDraftImages(result.attachments);
+            setError(result.error ?? "");
           }}
         >
           {agentOptions.map((option: AgentKind) => (

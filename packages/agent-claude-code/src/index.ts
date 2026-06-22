@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, resolve, sep } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   Options,
@@ -6,14 +7,19 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
+import type {
+  ContentBlockParam,
+  MessageParam,
+} from "@anthropic-ai/sdk/resources";
 import type {
   AgentDefinition,
   AgentInput,
+  AgentLaunchAttachment,
   AgentPlugin,
   AgentPluginContext,
   AgentSession,
   AgentSessionContext,
+  AgentSkillListContext,
 } from "@roamcli/agent-plugin-sdk";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
@@ -75,30 +81,36 @@ export default agentPlugin;
 
 class ClaudeCodeSession implements AgentSession {
   readonly #context: AgentSessionContext;
-  #abortController?: AbortController;
-  #query?: ReturnType<typeof query>;
+  readonly #queue: ClaudeCodeInput[] = [];
+  #abortController: AbortController | undefined;
+  #query: ReturnType<typeof query> | undefined;
   #closed = false;
-  #sawAssistantMessage = false;
+  #draining = false;
+  #resumeThreadId: string | undefined;
+  #sawAssistantOutput = false;
+  #sawStreamText = false;
 
   public constructor(context: AgentSessionContext) {
     this.#context = context;
+    this.#resumeThreadId = context.resumeThreadId;
   }
 
   public async start(): Promise<void> {
-    this.#abortController = new AbortController();
-    void this.#run().catch((error: unknown) => {
-      void this.#context.emit({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        code: "CLAUDE_CODE_ERROR",
-      });
-      void this.#context.emit({ type: "status", status: "failed" });
+    this.#queue.push({
+      content: this.#context.prompt,
+      ...(this.#context.attachments
+        ? { attachments: this.#context.attachments }
+        : {}),
     });
+    this.#startDrain();
   }
 
-  public deliverInput(_input: AgentInput): void {
-    // RoamCli starts one Claude SDK query per user turn. Running-turn input is
-    // intentionally ignored until a future prompt type needs it.
+  public deliverInput(input: AgentInput): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#queue.push({ content: input.content });
+    this.#startDrain();
   }
 
   public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
@@ -108,6 +120,7 @@ class ClaudeCodeSession implements AgentSession {
     }
     if (signal === "stop") {
       this.#closed = true;
+      this.#queue.length = 0;
       this.#abortController?.abort();
       this.#query?.close();
       await this.#context.emit({ type: "status", status: "stopped" });
@@ -117,13 +130,55 @@ class ClaudeCodeSession implements AgentSession {
 
   public close(): void {
     this.#closed = true;
+    this.#queue.length = 0;
     this.#abortController?.abort();
     this.#query?.close();
   }
 
-  async #run(): Promise<void> {
+  #startDrain(): void {
+    if (this.#draining) {
+      return;
+    }
+    this.#draining = true;
+    void this.#drain()
+      .catch((error: unknown) => {
+        if (this.#closed) {
+          return;
+        }
+        this.#closed = true;
+        this.#queue.length = 0;
+        void this.#context.emit({
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+          code: "CLAUDE_CODE_ERROR",
+        });
+        void this.#context.emit({ type: "status", status: "failed" });
+      })
+      .finally(() => {
+        this.#draining = false;
+        if (!this.#closed && this.#queue.length > 0) {
+          this.#startDrain();
+        }
+      });
+  }
+
+  async #drain(): Promise<void> {
+    while (!this.#closed) {
+      const input = this.#queue.shift();
+      if (input === undefined) {
+        await this.#context.emit({ type: "status", status: "completed" });
+        return;
+      }
+      await this.#run(input);
+    }
+  }
+
+  async #run(input: ClaudeCodeInput): Promise<void> {
+    this.#abortController = new AbortController();
+    this.#sawAssistantOutput = false;
+    this.#sawStreamText = false;
     const sdkQuery = query({
-      prompt: promptForContext(this.#context),
+      prompt: promptForInput(input),
       options: this.#options(),
     });
     this.#query = sdkQuery;
@@ -132,7 +187,8 @@ class ClaudeCodeSession implements AgentSession {
       await this.#handleMessage(message);
     }
     if (!this.#closed) {
-      await this.#context.emit({ type: "status", status: "completed" });
+      this.#query = undefined;
+      this.#abortController = undefined;
     }
   }
 
@@ -192,8 +248,8 @@ class ClaudeCodeSession implements AgentSession {
     if (pathToClaudeCodeExecutable) {
       options.pathToClaudeCodeExecutable = pathToClaudeCodeExecutable;
     }
-    if (this.#context.resumeThreadId) {
-      options.resume = this.#context.resumeThreadId;
+    if (this.#resumeThreadId) {
+      options.resume = this.#resumeThreadId;
     }
     return options;
   }
@@ -201,11 +257,14 @@ class ClaudeCodeSession implements AgentSession {
   async #handleMessage(message: SDKMessage): Promise<void> {
     const sessionId = sdkSessionId(message);
     if (sessionId) {
+      this.#resumeThreadId = sessionId;
       await this.#context.emit({ type: "thread", threadId: sessionId });
     }
     if (message.type === "stream_event") {
       const text = partialText(message.event);
       if (text.length > 0) {
+        this.#sawAssistantOutput = true;
+        this.#sawStreamText = true;
         await this.#context.emit({ type: "token", content: text });
       }
       return;
@@ -213,8 +272,10 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "assistant") {
       const text = textFromContent(message.message.content);
       if (text.length > 0) {
-        this.#sawAssistantMessage = true;
-        await this.#context.emit({ type: "message", content: text });
+        this.#sawAssistantOutput = true;
+        if (!this.#sawStreamText) {
+          await this.#context.emit({ type: "message", content: text });
+        }
       }
       if (message.error) {
         await this.#context.emit({
@@ -228,9 +289,10 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "result") {
       if (
         message.subtype === "success" &&
-        !this.#sawAssistantMessage &&
+        !this.#sawAssistantOutput &&
         message.result.length > 0
       ) {
+        this.#sawAssistantOutput = true;
         await this.#context.emit({ type: "message", content: message.result });
       }
       if (message.subtype !== "success") {
@@ -253,25 +315,30 @@ class ClaudeCodeSession implements AgentSession {
   }
 }
 
-function promptForContext(
-  context: AgentSessionContext,
+interface ClaudeCodeInput {
+  content: string;
+  attachments?: readonly AgentLaunchAttachment[];
+}
+
+function promptForInput(
+  input: ClaudeCodeInput,
 ): string | AsyncIterable<SDKUserMessage> {
-  if (!context.attachments?.length) {
-    return context.prompt;
+  if (!input.attachments?.length) {
+    return input.content;
   }
-  return userMessages(context);
+  return userMessages(input);
 }
 
 async function* userMessages(
-  context: AgentSessionContext,
+  input: ClaudeCodeInput,
 ): AsyncIterable<SDKUserMessage> {
-  yield await userMessage(context);
+  yield await userMessage(input);
 }
 
-async function userMessage(context: AgentSessionContext): Promise<SDKUserMessage> {
-  const content: MessageParam["content"] = context.attachments?.length
-    ? await messageContentWithImages(context)
-    : context.prompt;
+async function userMessage(input: ClaudeCodeInput): Promise<SDKUserMessage> {
+  const content: MessageParam["content"] = input.attachments?.length
+    ? await messageContentWithImages(input)
+    : input.content;
   return {
     type: "user",
     message: {
@@ -283,10 +350,10 @@ async function userMessage(context: AgentSessionContext): Promise<SDKUserMessage
 }
 
 async function messageContentWithImages(
-  context: AgentSessionContext,
+  input: ClaudeCodeInput,
 ): Promise<ContentBlockParam[]> {
   const imageBlocks = await Promise.all(
-    (context.attachments ?? []).map(async (attachment) => ({
+    (input.attachments ?? []).map(async (attachment) => ({
       type: "image" as const,
       source: {
         type: "base64" as const,
@@ -295,24 +362,34 @@ async function messageContentWithImages(
       },
     })),
   );
-  return [{ type: "text", text: context.prompt }, ...imageBlocks];
+  return [{ type: "text", text: input.content }, ...imageBlocks];
 }
 
-async function listClaudeCodeSkills(context: {
-  profile: RunnerProfile;
-  env: NodeJS.ProcessEnv;
-  basePath: string;
-}): Promise<AgentSkillSummary[]> {
+async function listClaudeCodeSkills(
+  context: AgentSkillListContext,
+): Promise<AgentSkillSummary[]> {
   try {
+    const basePath = await resolveSkillBase(
+      context.workspace,
+      context.basePath,
+    );
+    if (basePath === undefined) {
+      return [];
+    }
+    const command = context.env.ROAMCLI_AGENT_CLAUDE_CODE_COMMAND?.trim();
+    const options: Options = {
+      cwd: basePath,
+      env: { ...context.env },
+      permissionMode: "plan",
+      includePartialMessages: false,
+      maxTurns: 1,
+    };
+    if (command) {
+      options.pathToClaudeCodeExecutable = command;
+    }
     const sdkQuery = query({
       prompt: " ",
-      options: {
-        cwd: context.basePath,
-        env: { ...context.env },
-        permissionMode: "plan",
-        includePartialMessages: false,
-        maxTurns: 1,
-      },
+      options,
     });
     try {
       const commands = await sdkQuery.supportedCommands();
@@ -320,7 +397,7 @@ async function listClaudeCodeSkills(context: {
         name: command.name,
         description: command.description,
         sourceType: "project",
-        sourcePath: context.basePath,
+        sourcePath: basePath,
       }));
     } finally {
       sdkQuery.close();
@@ -331,12 +408,40 @@ async function listClaudeCodeSkills(context: {
 }
 
 function supportedImageMimeType(mimeType: string): SupportedImageMimeType {
-  if (
-    SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType as SupportedImageMimeType)
-  ) {
+  if (SUPPORTED_IMAGE_MIME_TYPES.includes(mimeType as SupportedImageMimeType)) {
     return mimeType as SupportedImageMimeType;
   }
   throw new Error(`Unsupported Claude Code image mime type: ${mimeType}`);
+}
+
+async function resolveSkillBase(
+  workspace: string,
+  basePath: string,
+): Promise<string | undefined> {
+  try {
+    const workspacePath = resolve(workspace);
+    const candidate = isAbsolute(basePath)
+      ? resolve(basePath)
+      : resolve(workspacePath, basePath);
+    const [realWorkspace, realCandidate] = await Promise.all([
+      realpath(workspacePath),
+      realpath(candidate),
+    ]);
+    const candidateStat = await stat(realCandidate);
+    if (
+      !candidateStat.isDirectory() ||
+      !isInside(realWorkspace, realCandidate)
+    ) {
+      return undefined;
+    }
+    return realCandidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function isInside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
 }
 
 function permissionModeFor(

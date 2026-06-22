@@ -8,6 +8,7 @@ import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
 import {
   CodexJsonParser,
   agentPlugin,
+  approvalResponsePayload,
   codexAgent,
   codexJsonArgs,
   listCodexSkills,
@@ -160,6 +161,23 @@ describe("codex agent plugin", () => {
         payload: { command: "pnpm test" },
       },
     ]);
+  });
+
+  it("includes approval IDs in subprocess approval response payloads", () => {
+    expect(
+      approvalResponsePayload({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "signature",
+      }),
+    ).toEqual({
+      type: "approvalResponse",
+      approvalId: "approval-1",
+      approved: true,
+      signedAt: "2026-06-21T00:00:00.000Z",
+      signature: "signature",
+    });
   });
 
   it("supports JSON array and shell-like args overrides", () => {

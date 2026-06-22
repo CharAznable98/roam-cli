@@ -44,7 +44,7 @@ export class ApprovalTracker {
       summary: draft.summary,
       payload: draft.payload,
       status: "pending",
-      requestedAt: nowIso()
+      requestedAt: nowIso(),
     };
     const decision = new Promise<ApprovalDecision>((resolve) => {
       this.#pending.set(approval.id, {
@@ -61,14 +61,23 @@ export class ApprovalTracker {
     return decision;
   }
 
-  public resolve(approvalId: string, approved: boolean, signedAt: string, signature: string): void {
+  public resolve(
+    approvalId: string,
+    approved: boolean,
+    signedAt: string,
+    signature: string,
+  ): void {
     const pending = this.#pending.get(approvalId);
     if (pending === undefined) {
       return;
     }
     this.#pending.delete(approvalId);
-    pending.resolve({ approved, signedAt, signature });
-    void this.#emit({ type: "sessionStatus", sessionId: pending.sessionId, status: "running" });
+    pending.resolve({ approvalId, approved, signedAt, signature });
+    void this.#emit({
+      type: "sessionStatus",
+      sessionId: pending.sessionId,
+      status: "running",
+    });
   }
 
   public clear(sessionId: string): void {
@@ -76,6 +85,7 @@ export class ApprovalTracker {
       if (pending.sessionId === sessionId) {
         this.#pending.delete(approvalId);
         pending.resolve({
+          approvalId,
           approved: false,
           signedAt: nowIso(),
           signature: "",
@@ -84,12 +94,25 @@ export class ApprovalTracker {
     }
   }
 
-  public verifyPatchSignature(command: Extract<RunnerCommand, { type: "applyPatch" }>): string | undefined {
-    if (this.#approvalSecret === undefined || this.#approvalSecret.length === 0) {
+  public verifyPatchSignature(
+    command: Extract<RunnerCommand, { type: "applyPatch" }>,
+  ): string | undefined {
+    if (
+      this.#approvalSecret === undefined ||
+      this.#approvalSecret.length === 0
+    ) {
       return undefined;
     }
     const target = `patch:${command.sessionId}:${hashPayload(command.patch)}`;
-    if (verifyApprovalSignature(this.#approvalSecret, target, true, command.signedAt, command.signature)) {
+    if (
+      verifyApprovalSignature(
+        this.#approvalSecret,
+        target,
+        true,
+        command.signedAt,
+        command.signature,
+      )
+    ) {
       return undefined;
     }
     return "Patch signature is invalid";

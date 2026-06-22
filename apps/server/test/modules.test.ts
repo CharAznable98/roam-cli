@@ -385,7 +385,11 @@ describe("SessionCommandService", () => {
         100,
       );
       store.createProject(projectRecord());
-      store.setRunnerOnline(runnerRegistration(), true, new Date().toISOString());
+      store.setRunnerOnline(
+        runnerRegistration(),
+        true,
+        new Date().toISOString(),
+      );
       store.createSession({ ...sessionRecord(), status });
       store.createSession({ ...sessionRecord(), id: "session-2" });
 
@@ -426,13 +430,7 @@ describe("SessionCommandService", () => {
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession(sessionRecord());
 
@@ -481,13 +479,7 @@ describe("SessionCommandService", () => {
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession({ ...sessionRecord(), status: "pending" });
 
@@ -530,13 +522,7 @@ describe("SessionCommandService", () => {
       hub,
       new ApprovalSignatureVerifier(undefined),
     );
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession(sessionRecord());
 
@@ -549,7 +535,11 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("session status check was not sent");
     }
-    store.updateSessionStatus("session-1", "completed", new Date().toISOString());
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
     rpc.resolveRunnerResponse({
       requestId: command.requestId,
       sessionId: "session-1",
@@ -1152,6 +1142,59 @@ describe("RunnerEventService", () => {
       expect.objectContaining({
         type: "session:updated",
         session: expect.objectContaining({ id: session.id, status: "stopped" }),
+      }),
+    );
+  });
+
+  it("does not let late approval events downgrade terminal sessions", () => {
+    const streamEvents: ServerEvent[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    const rpc = new RunnerRpcClient(hub);
+    const service = new RunnerEventService(store, hub, rpc);
+    store.createProject(projectRecord());
+    const session = store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+    });
+
+    service.handle({
+      type: "sessionStatus",
+      sessionId: session.id,
+      status: "waiting_approval",
+    });
+
+    expect(store.getSession(session.id)?.status).toBe("completed");
+
+    service.handle({
+      type: "approvalRequested",
+      approval: {
+        id: "approval-late",
+        sessionId: session.id,
+        runnerId: "runner-1",
+        kind: "execCommand",
+        summary: "Late approval",
+        payload: { command: "pwd" },
+        status: "pending",
+        requestedAt: new Date().toISOString(),
+      },
+    });
+
+    expect(store.getSession(session.id)?.status).toBe("completed");
+    expect(store.getApproval("approval-late")).toMatchObject({
+      id: "approval-late",
+      status: "pending",
+    });
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({ type: "approval:requested" }),
+    );
+    expect(streamEvents).not.toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: session.id,
+          status: "waiting_approval",
+        }),
       }),
     );
   });

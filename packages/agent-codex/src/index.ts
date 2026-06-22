@@ -209,14 +209,7 @@ class CodexProcessSession implements AgentSession {
     }
     for (const draft of parsed.approvals) {
       void this.#options.context.requestApproval(draft).then((decision) => {
-        this.#write(
-          `${JSON.stringify({
-            type: "approvalResponse",
-            approved: decision.approved,
-            signedAt: decision.signedAt,
-            signature: decision.signature,
-          })}\n`,
-        );
+        this.#write(`${JSON.stringify(approvalResponsePayload(decision))}\n`);
       });
     }
     for (const draft of parsed.artifacts) {
@@ -231,6 +224,27 @@ class CodexProcessSession implements AgentSession {
     }
     child.stdin.write(data);
   }
+}
+
+export function approvalResponsePayload(decision: {
+  approvalId: string;
+  approved: boolean;
+  signedAt: string;
+  signature: string;
+}): {
+  type: "approvalResponse";
+  approvalId: string;
+  approved: boolean;
+  signedAt: string;
+  signature: string;
+} {
+  return {
+    type: "approvalResponse",
+    approvalId: decision.approvalId,
+    approved: decision.approved,
+    signedAt: decision.signedAt,
+    signature: decision.signature,
+  };
 }
 
 export class CodexJsonParser implements AgentOutputParser {

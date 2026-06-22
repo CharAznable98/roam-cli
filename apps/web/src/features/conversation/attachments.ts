@@ -90,6 +90,51 @@ export function addDraftImages(
   return { attachments };
 }
 
+export function revalidateDraftImages(
+  attachments: readonly DraftImageAttachment[],
+  capability: RunnerCapability | undefined,
+): { attachments: DraftImageAttachment[]; error?: string } {
+  if (attachments.length === 0) {
+    return { attachments: [] };
+  }
+  const limits = imageInputLimits(capability);
+  if (!limits.supported) {
+    return {
+      attachments: [],
+      error: "This agent does not accept image input.",
+    };
+  }
+
+  const maxImages =
+    limits.maxImages > 0 ? limits.maxImages : Number.POSITIVE_INFINITY;
+  const next: DraftImageAttachment[] = [];
+  let error: string | undefined;
+  for (const attachment of attachments) {
+    if (next.length >= maxImages) {
+      error ??= `You can attach up to ${limits.maxImages} images.`;
+      continue;
+    }
+    const { file } = attachment;
+    if (!file.type.startsWith("image/")) {
+      error ??= `${file.name} is not an image file.`;
+      continue;
+    }
+    if (
+      limits.supportedMimeTypes.length > 0 &&
+      !limits.supportedMimeTypes.includes(file.type)
+    ) {
+      error ??= `${file.type || "This image type"} is not supported.`;
+      continue;
+    }
+    if (file.size > limits.maxBytes) {
+      error ??= `${file.name} is larger than ${formatBytes(limits.maxBytes)}.`;
+      continue;
+    }
+    next.push(attachment);
+  }
+  return { attachments: next, ...(error ? { error } : {}) };
+}
+
 export async function draftImagesToUploads(
   attachments: readonly DraftImageAttachment[],
 ): Promise<ImageAttachmentUpload[]> {
