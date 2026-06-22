@@ -90,6 +90,7 @@ class ClaudeCodeSession implements AgentSession {
   #resumeThreadId: string | undefined;
   #sawAssistantOutput = false;
   #sawStreamText = false;
+  #needsFinalOutputFallback = false;
 
   public constructor(context: AgentSessionContext) {
     this.#context = context;
@@ -178,6 +179,7 @@ class ClaudeCodeSession implements AgentSession {
     this.#abortController = new AbortController();
     this.#sawAssistantOutput = false;
     this.#sawStreamText = false;
+    this.#needsFinalOutputFallback = false;
     const sdkQuery = query({
       prompt: promptForInput(input),
       options: this.#options(),
@@ -258,24 +260,30 @@ class ClaudeCodeSession implements AgentSession {
   async #handleMessage(message: SDKMessage): Promise<void> {
     const sessionId = sdkSessionId(message);
     if (sessionId) {
-      this.#resumeThreadId = sessionId;
-      await this.#emit({ type: "thread", threadId: sessionId });
+      if (await this.#emit({ type: "thread", threadId: sessionId })) {
+        this.#resumeThreadId = sessionId;
+      }
     }
     if (message.type === "stream_event") {
       const text = partialText(message.event);
       if (text.length > 0) {
-        this.#sawAssistantOutput = true;
-        this.#sawStreamText = true;
-        await this.#emit({ type: "token", content: text });
+        if (await this.#emit({ type: "token", content: text })) {
+          this.#sawAssistantOutput = true;
+          this.#sawStreamText = true;
+        } else {
+          this.#needsFinalOutputFallback = true;
+        }
       }
       return;
     }
     if (message.type === "assistant") {
       const text = textFromContent(message.message.content);
       if (text.length > 0) {
-        this.#sawAssistantOutput = true;
-        if (!this.#sawStreamText) {
-          await this.#emit({ type: "message", content: text });
+        if (!this.#sawStreamText || this.#needsFinalOutputFallback) {
+          if (await this.#emit({ type: "message", content: text })) {
+            this.#sawAssistantOutput = true;
+            this.#needsFinalOutputFallback = false;
+          }
         }
       }
       if (message.error) {
@@ -290,11 +298,13 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "result") {
       if (
         message.subtype === "success" &&
-        !this.#sawAssistantOutput &&
+        (!this.#sawAssistantOutput || this.#needsFinalOutputFallback) &&
         message.result.length > 0
       ) {
-        this.#sawAssistantOutput = true;
-        await this.#emit({ type: "message", content: message.result });
+        if (await this.#emit({ type: "message", content: message.result })) {
+          this.#sawAssistantOutput = true;
+          this.#needsFinalOutputFallback = false;
+        }
       }
       if (message.subtype !== "success") {
         await this.#emit({
@@ -315,12 +325,14 @@ class ClaudeCodeSession implements AgentSession {
     }
   }
 
-  async #emit(event: AgentRuntimeEvent): Promise<void> {
+  async #emit(event: AgentRuntimeEvent): Promise<boolean> {
     try {
       await this.#context.emit(event);
+      return true;
     } catch {
       // Event delivery belongs to the runner sink and must not change Claude's
       // session result.
+      return false;
     }
   }
 }

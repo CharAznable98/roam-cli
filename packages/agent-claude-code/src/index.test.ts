@@ -242,6 +242,42 @@ describe("claude code agent plugin", () => {
     });
   });
 
+  it("does not resume from thread ids that failed to emit", async () => {
+    const firstQuery = deferredQuery([
+      {
+        type: "assistant",
+        session_id: "claude-session-1",
+        message: {
+          content: [{ type: "text", text: "First response" }],
+        },
+      },
+    ]);
+    sdk.query
+      .mockReturnValueOnce(firstQuery.query)
+      .mockReturnValueOnce(fakeQuery([]));
+    const session = claudeCodeAgent.createSession(
+      makeContext({
+        emit: async (event) => {
+          if (event.type === "thread") {
+            throw new Error("sink down");
+          }
+        },
+      }),
+    );
+
+    await session.start();
+    session.deliverInput({ content: "follow up" });
+    firstQuery.release();
+
+    await vi.waitFor(() => {
+      expect(sdk.query).toHaveBeenCalledTimes(2);
+    });
+    expect(sdk.query.mock.calls[1]?.[0]).toMatchObject({
+      prompt: "follow up",
+    });
+    expect(sdk.query.mock.calls[1]?.[0]?.options).not.toHaveProperty("resume");
+  });
+
   it("keeps stopped status when the SDK iterator rejects after stop", async () => {
     const events: AgentRuntimeEvent[] = [];
     const abortedQuery = deferredThrowingQuery(new Error("aborted"));
@@ -336,6 +372,55 @@ describe("claude code agent plugin", () => {
     });
     expect(events).not.toContainEqual({
       type: "message",
+      content: "Claude response",
+    });
+  });
+
+  it("emits final assistant output when stream token delivery fails", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    sdk.query.mockReturnValue(
+      fakeQuery([
+        {
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Claude response" },
+          },
+        },
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "Claude response" }],
+          },
+        },
+      ]),
+    );
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            if (event.type === "token") {
+              throw new Error("sink down");
+            }
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "message",
+        content: "Claude response",
+      });
+      expect(events).toContainEqual({
+        type: "status",
+        status: "completed",
+      });
+    });
+    expect(events).not.toContainEqual({
+      type: "token",
       content: "Claude response",
     });
   });
