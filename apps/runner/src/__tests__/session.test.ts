@@ -592,6 +592,59 @@ describe("SessionManager", () => {
     manager.control("s1", "stop");
   });
 
+  it("reports synchronous stop control failures and still force-closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspace = await mkdtemp(
+        join(tmpdir(), "roam-runner-session-control-error-"),
+      );
+      const controlAgent = throwingControlCodexAgent();
+      const events: RunnerEvent[] = [];
+      const manager = new SessionManager({
+        workspace,
+        profile: "standard",
+        agents: [controlAgent.agent],
+        emit: (event) => {
+          events.push(event);
+        },
+      });
+
+      await manager.start(makeSession(workspace), "ready");
+      await vi.waitFor(() => {
+        expect(events).toContainEqual({
+          type: "sessionStatus",
+          sessionId: "s1",
+          status: "running",
+        });
+      });
+
+      expect(() => manager.control("s1", "stop")).not.toThrow();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        events.some(
+          (event) =>
+            event.type === "error" &&
+            event.sessionId === "s1" &&
+            event.message === "control boom" &&
+            event.code === "AGENT_CONTROL_ERROR",
+        ),
+      ).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(controlAgent.closed()).toBe(true);
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "stopped",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("finalizes terminal sessions when terminal status emission rejects", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-terminal-error-"),
@@ -982,6 +1035,54 @@ function throwingInputCodexAgent(): LoadedAgent {
   };
 }
 
+function throwingControlCodexAgent(): {
+  agent: LoadedAgent;
+  closed: () => boolean;
+} {
+  let closed = false;
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-throwing-control",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    agent: {
+      capability,
+      definition: {
+        kind: "codex",
+        label: "Codex",
+        buildCapability() {
+          return capability;
+        },
+        createSession(context) {
+          return new TestAgentSession(
+            context,
+            undefined,
+            undefined,
+            () => {
+              throw new Error("control boom");
+            },
+            async () => {
+              closed = true;
+              await context.emit({ type: "status", status: "stopped" });
+            },
+          );
+        },
+      },
+    },
+    closed: () => closed,
+  };
+}
+
 function controlledCompletionCodexAgent(): {
   agent: LoadedAgent;
   complete: () => Promise<void>;
@@ -1061,15 +1162,23 @@ class TestAgentSession implements AgentSession {
   readonly #deliverInput:
     | ((input: AgentInput) => Promise<void> | void)
     | undefined;
+  readonly #control:
+    | ((signal: "interrupt" | "stop" | "resume") => Promise<void> | void)
+    | undefined;
+  readonly #close: (() => Promise<void> | void) | undefined;
 
   public constructor(
     context: AgentSessionContext,
     start?: () => Promise<void> | void,
     deliverInput?: (input: AgentInput) => Promise<void> | void,
+    control?: (signal: "interrupt" | "stop" | "resume") => Promise<void> | void,
+    close?: () => Promise<void> | void,
   ) {
     this.#context = context;
     this.#start = start;
     this.#deliverInput = deliverInput;
+    this.#control = control;
+    this.#close = close;
   }
 
   public async start(): Promise<void> {
@@ -1080,13 +1189,18 @@ class TestAgentSession implements AgentSession {
     return this.#deliverInput?.(input);
   }
 
-  public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
+  public control(signal: "interrupt" | "stop" | "resume"): Promise<void> | void {
+    if (this.#control !== undefined) {
+      return this.#control(signal);
+    }
     if (signal === "stop") {
-      await this.#context.emit({ type: "status", status: "stopped" });
+      return this.#context.emit({ type: "status", status: "stopped" });
     }
   }
 
-  public close(): void {}
+  public close(): Promise<void> | void {
+    return this.#close?.();
+  }
 }
 
 function makeSession(workspace: string): Session {

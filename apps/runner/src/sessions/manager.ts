@@ -471,45 +471,45 @@ export class SessionManager {
       return;
     }
     if (signal === "interrupt") {
-      void Promise.resolve(running.agentSession.control("interrupt")).catch(
-        (error: unknown) => {
+      void Promise.resolve()
+        .then(() => running.agentSession.control("interrupt"))
+        .catch((error: unknown) => {
           void this.#emit({
             type: "error",
             sessionId,
             message: error instanceof Error ? error.message : String(error),
             code: "AGENT_CONTROL_ERROR",
           });
-        },
-      );
+        });
     } else if (signal === "stop") {
       running.stopRequested = true;
-      void Promise.resolve(running.agentSession.control("stop")).catch(
-        (error: unknown) => {
+      void Promise.resolve()
+        .then(() => running.agentSession.control("stop"))
+        .catch((error: unknown) => {
           void this.#emit({
             type: "error",
             sessionId,
             message: error instanceof Error ? error.message : String(error),
             code: "AGENT_CONTROL_ERROR",
           });
-        },
-      );
+        });
       running.stopTimer ??= setTimeout(() => {
-        void Promise.resolve(running.agentSession.close()).catch(
-          () => undefined,
-        );
+        void Promise.resolve()
+          .then(() => running.agentSession.close())
+          .catch(() => undefined);
       }, 1500);
       running.stopTimer.unref?.();
     } else {
-      void Promise.resolve(running.agentSession.control("resume")).catch(
-        (error: unknown) => {
+      void Promise.resolve()
+        .then(() => running.agentSession.control("resume"))
+        .catch((error: unknown) => {
           void this.#emit({
             type: "error",
             sessionId,
             message: error instanceof Error ? error.message : String(error),
             code: "AGENT_CONTROL_ERROR",
           });
-        },
-      );
+        });
     }
   }
 

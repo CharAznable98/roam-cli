@@ -17,6 +17,7 @@ import type {
   AgentLaunchAttachment,
   AgentPlugin,
   AgentPluginContext,
+  AgentRuntimeEvent,
   AgentSession,
   AgentSessionContext,
   AgentSkillListContext,
@@ -123,7 +124,7 @@ class ClaudeCodeSession implements AgentSession {
       this.#queue.length = 0;
       this.#abortController?.abort();
       this.#query?.close();
-      await this.#context.emit({ type: "status", status: "stopped" });
+      await this.#emit({ type: "status", status: "stopped" });
       return;
     }
   }
@@ -147,12 +148,12 @@ class ClaudeCodeSession implements AgentSession {
         }
         this.#closed = true;
         this.#queue.length = 0;
-        void this.#context.emit({
+        void this.#emit({
           type: "error",
           message: error instanceof Error ? error.message : String(error),
           code: "CLAUDE_CODE_ERROR",
         });
-        void this.#context.emit({ type: "status", status: "failed" });
+        void this.#emit({ type: "status", status: "failed" });
       })
       .finally(() => {
         this.#draining = false;
@@ -166,7 +167,7 @@ class ClaudeCodeSession implements AgentSession {
     while (!this.#closed) {
       const input = this.#queue.shift();
       if (input === undefined) {
-        await this.#context.emit({ type: "status", status: "completed" });
+        await this.#emit({ type: "status", status: "completed" });
         return;
       }
       await this.#run(input);
@@ -258,14 +259,14 @@ class ClaudeCodeSession implements AgentSession {
     const sessionId = sdkSessionId(message);
     if (sessionId) {
       this.#resumeThreadId = sessionId;
-      await this.#context.emit({ type: "thread", threadId: sessionId });
+      await this.#emit({ type: "thread", threadId: sessionId });
     }
     if (message.type === "stream_event") {
       const text = partialText(message.event);
       if (text.length > 0) {
         this.#sawAssistantOutput = true;
         this.#sawStreamText = true;
-        await this.#context.emit({ type: "token", content: text });
+        await this.#emit({ type: "token", content: text });
       }
       return;
     }
@@ -274,11 +275,11 @@ class ClaudeCodeSession implements AgentSession {
       if (text.length > 0) {
         this.#sawAssistantOutput = true;
         if (!this.#sawStreamText) {
-          await this.#context.emit({ type: "message", content: text });
+          await this.#emit({ type: "message", content: text });
         }
       }
       if (message.error) {
-        await this.#context.emit({
+        await this.#emit({
           type: "error",
           message: message.error,
           code: "CLAUDE_CODE_ASSISTANT_ERROR",
@@ -293,15 +294,15 @@ class ClaudeCodeSession implements AgentSession {
         message.result.length > 0
       ) {
         this.#sawAssistantOutput = true;
-        await this.#context.emit({ type: "message", content: message.result });
+        await this.#emit({ type: "message", content: message.result });
       }
       if (message.subtype !== "success") {
-        await this.#context.emit({
+        await this.#emit({
           type: "error",
           message: message.errors.join("\n") || message.subtype,
           code: "CLAUDE_CODE_RESULT_ERROR",
         });
-        await this.#context.emit({ type: "status", status: "failed" });
+        await this.#emit({ type: "status", status: "failed" });
         this.#closed = true;
       }
       return;
@@ -309,8 +310,17 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "system" && message.subtype !== "init") {
       const summary = summarizeSystemMessage(message);
       if (summary) {
-        await this.#context.emit({ type: "message", content: summary });
+        await this.#emit({ type: "message", content: summary });
       }
+    }
+  }
+
+  async #emit(event: AgentRuntimeEvent): Promise<void> {
+    try {
+      await this.#context.emit(event);
+    } catch {
+      // Event delivery belongs to the runner sink and must not change Claude's
+      // session result.
     }
   }
 }

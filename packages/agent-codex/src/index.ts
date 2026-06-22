@@ -127,7 +127,7 @@ class CodexProcessSession implements AgentSession {
       });
     });
     child.on("close", (code, signal) => {
-      void this.#finish(code, signal);
+      void this.#finish(code, signal).catch(() => undefined);
     });
   }
 
@@ -165,7 +165,10 @@ class CodexProcessSession implements AgentSession {
   }
 
   #trackOutput(chunk: string | Buffer): void {
-    const task = this.#handleOutput(chunk);
+    this.#trackTask(this.#handleOutput(chunk));
+  }
+
+  #trackTask(task: Promise<void>): void {
     this.#outputTasks.add(task);
     void task
       .finally(() => {
@@ -178,7 +181,7 @@ class CodexProcessSession implements AgentSession {
     code: number | null,
     signal: NodeJS.Signals | null,
   ): Promise<void> {
-    await Promise.allSettled([...this.#outputTasks]);
+    await this.#waitForOutputTasks();
     const status =
       this.#failed
         ? "failed"
@@ -188,6 +191,12 @@ class CodexProcessSession implements AgentSession {
           ? "stopped"
           : "failed";
     await this.#options.context.emit({ type: "status", status });
+  }
+
+  async #waitForOutputTasks(): Promise<void> {
+    while (this.#outputTasks.size > 0) {
+      await Promise.allSettled([...this.#outputTasks]);
+    }
   }
 
   async #handleOutput(chunk: string | Buffer): Promise<void> {
@@ -210,7 +219,7 @@ class CodexProcessSession implements AgentSession {
       await this.#options.context.emit({ type: "token", content: parsed.text });
     }
     for (const draft of parsed.approvals) {
-      void this.#requestApproval(draft);
+      this.#trackTask(this.#requestApproval(draft));
     }
     for (const draft of parsed.artifacts) {
       await this.#options.context.emit({ type: "artifact", draft });

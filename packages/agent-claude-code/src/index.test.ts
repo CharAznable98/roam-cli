@@ -269,6 +269,31 @@ describe("claude code agent plugin", () => {
     expect(events).not.toContainEqual({ type: "status", status: "failed" });
   });
 
+  it("does not convert event sink failures into Claude failures", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    sdk.query.mockReturnValue(fakeQuery([]));
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+            if (event.type === "status" && event.status === "completed") {
+              throw new Error("sink down");
+            }
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events).not.toContainEqual({ type: "status", status: "failed" });
+  });
+
   it("does not emit a duplicate final assistant message after stream tokens", async () => {
     const events: AgentRuntimeEvent[] = [];
     sdk.query.mockReturnValue(
