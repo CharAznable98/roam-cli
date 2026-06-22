@@ -25,7 +25,6 @@ export interface SessionManagerOptions {
   stateDir?: string;
   profile: RunnerProfile;
   agents: readonly LoadedAgent[];
-  approvalSecret?: string;
   emit: RunnerEventSink;
 }
 
@@ -54,9 +53,6 @@ export class SessionManager {
     this.#emit = options.emit;
     this.#approvals = new ApprovalTracker({
       emit: this.#emit,
-      ...(options.approvalSecret === undefined
-        ? {}
-        : { approvalSecret: options.approvalSecret }),
     });
     this.#output = new SessionOutputHandler({
       approvals: this.#approvals,
@@ -67,8 +63,6 @@ export class SessionManager {
       emit: this.#emit,
       getSessionCwd: (sessionId, cwd) => this.#getSessionCwd(sessionId, cwd),
       getStartedSessionCwd: (sessionId) => this.#sessionCwds.get(sessionId),
-      verifyPatchSignature: (command) =>
-        this.#approvals.verifyPatchSignature(command),
     });
   }
 
@@ -211,12 +205,7 @@ export class SessionManager {
         await this.#workspaceCommands.removeGitWorktree(command);
         return;
       case "resolveApproval":
-        this.resolveApproval(
-          command.approvalId,
-          command.approved,
-          command.signedAt,
-          command.signature,
-        );
+        this.resolveApproval(command.approvalId, command.approved);
         return;
       case "controlSignal":
         this.control(command.sessionId, command.signal);
@@ -470,10 +459,8 @@ export class SessionManager {
   public resolveApproval(
     approvalId: string,
     approved: boolean,
-    signedAt: string,
-    signature: string,
   ): void {
-    this.#approvals.resolve(approvalId, approved, signedAt, signature);
+    this.#approvals.resolve(approvalId, approved);
   }
 
   public control(

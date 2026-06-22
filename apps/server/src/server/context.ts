@@ -4,6 +4,7 @@ import type { ConnectionHub } from "../infra/connection-hub.js";
 import type { RunnerRpcClient } from "../infra/runner-rpc-client.js";
 import type { ServerStore } from "../infra/sqlite-store.js";
 import type { ApprovalService } from "../modules/approvals/approval-service.js";
+import type { AuthService } from "../modules/auth/auth-service.js";
 import type { ArtifactService } from "../modules/artifacts/artifact-service.js";
 import type { GitService } from "../modules/git/git-service.js";
 import type { RunnerEventService } from "../modules/runners/runner-event-service.js";
@@ -17,6 +18,7 @@ export interface AppContext {
   rpc: RunnerRpcClient;
   services: {
     approvals: ApprovalService;
+    auth: AuthService;
     artifacts: ArtifactService;
     git: GitService;
     runnerEvents: RunnerEventService;

@@ -4,7 +4,7 @@ import { buildRunnerCommand } from "./runner-command";
 describe("buildRunnerCommand", () => {
   it("uses the current http host and port for the runner websocket URL", () => {
     expect(
-      buildRunnerCommand("dev-token", {
+      buildRunnerCommand("runner-token", {
         protocol: "http:",
         host: "127.0.0.1:63098",
       }),
@@ -22,13 +22,13 @@ describe("buildRunnerCommand", () => {
     );
   });
 
-  it("falls back to dev-token when the token field is empty", () => {
+  it("does not synthesize a token when the server has not provided one", () => {
     expect(
       buildRunnerCommand("", {
         protocol: "http:",
         host: "localhost:8787",
       }),
-    ).toContain("--token 'dev-token'");
+    ).toContain("--token ''");
   });
 
   it("quotes tokens so copied commands remain shell-safe", () => {

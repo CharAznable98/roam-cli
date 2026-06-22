@@ -42,9 +42,6 @@ export interface WorkspaceCommandHandlerOptions {
   emit: RunnerEventSink;
   getSessionCwd(sessionId: string, cwd: string | undefined): string | undefined;
   getStartedSessionCwd(sessionId: string): string | undefined;
-  verifyPatchSignature(
-    command: Extract<RunnerCommand, { type: "applyPatch" }>,
-  ): string | undefined;
 }
 
 export class WorkspaceCommandHandler {
@@ -52,14 +49,12 @@ export class WorkspaceCommandHandler {
   readonly #emit: RunnerEventSink;
   readonly #getSessionCwd: WorkspaceCommandHandlerOptions["getSessionCwd"];
   readonly #getStartedSessionCwd: WorkspaceCommandHandlerOptions["getStartedSessionCwd"];
-  readonly #verifyPatchSignature: WorkspaceCommandHandlerOptions["verifyPatchSignature"];
 
   public constructor(options: WorkspaceCommandHandlerOptions) {
     this.#workspace = options.workspace;
     this.#emit = options.emit;
     this.#getSessionCwd = options.getSessionCwd;
     this.#getStartedSessionCwd = options.getStartedSessionCwd;
-    this.#verifyPatchSignature = options.verifyPatchSignature;
   }
 
   public async readFileTree(
@@ -220,12 +215,6 @@ export class WorkspaceCommandHandler {
   public async applyPatch(
     command: Extract<RunnerCommand, { type: "applyPatch" }>,
   ): Promise<void> {
-    const signatureError = this.#verifyPatchSignature(command);
-    if (signatureError !== undefined) {
-      await this.#emitPatchResult(command, signatureError);
-      return;
-    }
-
     const sessionCwd = this.#getStartedSessionCwd(command.sessionId);
     if (sessionCwd === undefined) {
       await this.#emitPatchResult(command, "Session cwd is unavailable");

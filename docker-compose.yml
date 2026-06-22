@@ -4,7 +4,6 @@ services:
       context: .
       dockerfile: apps/server/Dockerfile
     environment:
-      ROAMCLI_AUTH_TOKEN: dev-token
       ROAMCLI_DATA_DIR: /data
       HOST: 0.0.0.0
       PORT: 8787

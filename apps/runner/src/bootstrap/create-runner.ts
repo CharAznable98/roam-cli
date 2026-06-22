@@ -23,6 +23,9 @@ export async function createRunner(
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
   const cli = parseCliArgs(argv);
+  if (!cli.token) {
+    throw new Error("Missing --token or ROAM_RUNNER_TOKEN");
+  }
   const registry = await loadAgentRegistry(
     cli.profile,
     cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined,
@@ -39,18 +42,14 @@ export async function createRunner(
   const audit = new AuditLog(join(stateDir, "audit.jsonl"));
   const cache = new EventCache(join(stateDir, "pending-events.jsonl"));
   let connection: RunnerConnection;
-  const sessionOptions: Omit<SessionManagerOptions, "approvalSecret"> = {
+  const sessionOptions: SessionManagerOptions = {
     workspace: cli.workspace,
     stateDir,
     profile: cli.profile,
     agents: registry.agents,
     emit: (event) => connection.send(event),
   };
-  const sessions = new SessionManager(
-    cli.token === undefined
-      ? sessionOptions
-      : { ...sessionOptions, approvalSecret: cli.token },
-  );
+  const sessions = new SessionManager(sessionOptions);
 
   const connectionOptions = {
     serverUrl: cli.server,

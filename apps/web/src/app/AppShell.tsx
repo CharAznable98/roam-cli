@@ -5,11 +5,19 @@ import type { MarkdownFileLinkTarget } from "../features/conversation/file-links
 import { FilePanel } from "../features/files/FilePanel";
 import { GitPanel } from "../features/git/GitPanel";
 import { PushSettings } from "../features/pwa/PushSettings";
-import type { Project, Session } from "@roamcli/shared/protocol";
+import type {
+  AccountSecurityState,
+  ApiChangePassword,
+  Project,
+  Session,
+} from "@roamcli/shared/protocol";
 import {
   FolderPlus,
+  KeyRound,
+  LogOut,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   Wifi,
   WifiOff,
@@ -21,7 +29,14 @@ import {
   RunnerSidebar,
   SidebarModal,
 } from "../features/sessions/RunnerSidebar";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { AppNotification } from "./state";
@@ -39,10 +54,17 @@ export function AppShell({ controller }: AppShellProps) {
   const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
   const {
     state,
-    token,
-    setToken,
+    authView,
+    accountSecurity,
     streamReconnect,
     reconnectStream,
+    setupOwner,
+    loginOwner,
+    logoutOwner,
+    logoutAllOwnerSessions,
+    changeOwnerPassword,
+    regenerateRunnerToken,
+    refreshAccountSecurity,
     sessionStatusCheckState,
     checkSelectedSessionStatus,
     dispatch,
@@ -90,6 +112,8 @@ export function AppShell({ controller }: AppShellProps) {
     runGitRemoteOperation,
     removeGitWorktree,
   } = controller;
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const accountOpenRequestIdRef = useRef(0);
 
   const setActiveTab = useCallback(
     (tab: WorkspaceTab) => dispatch({ type: "activeTabChanged", tab }),
@@ -148,6 +172,57 @@ export function AppShell({ controller }: AppShellProps) {
     setMobileSessionModalOpen(false);
   }, [selectedProject?.id]);
 
+  const closeAccountSecurity = useCallback(() => {
+    accountOpenRequestIdRef.current += 1;
+    setAccountModalOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (authView !== "authenticated") {
+      closeAccountSecurity();
+    }
+  }, [authView, closeAccountSecurity]);
+
+  const openAccountSecurity = useCallback(() => {
+    const requestId = accountOpenRequestIdRef.current + 1;
+    accountOpenRequestIdRef.current = requestId;
+    void refreshAccountSecurity()
+      .then(() => {
+        if (accountOpenRequestIdRef.current === requestId) {
+          setAccountModalOpen(true);
+        }
+      })
+      .catch(() => {
+        if (accountOpenRequestIdRef.current === requestId) {
+          setAccountModalOpen(false);
+        }
+      });
+  }, [refreshAccountSecurity]);
+
+  const logoutFromAccountSecurity = useCallback(async () => {
+    await logoutOwner();
+    closeAccountSecurity();
+  }, [closeAccountSecurity, logoutOwner]);
+
+  const logoutAllFromAccountSecurity = useCallback(async () => {
+    await logoutAllOwnerSessions();
+    closeAccountSecurity();
+  }, [closeAccountSecurity, logoutAllOwnerSessions]);
+
+  const changePasswordFromAccountSecurity = useCallback(
+    async (input: ApiChangePassword) => {
+      await changeOwnerPassword(input);
+      closeAccountSecurity();
+    },
+    [changeOwnerPassword, closeAccountSecurity],
+  );
+
+  if (authView !== "authenticated") {
+    return (
+      <AuthGate mode={authView} onSetup={setupOwner} onLogin={loginOwner} />
+    );
+  }
+
   return (
     <div className={`app-shell active-${state.activeTab}`}>
       <header className="topbar">
@@ -166,14 +241,14 @@ export function AppShell({ controller }: AppShellProps) {
               ? "stream connected"
               : "stream disconnected"}
           </span>
-          <label className="token-field">
-            <span>Token</span>
-            <input
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              aria-label="API token"
-            />
-          </label>
+          <button
+            className="small-button"
+            type="button"
+            onClick={openAccountSecurity}
+          >
+            <ShieldCheck size={16} />
+            Account & Security
+          </button>
           <span
             className={`topbar-status ${
               state.loadState === "error" ? "error" : "success"
@@ -185,6 +260,15 @@ export function AppShell({ controller }: AppShellProps) {
           </span>
         </div>
         <div className="mobile-topbar-actions">
+          <button
+            className="mobile-icon-button"
+            type="button"
+            aria-label="Open Account & Security"
+            title="Account & Security"
+            onClick={openAccountSecurity}
+          >
+            <ShieldCheck size={16} />
+          </button>
           <button
             className={`compact-status-button ${compactStatus.tone}`}
             type="button"
@@ -225,7 +309,8 @@ export function AppShell({ controller }: AppShellProps) {
           <div>
             <h2>API connection failed</h2>
             <p>
-              Check the API token or backend route, then reconnect the stream.
+              Check your login session or backend route, then reconnect the
+              stream.
             </p>
             <button
               className="primary-action-button"
@@ -485,8 +570,6 @@ export function AppShell({ controller }: AppShellProps) {
           onClose={() => setMobileStatusModalOpen(false)}
         >
           <MobileStatusSheet
-            token={token}
-            onTokenChange={setToken}
             connectionState={state.connectionState}
             loadState={state.loadState}
             runnerCount={state.runners.length}
@@ -495,21 +578,342 @@ export function AppShell({ controller }: AppShellProps) {
           />
         </SidebarModal>
       ) : null}
+      {accountModalOpen && accountSecurity ? (
+        <SidebarModal
+          title="Account & Security"
+          variant="sheet"
+          onClose={closeAccountSecurity}
+        >
+          <AccountSecurityPanel
+            account={accountSecurity}
+            runnerCommand={runnerCommand}
+            onLogout={logoutFromAccountSecurity}
+            onLogoutAll={logoutAllFromAccountSecurity}
+            onChangePassword={changePasswordFromAccountSecurity}
+            onRegenerateRunnerToken={regenerateRunnerToken}
+          />
+        </SidebarModal>
+      ) : null}
+    </div>
+  );
+}
+
+function AuthGate({
+  mode,
+  onSetup,
+  onLogin,
+}: {
+  mode: "checking" | "setup_required" | "login";
+  onSetup: (input: { setupToken: string; password: string }) => Promise<void>;
+  onLogin: (password: string) => Promise<void>;
+}) {
+  const [setupToken, setSetupToken] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const isSetup = mode === "setup_required";
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (mode === "checking") {
+      return;
+    }
+    if (isSetup && password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (isSetup) {
+        await onSetup({ setupToken, password });
+      } else {
+        await onLogin(password);
+      }
+    } catch (submitError: unknown) {
+      setError(errorMessage(submitError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="auth-gate">
+      <form className="auth-panel" onSubmit={(event) => void submit(event)}>
+        <div className="auth-panel-header">
+          <p className="topbar-kicker">RoamCli</p>
+          <h1>{isSetup ? "Set Up Owner Access" : "Owner Login"}</h1>
+        </div>
+        {mode === "checking" ? (
+          <div className="empty-state compact">Checking session...</div>
+        ) : (
+          <>
+            {isSetup ? (
+              <label className="field">
+                <span>Setup token</span>
+                <input
+                  value={setupToken}
+                  onChange={(event) => setSetupToken(event.target.value)}
+                  autoComplete="one-time-code"
+                  required
+                />
+              </label>
+            ) : null}
+            <label className="field">
+              <span>Password</span>
+              <input
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                type="password"
+                autoComplete={isSetup ? "new-password" : "current-password"}
+                minLength={isSetup ? 12 : 1}
+                required
+              />
+            </label>
+            {isSetup ? (
+              <label className="field">
+                <span>Confirm password</span>
+                <input
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  required
+                />
+              </label>
+            ) : null}
+            {error ? (
+              <div className="form-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+            <button className="primary-action-button" type="submit">
+              <KeyRound size={16} />
+              {submitting
+                ? isSetup
+                  ? "Setting up..."
+                  : "Signing in..."
+                : isSetup
+                  ? "Complete setup"
+                  : "Sign in"}
+            </button>
+          </>
+        )}
+      </form>
+    </main>
+  );
+}
+
+function AccountSecurityPanel({
+  account,
+  runnerCommand,
+  onLogout,
+  onLogoutAll,
+  onChangePassword,
+  onRegenerateRunnerToken,
+}: {
+  account: AccountSecurityState;
+  runnerCommand: string;
+  onLogout: () => Promise<void>;
+  onLogoutAll: () => Promise<void>;
+  onChangePassword: (input: ApiChangePassword) => Promise<void>;
+  onRegenerateRunnerToken: () => Promise<void>;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState<
+    "password" | "runner" | "logout" | "all" | ""
+  >("");
+
+  const copy = (value: string) => {
+    void navigator.clipboard?.writeText(value);
+  };
+
+  const submitPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setSubmitting("password");
+    try {
+      await onChangePassword({ currentPassword, newPassword });
+    } catch (changeError: unknown) {
+      setError(errorMessage(changeError));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  const regenerate = async () => {
+    if (
+      !window.confirm(
+        "Regenerate the Runner token? Current online runners stay connected, but old-token reconnects will fail.",
+      )
+    ) {
+      return;
+    }
+    setSubmitting("runner");
+    setError("");
+    try {
+      await onRegenerateRunnerToken();
+    } catch (runnerError: unknown) {
+      setError(errorMessage(runnerError));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  const logoutAll = async () => {
+    if (!window.confirm("Log out all web sessions?")) {
+      return;
+    }
+    setSubmitting("all");
+    await onLogoutAll();
+  };
+
+  return (
+    <div className="account-security-panel">
+      <section className="settings-section">
+        <h3>Runner Token</h3>
+        <div className="secret-display" aria-label="Runner token">
+          {account.runnerToken}
+        </div>
+        <pre className="command-display">{runnerCommand}</pre>
+        <div className="button-row">
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => copy(account.runnerToken)}
+          >
+            Copy token
+          </button>
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => copy(runnerCommand)}
+          >
+            Copy command
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={() => void regenerate()}
+            disabled={submitting === "runner"}
+          >
+            Regenerate
+          </button>
+        </div>
+        <p className="settings-meta">
+          Created {formatDate(account.runnerTokenCreatedAt)} · Updated{" "}
+          {formatDate(account.runnerTokenUpdatedAt)}
+          {account.runnerTokenLastUsedAt
+            ? ` · Last used ${formatDate(account.runnerTokenLastUsedAt)}`
+            : ""}
+        </p>
+      </section>
+
+      <section className="settings-section">
+        <h3>Web Sessions</h3>
+        <div className="session-list">
+          {account.sessions.map((session) => (
+            <div className="session-row" key={session.id}>
+              <span>
+                {session.current ? "Current session" : "Signed-in session"}
+              </span>
+              <span>{formatDate(session.lastSeenAt)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="button-row">
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => {
+              setSubmitting("logout");
+              void onLogout();
+            }}
+          >
+            <LogOut size={14} />
+            Log out
+          </button>
+          <button
+            className="danger-button"
+            type="button"
+            onClick={() => void logoutAll()}
+            disabled={submitting === "all"}
+          >
+            Log out all
+          </button>
+        </div>
+      </section>
+
+      <form
+        className="settings-section"
+        onSubmit={(event) => void submitPassword(event)}
+      >
+        <h3>Change Password</h3>
+        <label className="field">
+          <span>Current password</span>
+          <input
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            type="password"
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        <label className="field">
+          <span>New password</span>
+          <input
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            type="password"
+            autoComplete="new-password"
+            minLength={12}
+            required
+          />
+        </label>
+        <label className="field">
+          <span>Confirm new password</span>
+          <input
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            type="password"
+            autoComplete="new-password"
+            minLength={12}
+            required
+          />
+        </label>
+        {error ? (
+          <div className="form-error" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <button
+          className="primary-action-button"
+          type="submit"
+          disabled={submitting === "password"}
+        >
+          Change password
+        </button>
+      </form>
     </div>
   );
 }
 
 function MobileStatusSheet({
-  token,
-  onTokenChange,
   connectionState,
   loadState,
   runnerCount,
   streamReconnect,
   onReconnect,
 }: {
-  token: string;
-  onTokenChange: (token: string) => void;
   connectionState: "open" | "closed" | "error";
   loadState: "loading" | "ready" | "error";
   runnerCount: number;
@@ -532,14 +936,6 @@ function MobileStatusSheet({
 
   return (
     <div className="mobile-sheet-stack">
-      <label className="field">
-        <span>Token</span>
-        <input
-          value={token}
-          onChange={(event) => onTokenChange(event.target.value)}
-          aria-label="Mobile API token"
-        />
-      </label>
       <dl className="status-details">
         <div>
           <dt>Stream</dt>
@@ -770,6 +1166,14 @@ function getCompactStatusLabel(
     return { label: "Retrying", tone: "warning" };
   }
   return { label: "Offline", tone: "warning" };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatDate(value: string): string {
+  return new Date(value).toLocaleString();
 }
 
 function WorkspaceTabButton({

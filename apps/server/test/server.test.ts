@@ -7,12 +7,16 @@ import {
   type RunnerRegistration,
   type Session,
 } from "@roamcli/shared/protocol";
-import { hashPayload, signApproval } from "@roamcli/shared/security";
+import { hashPayload } from "@roamcli/shared/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { createServer, type RoamServer } from "../src/app.js";
 
-const token = "test-token";
+const TEST_ORIGIN = "http://127.0.0.1";
+const OWNER_PASSWORD = "test-password-123";
+
+let authCookie = "";
+let runnerToken = "";
 
 describe("server", () => {
   let dataDir: string;
@@ -22,10 +26,39 @@ describe("server", () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "roamcli-server-"));
     app = await createServer({
       dataDir,
-      authToken: token,
+      publicOrigin: TEST_ORIGIN,
       webDistDir: false,
       runnerRpcTimeoutMs: 50,
     });
+    const originalInject = app.inject.bind(app);
+    const setup = await originalInject({
+      method: "POST",
+      url: "/v1/auth/setup",
+      headers: { origin: TEST_ORIGIN },
+      payload: {
+        setupToken: readSetupToken(dataDir),
+        password: OWNER_PASSWORD,
+      },
+    });
+    expect(setup.statusCode).toBe(201);
+    authCookie = extractCookie(setup.headers["set-cookie"]);
+    runnerToken = setup.json().account.runnerToken as string;
+    app.inject = ((options: any, ...args: any[]) => {
+      if (shouldAttachAuth(options)) {
+        return originalInject(
+          {
+            ...options,
+            headers: {
+              ...options.headers,
+              cookie: authCookie,
+              origin: TEST_ORIGIN,
+            },
+          },
+          ...args,
+        );
+      }
+      return originalInject(options, ...args);
+    }) as typeof app.inject;
   });
 
   afterEach(async () => {
@@ -33,7 +66,7 @@ describe("server", () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("requires bearer auth and lists persisted sessions", async () => {
+  it("requires an owner session and lists persisted sessions", async () => {
     const unauthorized = await app.inject({
       method: "GET",
       url: "/v1/sessions",
@@ -43,10 +76,305 @@ describe("server", () => {
     const authorized = await app.inject({
       method: "GET",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(authorized.statusCode).toBe(200);
     expect(authorized.json()).toEqual({ sessions: [] });
+  });
+
+  it("keeps login rate limits scoped to the failing source", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.10",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: { origin: TEST_ORIGIN },
+      remoteAddress: "203.0.113.10",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameSource.statusCode).toBe(429);
+
+    const otherSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: { origin: TEST_ORIGIN },
+      remoteAddress: "203.0.113.20",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(otherSource.statusCode).toBe(200);
+  });
+
+  it("uses forwarded client IPs from trusted proxies for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.10",
+        },
+        remoteAddress: "127.0.0.1",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameForwardedSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.10",
+      },
+      remoteAddress: "127.0.0.1",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameForwardedSource.statusCode).toBe(429);
+
+    const otherForwardedSource = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.20",
+      },
+      remoteAddress: "127.0.0.1",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(otherForwardedSource.statusCode).toBe(200);
+  });
+
+  it("ignores forwarded client IPs from untrusted direct sources for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": `198.51.100.${attempt + 10}`,
+        },
+        remoteAddress: "203.0.113.30",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const sameRemoteAddress = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.99",
+      },
+      remoteAddress: "203.0.113.30",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(sameRemoteAddress.statusCode).toBe(429);
+  });
+
+  it("ignores forwarded client IPs from unconfigured private sources for login rate limits", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": `198.51.100.${attempt + 30}`,
+        },
+        remoteAddress: "172.17.0.1",
+        payload: { password: "wrong-password" },
+      } as any);
+      expect(response.statusCode).toBe(401);
+    }
+
+    const samePrivateRemote = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: {
+        origin: TEST_ORIGIN,
+        "x-forwarded-for": "198.51.100.199",
+      },
+      remoteAddress: "172.17.0.1",
+      payload: { password: OWNER_PASSWORD },
+    } as any);
+    expect(samePrivateRemote.statusCode).toBe(429);
+  });
+
+  it("keeps setup rate limits scoped to the failing source", async () => {
+    const setupDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-setup-rate-"),
+    );
+    const setupApp = await createServer({
+      dataDir: setupDataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setupToken = readSetupToken(setupDataDir);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await setupApp.inject({
+          method: "POST",
+          url: "/v1/auth/setup",
+          headers: { origin: TEST_ORIGIN },
+          remoteAddress: "203.0.113.10",
+          payload: {
+            setupToken: "wrong-token",
+            password: OWNER_PASSWORD,
+          },
+        } as any);
+        expect(response.statusCode).toBe(401);
+      }
+
+      const sameSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.10",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(sameSource.statusCode).toBe(429);
+
+      const otherSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: { origin: TEST_ORIGIN },
+        remoteAddress: "203.0.113.20",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(otherSource.statusCode).toBe(201);
+    } finally {
+      await setupApp.close();
+      fs.rmSync(setupDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses forwarded client IPs from trusted proxies for setup rate limits", async () => {
+    const setupDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-setup-forwarded-rate-"),
+    );
+    const setupApp = await createServer({
+      dataDir: setupDataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setupToken = readSetupToken(setupDataDir);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await setupApp.inject({
+          method: "POST",
+          url: "/v1/auth/setup",
+          headers: {
+            origin: TEST_ORIGIN,
+            "x-forwarded-for": "198.51.100.10",
+          },
+          remoteAddress: "127.0.0.1",
+          payload: {
+            setupToken: "wrong-token",
+            password: OWNER_PASSWORD,
+          },
+        } as any);
+        expect(response.statusCode).toBe(401);
+      }
+
+      const sameForwardedSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.10",
+        },
+        remoteAddress: "127.0.0.1",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(sameForwardedSource.statusCode).toBe(429);
+
+      const otherForwardedSource = await setupApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          origin: TEST_ORIGIN,
+          "x-forwarded-for": "198.51.100.20",
+        },
+        remoteAddress: "127.0.0.1",
+        payload: {
+          setupToken,
+          password: OWNER_PASSWORD,
+        },
+      } as any);
+      expect(otherForwardedSource.statusCode).toBe(201);
+    } finally {
+      await setupApp.close();
+      fs.rmSync(setupDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows the default Vite dev proxy origin for setup and owner streams", async () => {
+    const devDataDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "roamcli-server-dev-origin-"),
+    );
+    const devApp = await createServer({
+      dataDir: devDataDir,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    try {
+      const setup = await devApp.inject({
+        method: "POST",
+        url: "/v1/auth/setup",
+        headers: {
+          host: "127.0.0.1:8787",
+          origin: "http://localhost:5173",
+        },
+        payload: {
+          setupToken: readSetupToken(devDataDir),
+          password: OWNER_PASSWORD,
+        },
+      });
+      expect(setup.statusCode).toBe(201);
+
+      await devApp.listen({ host: "127.0.0.1", port: 0 });
+      const stream = await openSocket(`${localBaseUrl(devApp)}/v1/stream`, {
+        origin: "http://localhost:5173",
+        streamCookie: extractCookie(setup.headers["set-cookie"]),
+      });
+      let closed = false;
+      stream.once("close", () => {
+        closed = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(closed).toBe(false);
+      stream.close();
+
+      await expect(
+        openSocketAndWaitForClose(`${localBaseUrl(devApp)}/v1/stream`, {
+          origin: "http://127.0.0.1:5174",
+          streamCookie: extractCookie(setup.headers["set-cookie"]),
+        }),
+      ).resolves.toEqual({ code: 1008, reason: "invalid origin" });
+    } finally {
+      await devApp.close();
+      fs.rmSync(devDataDir, { recursive: true, force: true });
+    }
   });
 
   it("does not list persisted online runners without live hub sockets", async () => {
@@ -59,7 +387,7 @@ describe("server", () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/runners",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -69,7 +397,7 @@ describe("server", () => {
   it("ignores invalid runner events without sending incompatible commands", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
     const runnerMessages: Array<Record<string, any>> = [];
     runner.on("message", (data) => {
       runnerMessages.push(JSON.parse(String(data)) as Record<string, any>);
@@ -87,11 +415,94 @@ describe("server", () => {
     runner.close();
   });
 
+  it("checks the runner token before parsing runner registration", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const closed = nextClose(runner);
+
+    runner.send(
+      JSON.stringify({
+        type: "runnerAuthenticate",
+        token: "wrong-runner-token",
+        runner: {},
+      }),
+    );
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "unauthorized",
+    });
+    expect(app.roam.hub.isRunnerOnline("runner-1")).toBe(false);
+  });
+
+  it("caps unauthenticated runner auth frames before parsing", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const closed = nextClose(runner);
+
+    runner.send("x".repeat(64 * 1024 + 1));
+
+    await expect(closed).resolves.toEqual({
+      code: 1009,
+      reason: "runner authentication payload too large",
+    });
+  });
+
+  it("closes owner streams before broadcasting after their auth session is gone", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await openSocket(`${localBaseUrl(app)}/v1/stream`);
+    const closed = nextClose(stream);
+
+    app.roam.store.deleteAuthSession(currentAuthSessionId(app));
+    app.roam.hub.broadcast({ type: "runner:offline", runnerId: "runner-1" });
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "session expired",
+    });
+  });
+
+  it("rejects client stream commands after their auth session is gone", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const baseUrl = localBaseUrl(app);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
+
+    runner.send(JSON.stringify(runnerRegistration()));
+    expect(await nextJson(stream)).toMatchObject({ type: "runner:online" });
+    createTestProject(app);
+
+    const closed = nextClose(stream);
+    app.roam.store.deleteAuthSession(currentAuthSessionId(app));
+    stream.send(
+      JSON.stringify({
+        type: "createSession",
+        requestId: "expired-stream-create",
+        projectId: "project-1",
+        agent: "codex",
+        executionMode: "direct",
+        prompt: "should not start",
+      }),
+    );
+
+    await expect(closed).resolves.toEqual({
+      code: 1008,
+      reason: "session expired",
+    });
+    expect(app.roam.store.listSessions()).toEqual([]);
+
+    runner.close();
+  });
+
   it("creates projects only after validating the runner directory", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     expect(await nextJson(stream)).toMatchObject({ type: "runner:online" });
@@ -103,7 +514,7 @@ describe("server", () => {
     const createdPromise = app.inject({
       method: "POST",
       url: "/v1/projects",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         name: "API Project",
         runnerId: "runner-1",
@@ -152,7 +563,7 @@ describe("server", () => {
     const listed = await app.inject({
       method: "GET",
       url: "/v1/projects",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(listed.json().projects).toHaveLength(1);
 
@@ -163,7 +574,7 @@ describe("server", () => {
   it("returns invalid cwd errors from project directory validation", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -171,7 +582,7 @@ describe("server", () => {
     const createdPromise = app.inject({
       method: "POST",
       url: "/v1/projects",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         name: "Outside Project",
         runnerId: "runner-1",
@@ -204,7 +615,7 @@ describe("server", () => {
   it("rejects duplicate active projects for the same runner directory", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
     createTestProject(app);
@@ -212,7 +623,7 @@ describe("server", () => {
     const duplicate = await app.inject({
       method: "POST",
       url: "/v1/projects",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         name: "Duplicate Project",
         runnerId: "runner-1",
@@ -255,7 +666,7 @@ describe("server", () => {
     const archived = await app.inject({
       method: "POST",
       url: "/v1/projects/project-1/archive",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(archived.statusCode).toBe(200);
     expect(archived.json().project.archivedAt).toEqual(expect.any(String));
@@ -266,20 +677,20 @@ describe("server", () => {
     const hiddenProjects = await app.inject({
       method: "GET",
       url: "/v1/projects",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(hiddenProjects.json().projects).toEqual([]);
     const hiddenSessions = await app.inject({
       method: "GET",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(hiddenSessions.json().sessions).toEqual([]);
 
     const restored = await app.inject({
       method: "POST",
       url: "/v1/projects/project-1/restore",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(restored.statusCode).toBe(200);
     expect(restored.json().project.archivedAt).toBeUndefined();
@@ -298,7 +709,7 @@ describe("server", () => {
     );
     const webApp = await createServer({
       dataDir: webDataDir,
-      authToken: token,
+      publicOrigin: TEST_ORIGIN,
       webDistDir,
     });
     try {
@@ -311,7 +722,7 @@ describe("server", () => {
       const apiRoot = await webApp.inject({
         method: "GET",
         url: "/v1",
-        headers: { authorization: `Bearer ${token}` },
+        headers: { "x-test-auth": "1" },
       });
       expect(apiRoot.statusCode).toBe(404);
       expect(apiRoot.headers["content-type"]).toContain("application/json");
@@ -343,8 +754,8 @@ describe("server", () => {
   it("registers a runner, creates a session, routes commands, and broadcasts runner events", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     const online = await nextJson(stream);
@@ -353,7 +764,7 @@ describe("server", () => {
     const runners = await app.inject({
       method: "GET",
       url: "/v1/runners",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(runners.statusCode).toBe(200);
     expect(runners.json().runners).toHaveLength(1);
@@ -364,7 +775,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -411,7 +822,7 @@ describe("server", () => {
     const detail = await app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(detail.statusCode).toBe(200);
     expect(
@@ -427,8 +838,8 @@ describe("server", () => {
   it("keeps active sessions across runner socket reconnects", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const firstRunner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const firstRunner = await openSocket(`${baseUrl}/v1/runner`);
 
     firstRunner.send(JSON.stringify(runnerRegistration()));
     await expectEventually(
@@ -445,7 +856,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -455,7 +866,7 @@ describe("server", () => {
     const sessionId = created.json().session.id as string;
     await nextJson(firstRunner);
 
-    const secondRunner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const secondRunner = await openSocket(`${baseUrl}/v1/runner`);
     secondRunner.send(JSON.stringify(runnerRegistration()));
 
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -474,7 +885,7 @@ describe("server", () => {
     const checked = app.inject({
       method: "POST",
       url: `/v1/sessions/${sessionId}/status/check`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const checkCommand = await nextJson(secondRunner);
     expect(checkCommand).toMatchObject({
@@ -514,7 +925,7 @@ describe("server", () => {
   it("accepts 5MB image payloads and rejects larger images at the business limit", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(imageRunnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -529,7 +940,7 @@ describe("server", () => {
       method: "POST",
       url: "/v1/sessions",
       headers: {
-        authorization: `Bearer ${token}`,
+        "x-test-auth": "1",
         "content-type": "application/json",
       },
       payload: JSON.stringify({
@@ -588,7 +999,7 @@ describe("server", () => {
       method: "POST",
       url: "/v1/sessions",
       headers: {
-        authorization: `Bearer ${token}`,
+        "x-test-auth": "1",
         "content-type": "application/json",
       },
       payload: JSON.stringify({
@@ -609,8 +1020,8 @@ describe("server", () => {
   it("keeps streamed assistant replies separated by resumed user turns", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(
       JSON.stringify(
@@ -632,7 +1043,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -710,7 +1121,7 @@ describe("server", () => {
     const detail = await app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(
       detail
@@ -733,8 +1144,8 @@ describe("server", () => {
   it("restarts a stopped resumable session instead of forwarding resume to a dead process", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration({ supportsResume: true })));
     await expectEventually(
@@ -748,7 +1159,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -794,8 +1205,8 @@ describe("server", () => {
   it("resumes completed codex exec sessions with the stored codex thread id", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(
       JSON.stringify(
@@ -817,7 +1228,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -879,8 +1290,8 @@ describe("server", () => {
   it("requests file trees and file content from the registered runner", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await expectEventually(
@@ -894,7 +1305,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -907,7 +1318,7 @@ describe("server", () => {
     const treePromise = app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}/files?requestId=client-tree-1&path=src&depth=2`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const treeCommand = await nextJson(runner);
     expect(treeCommand).toMatchObject({
@@ -948,7 +1359,7 @@ describe("server", () => {
     const contentPromise = app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}/files/content?path=src/index.ts&maxBytes=128`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const contentCommand = await nextJson(runner);
     expect(contentCommand).toMatchObject({
@@ -984,7 +1395,7 @@ describe("server", () => {
     const writePromise = app.inject({
       method: "PUT",
       url: `/v1/sessions/${sessionId}/files/content`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         path: "src/index.ts",
         content: "console.log('saved');\n",
@@ -1027,8 +1438,8 @@ describe("server", () => {
   it("lists and creates runner workspace directories", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await expectEventually(
@@ -1044,7 +1455,7 @@ describe("server", () => {
     const listPromise = app.inject({
       method: "GET",
       url: "/v1/runners/runner-1/directories?path=.&depth=1",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const listCommand = await nextJson(runner);
     expect(listCommand).toMatchObject({
@@ -1086,7 +1497,7 @@ describe("server", () => {
     const createPromise = app.inject({
       method: "POST",
       url: "/v1/runners/runner-1/directories",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: { parentPath: "api", name: "web" },
     });
     const createCommand = await nextJson(runner);
@@ -1120,7 +1531,7 @@ describe("server", () => {
   it("rejects file roots from runner directory listings", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -1128,7 +1539,7 @@ describe("server", () => {
     const listPromise = app.inject({
       method: "GET",
       url: "/v1/runners/runner-1/directories?path=src&depth=1",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const listCommand = await nextJson(runner);
     expect(listCommand).toMatchObject({
@@ -1164,7 +1575,7 @@ describe("server", () => {
   it("returns bad requests for runner directory creation failures", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -1172,7 +1583,7 @@ describe("server", () => {
     const createPromise = app.inject({
       method: "POST",
       url: "/v1/runners/runner-1/directories",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: { parentPath: ".", name: "../outside" },
     });
     const createCommand = await nextJson(runner);
@@ -1205,7 +1616,7 @@ describe("server", () => {
   it("returns bad requests for stale runner directory listing paths", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -1213,7 +1624,7 @@ describe("server", () => {
     const listPromise = app.inject({
       method: "GET",
       url: "/v1/runners/runner-1/directories?path=missing&depth=1",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const listCommand = await nextJson(runner);
     expect(listCommand).toMatchObject({
@@ -1246,7 +1657,7 @@ describe("server", () => {
   it("returns runner errors when file RPCs cannot complete", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
 
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
@@ -1256,7 +1667,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -1269,7 +1680,7 @@ describe("server", () => {
     const unavailablePromise = app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}/files?path=.&depth=1`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     const unavailableCommand = await nextJson(runner);
     runner.send(
@@ -1292,7 +1703,7 @@ describe("server", () => {
     const timeout = await app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}/files?path=.&depth=1`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(timeout.statusCode).toBe(504);
     expect(timeout.json()).toEqual({ error: "runner_timeout" });
@@ -1303,7 +1714,7 @@ describe("server", () => {
     const offline = await app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}/files/content?path=README.md`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(offline.statusCode).toBe(409);
     expect(offline.json()).toEqual({ error: "runner_offline" });
@@ -1312,7 +1723,7 @@ describe("server", () => {
   it("persists approval responses and local artifacts", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
 
@@ -1321,7 +1732,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -1353,8 +1764,8 @@ describe("server", () => {
     const approved = await app.inject({
       method: "POST",
       url: "/v1/approvals/approval-1",
-      headers: { authorization: `Bearer ${token}` },
-      payload: signedApprovalPayload("approval-1", true),
+      headers: { "x-test-auth": "1" },
+      payload: { approved: true },
     });
     expect(approved.statusCode).toBe(200);
     const approvalCommand = await nextJson(runner);
@@ -1362,14 +1773,12 @@ describe("server", () => {
       type: "resolveApproval",
       approvalId: "approval-1",
       approved: true,
-      signedAt: expect.any(String),
-      signature: expect.any(String),
     });
 
     const artifactResponse = await app.inject({
       method: "POST",
       url: "/v1/artifacts",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         sessionId,
         kind: "log",
@@ -1391,9 +1800,13 @@ describe("server", () => {
     const detail = await app.inject({
       method: "GET",
       url: `/v1/sessions/${sessionId}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
-    expect(detail.json().approvals[0].status).toBe("approved");
+    expect(detail.json().approvals[0]).toMatchObject({
+      status: "approved",
+      resolvedBy: "owner",
+      resolverSessionId: expect.any(String),
+    });
     expect(detail.json().artifacts[0].name).toBe("run.log");
 
     runner.close();
@@ -1431,7 +1844,7 @@ describe("server", () => {
     const artifactResponse = await app.inject({
       method: "POST",
       url: "/v1/artifacts",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         sessionId: "session-delete",
         kind: "log",
@@ -1447,7 +1860,7 @@ describe("server", () => {
     const deleted = await app.inject({
       method: "DELETE",
       url: "/v1/sessions/session-delete",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(deleted.statusCode).toBe(204);
     expect(sendToRunner).toHaveBeenCalledWith("runner-1", {
@@ -1472,7 +1885,7 @@ describe("server", () => {
     const detail = await app.inject({
       method: "GET",
       url: "/v1/sessions/session-delete",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().session.archivedAt).toEqual(expect.any(String));
@@ -1499,7 +1912,7 @@ describe("server", () => {
     const renamed = await app.inject({
       method: "PATCH",
       url: "/v1/sessions/session-rename",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: { title: "  Renamed title  " },
     });
 
@@ -1523,7 +1936,7 @@ describe("server", () => {
     const invalid = await app.inject({
       method: "PATCH",
       url: "/v1/sessions/session-rename",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: { title: "   " },
     });
     expect(invalid.statusCode).toBe(400);
@@ -1534,18 +1947,18 @@ describe("server", () => {
     const missing = await app.inject({
       method: "PATCH",
       url: "/v1/sessions/missing-session",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: { title: "Missing" },
     });
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ error: "session_not_found" });
   });
 
-  it("rejects invalid approval signatures and applies signed patches through runner RPC", async () => {
+  it("applies owner-authorized patches through runner RPC", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
-    const stream = await openSocket(`${baseUrl}/v1/stream`, token);
-    const runner = await openSocket(`${baseUrl}/v1/runner`, token);
+    const stream = await openSocket(`${baseUrl}/v1/stream`);
+    const runner = await openSocket(`${baseUrl}/v1/runner`);
     runner.send(JSON.stringify(runnerRegistration()));
     await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
 
@@ -1554,7 +1967,7 @@ describe("server", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { "x-test-auth": "1" },
       payload: {
         projectId: "project-1",
         agent: "codex",
@@ -1583,26 +1996,12 @@ describe("server", () => {
       () => app.roam.store.getApproval("approval-2") !== undefined,
     );
 
-    const invalidApproval = await app.inject({
-      method: "POST",
-      url: "/v1/approvals/approval-2",
-      headers: { authorization: `Bearer ${token}` },
-      payload: {
-        approved: true,
-        signedAt: new Date().toISOString(),
-        signature: "not-valid",
-      },
-    });
-    expect(invalidApproval.statusCode).toBe(403);
-    expect(invalidApproval.json()).toEqual({ error: "invalid_signature" });
-
     const patch = "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n";
-    const signedPatch = signedPatchPayload(sessionId, patch);
     const patchPromise = app.inject({
       method: "POST",
       url: `/v1/sessions/${sessionId}/patches/apply`,
-      headers: { authorization: `Bearer ${token}` },
-      payload: signedPatch,
+      headers: { "x-test-auth": "1" },
+      payload: { patch, strip: 1 },
     });
     const patchCommand = await nextJson(runner);
     expect(patchCommand).toMatchObject({
@@ -1610,8 +2009,6 @@ describe("server", () => {
       sessionId,
       patch,
       strip: 1,
-      signedAt: signedPatch.signedAt,
-      signature: signedPatch.signature,
     });
 
     const patchResult = {
@@ -1732,14 +2129,141 @@ function localBaseUrl(app: RoamServer): string {
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function openSocket(url: string, authToken: string): Promise<WebSocket> {
+interface SocketOptions {
+  authenticateRunner?: boolean;
+  headers?: Record<string, string>;
+  origin?: string;
+  streamCookie?: string;
+}
+
+function openSocket(
+  url: string,
+  options: SocketOptions = {},
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
+    const isRunner = url.endsWith("/v1/runner");
     const socket = new WebSocket(url, {
-      headers: { authorization: `Bearer ${authToken}` },
+      headers: socketHeaders(url, options),
     });
+    if (isRunner && options.authenticateRunner !== false) {
+      wrapRunnerAuthSend(socket);
+    }
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
   });
+}
+
+function openSocketAndWaitForClose(
+  url: string,
+  options: SocketOptions = {},
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, {
+      headers: socketHeaders(url, options),
+    });
+    const timer = setTimeout(
+      () => reject(new Error("timed out waiting for websocket close")),
+      2000,
+    );
+    socket.once("close", (code, reason) => {
+      clearTimeout(timer);
+      resolve({ code, reason: reason.toString() });
+    });
+    socket.once("error", reject);
+  });
+}
+
+function socketHeaders(
+  url: string,
+  options: SocketOptions,
+): Record<string, string> | undefined {
+  if (!url.endsWith("/v1/stream")) {
+    return options.headers;
+  }
+  return {
+    cookie: options.streamCookie ?? authCookie,
+    origin: options.origin ?? TEST_ORIGIN,
+    ...options.headers,
+  };
+}
+
+function wrapRunnerAuthSend(socket: WebSocket): void {
+  let authenticated = false;
+  const send = socket.send.bind(socket);
+  socket.send = ((data: any, ...args: any[]) => {
+    if (!authenticated) {
+      const maybeRegistration = parseJsonObject(data);
+      if (isRunnerRegistrationLike(maybeRegistration)) {
+        authenticated = true;
+        return send(
+          JSON.stringify({
+            type: "runnerAuthenticate",
+            token: runnerToken,
+            runner: maybeRegistration,
+          }),
+          ...args,
+        );
+      }
+    }
+    return send(data, ...args);
+  }) as typeof socket.send;
+}
+
+function parseJsonObject(data: unknown): Record<string, any> | undefined {
+  try {
+    const parsed = JSON.parse(String(data)) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, any>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function isRunnerRegistrationLike(
+  value: Record<string, any> | undefined,
+): value is RunnerRegistration {
+  return (
+    value !== undefined &&
+    typeof value.runnerId === "string" &&
+    Array.isArray(value.capabilities)
+  );
+}
+
+function readSetupToken(dataDir: string): string {
+  return fs.readFileSync(path.join(dataDir, "setup-token.txt"), "utf8").trim();
+}
+
+function extractCookie(
+  setCookie: string | string[] | number | undefined,
+): string {
+  const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  if (typeof cookie !== "string") {
+    throw new Error("setup response did not set an auth cookie");
+  }
+  return cookie.split(";")[0] ?? cookie;
+}
+
+function currentAuthSessionId(app: RoamServer): string {
+  const session = app.roam.store.listAuthSessions()[0];
+  if (!session) {
+    throw new Error("expected auth session");
+  }
+  return session.id;
+}
+
+function shouldAttachAuth(options: any): boolean {
+  if (!options || typeof options !== "object") {
+    return false;
+  }
+  const headers = options.headers;
+  if (!headers || typeof headers !== "object") {
+    return false;
+  }
+  return Object.keys(headers).some(
+    (key) => key.toLowerCase() === "x-test-auth",
+  );
 }
 
 function nextJson(socket: WebSocket): Promise<Record<string, any>> {
@@ -1751,6 +2275,21 @@ function nextJson(socket: WebSocket): Promise<Record<string, any>> {
     socket.once("message", (data) => {
       clearTimeout(timer);
       resolve(JSON.parse(data.toString()) as Record<string, any>);
+    });
+  });
+}
+
+function nextClose(
+  socket: WebSocket,
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("timed out waiting for websocket close")),
+      2000,
+    );
+    socket.once("close", (code, reason) => {
+      clearTimeout(timer);
+      resolve({ code, reason: reason.toString() });
     });
   });
 }
@@ -1778,28 +2317,4 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("condition was not met");
-}
-
-function signedApprovalPayload(approvalId: string, approved: boolean) {
-  const signedAt = new Date().toISOString();
-  return {
-    approved,
-    signedAt,
-    signature: signApproval(token, approvalId, approved, signedAt),
-  };
-}
-
-function signedPatchPayload(sessionId: string, patch: string) {
-  const signedAt = new Date().toISOString();
-  return {
-    patch,
-    strip: 1,
-    signedAt,
-    signature: signApproval(
-      token,
-      `patch:${sessionId}:${hashPayload(patch)}`,
-      true,
-      signedAt,
-    ),
-  };
 }

@@ -8,7 +8,6 @@ import type {
   ServerEvent,
   Session,
 } from "@roamcli/shared/protocol";
-import { hashPayload, signApproval } from "@roamcli/shared/security";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionHub } from "../src/infra/connection-hub.js";
 import {
@@ -21,61 +20,10 @@ import {
 } from "../src/infra/runner-rpc-client.js";
 import { ServerStore } from "../src/infra/sqlite-store.js";
 import { ApprovalService } from "../src/modules/approvals/approval-service.js";
-import {
-  ApprovalSignatureVerifier,
-  patchSignatureTarget,
-} from "../src/modules/approvals/approval-signatures.js";
 import { RunnerEventService } from "../src/modules/runners/runner-event-service.js";
 import { ArtifactService } from "../src/modules/artifacts/artifact-service.js";
 import { SessionCommandService } from "../src/modules/sessions/session-command-service.js";
 import { WorkspaceService } from "../src/modules/workspace/workspace-service.js";
-
-describe("ApprovalSignatureVerifier", () => {
-  it("allows unsigned mode and validates approval and patch signatures", () => {
-    const signedAt = new Date().toISOString();
-    const permissive = new ApprovalSignatureVerifier(undefined);
-    expect(
-      permissive.isApprovalSignatureValid("approval-1", true, signedAt, "bad"),
-    ).toBe(true);
-
-    const strict = new ApprovalSignatureVerifier("secret");
-    const approvalSignature = signApproval(
-      "secret",
-      "approval-1",
-      true,
-      signedAt,
-    );
-    expect(
-      strict.isApprovalSignatureValid(
-        "approval-1",
-        true,
-        signedAt,
-        approvalSignature,
-      ),
-    ).toBe(true);
-    expect(
-      strict.isApprovalSignatureValid(
-        "approval-1",
-        false,
-        signedAt,
-        approvalSignature,
-      ),
-    ).toBe(false);
-
-    const patch = "--- a/README.md\n+++ b/README.md\n";
-    const target = patchSignatureTarget("session-1", patch);
-    expect(target).toBe(`patch:session-1:${hashPayload(patch)}`);
-    const patchSignature = signApproval("secret", target, true, signedAt);
-    expect(
-      strict.isPatchSignatureValid(
-        "session-1",
-        patch,
-        signedAt,
-        patchSignature,
-      ),
-    ).toBe(true);
-  });
-});
 
 describe("RunnerRpcClient", () => {
   let dataDir: string;
@@ -179,11 +127,7 @@ describe("SessionCommandService", () => {
 
   it("guards runner availability and agent support before starting sessions", async () => {
     const hub = new ConnectionHub(store);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -234,11 +178,7 @@ describe("SessionCommandService", () => {
   it("stores attachment metadata only after the runner writes image bytes", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     const runnerMessages: RunnerCommand[] = [];
     store.createProject(projectRecord());
@@ -299,11 +239,7 @@ describe("SessionCommandService", () => {
   it("does not persist sessions or messages when runner image writes fail", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     const runnerMessages: RunnerCommand[] = [];
     store.createProject(projectRecord());
@@ -341,11 +277,7 @@ describe("SessionCommandService", () => {
 
   it("rolls back session creation when startSession cannot be delivered", async () => {
     const hub = new ConnectionHub(store);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -372,11 +304,7 @@ describe("SessionCommandService", () => {
       const streamEvents: ServerEvent[] = [];
       const hub = new ConnectionHub(store);
       hub.addStream(fakeSocket(streamEvents));
-      const approvals = new ApprovalService(
-        store,
-        hub,
-        new ApprovalSignatureVerifier(undefined),
-      );
+      const approvals = new ApprovalService(store, hub);
       const service = new SessionCommandService(
         store,
         hub,
@@ -421,11 +349,7 @@ describe("SessionCommandService", () => {
     hub.addStream(fakeSocket(streamEvents));
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -476,11 +400,7 @@ describe("SessionCommandService", () => {
     const hub = new ConnectionHub(store);
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -525,11 +445,7 @@ describe("SessionCommandService", () => {
     hub.addStream(fakeSocket(streamEvents));
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -576,11 +492,7 @@ describe("SessionCommandService", () => {
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
     hub.addStream(fakeSocket(streamEvents));
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -631,11 +543,7 @@ describe("SessionCommandService", () => {
     const hub = new ConnectionHub(store);
     hub.addStream(fakeSocket(streamEvents));
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -699,11 +607,7 @@ describe("SessionCommandService", () => {
 
   it("creates managed worktree sessions under the owning project directory", async () => {
     const hub = new ConnectionHub(store);
-    const approvals = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const approvals = new ApprovalService(store, hub);
     const service = new SessionCommandService(
       store,
       hub,
@@ -762,11 +666,7 @@ describe("ApprovalService", () => {
 
   it("only resolves pending approvals after runner delivery succeeds", () => {
     const hub = new ConnectionHub(store);
-    const service = new ApprovalService(
-      store,
-      hub,
-      new ApprovalSignatureVerifier(undefined),
-    );
+    const service = new ApprovalService(store, hub);
     store.createProject(projectRecord());
     const session = store.createSession(sessionRecord());
     store.upsertApproval({
@@ -782,8 +682,6 @@ describe("ApprovalService", () => {
 
     const offline = service.respondToApproval("approval-1", {
       approved: true,
-      signedAt: new Date().toISOString(),
-      signature: "unsigned",
     });
     expect(offline).toMatchObject({ ok: false, error: "runner_offline" });
     expect(store.getApproval("approval-1")?.status).toBe("pending");
@@ -792,8 +690,6 @@ describe("ApprovalService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const resolved = service.respondToApproval("approval-1", {
       approved: true,
-      signedAt: new Date().toISOString(),
-      signature: "unsigned",
     });
     expect(resolved.ok).toBe(true);
     expect(store.getApproval("approval-1")?.status).toBe("approved");
@@ -805,8 +701,6 @@ describe("ApprovalService", () => {
 
     const repeated = service.respondToApproval("approval-1", {
       approved: false,
-      signedAt: new Date().toISOString(),
-      signature: "unsigned",
     });
     expect(repeated).toMatchObject({
       ok: false,
@@ -910,12 +804,7 @@ describe("WorkspaceService", () => {
       cwd: "/workspace",
       worktreeDeletedAt: new Date().toISOString(),
     });
-    const service = new WorkspaceService(
-      store,
-      rpc,
-      new ApprovalSignatureVerifier(undefined),
-      100,
-    );
+    const service = new WorkspaceService(store, rpc, 100);
 
     const result = await service.readFileTree("session-1", {
       path: ".",
@@ -942,12 +831,7 @@ describe("WorkspaceService", () => {
       executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
       cwd: "/workspace",
     });
-    const service = new WorkspaceService(
-      store,
-      rpc,
-      new ApprovalSignatureVerifier(undefined),
-      100,
-    );
+    const service = new WorkspaceService(store, rpc, 100);
 
     const result = await service.readFileTree("session-1", {
       path: ".",
@@ -974,18 +858,11 @@ describe("WorkspaceService", () => {
       cwd: "/workspace",
       worktreeDeletedAt: new Date().toISOString(),
     });
-    const service = new WorkspaceService(
-      store,
-      rpc,
-      new ApprovalSignatureVerifier(undefined),
-      100,
-    );
+    const service = new WorkspaceService(store, rpc, 100);
 
     const result = await service.applyPatch("session-1", {
       patch: "diff --git a/README.md b/README.md\n",
       strip: 1,
-      signedAt: new Date().toISOString(),
-      signature: "unsigned-mode",
     });
 
     expect(result).toMatchObject({

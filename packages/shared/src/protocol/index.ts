@@ -38,6 +38,71 @@ export const RunnerRegistrationSchema = z.object({
 });
 export type RunnerRegistration = z.infer<typeof RunnerRegistrationSchema>;
 
+export const AuthSessionSummarySchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().datetime(),
+  lastSeenAt: z.string().datetime(),
+  idleExpiresAt: z.string().datetime(),
+  absoluteExpiresAt: z.string().datetime(),
+  userAgent: z.string().optional(),
+  ipHash: z.string().optional(),
+  current: z.boolean().default(false),
+});
+export type AuthSessionSummary = z.infer<typeof AuthSessionSummarySchema>;
+
+export const AuthStatusSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("setup_required") }),
+  z.object({ status: z.literal("unauthenticated") }),
+  z.object({
+    status: z.literal("authenticated"),
+    session: AuthSessionSummarySchema,
+  }),
+]);
+export type AuthStatus = z.infer<typeof AuthStatusSchema>;
+
+export const AccountSecurityStateSchema = z.object({
+  sessions: z.array(AuthSessionSummarySchema),
+  runnerToken: z.string().min(1),
+  runnerTokenCreatedAt: z.string().datetime(),
+  runnerTokenUpdatedAt: z.string().datetime(),
+  runnerTokenLastUsedAt: z.string().datetime().optional(),
+  runnerTokenLastRunnerId: z.string().optional(),
+});
+export type AccountSecurityState = z.infer<
+  typeof AccountSecurityStateSchema
+>;
+
+export const ApiSetupOwnerSchema = z.object({
+  setupToken: z.string().min(1),
+  password: z.string().min(12).max(256),
+});
+export type ApiSetupOwner = z.infer<typeof ApiSetupOwnerSchema>;
+
+export const ApiLoginSchema = z.object({
+  password: z.string().min(1).max(256),
+});
+export type ApiLogin = z.infer<typeof ApiLoginSchema>;
+
+export const ApiChangePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(256),
+  newPassword: z.string().min(12).max(256),
+});
+export type ApiChangePassword = z.infer<typeof ApiChangePasswordSchema>;
+
+export const ApiRegenerateRunnerTokenSchema = z.object({
+  confirm: z.literal(true),
+});
+export type ApiRegenerateRunnerToken = z.infer<
+  typeof ApiRegenerateRunnerTokenSchema
+>;
+
+export const RunnerAuthenticateSchema = z.object({
+  type: z.literal("runnerAuthenticate"),
+  token: z.string().min(1),
+  runner: RunnerRegistrationSchema,
+});
+export type RunnerAuthenticate = z.infer<typeof RunnerAuthenticateSchema>;
+
 export const SessionStatusSchema = z.enum([
   "pending",
   "running",
@@ -415,7 +480,8 @@ export const ApprovalSchema = z.object({
   status: ApprovalStatusSchema,
   requestedAt: z.string().datetime(),
   resolvedAt: z.string().datetime().optional(),
-  clientSignature: z.string().optional(),
+  resolvedBy: z.literal("owner").optional(),
+  resolverSessionId: z.string().min(1).optional(),
 });
 export type Approval = z.infer<typeof ApprovalSchema>;
 
@@ -577,8 +643,6 @@ export const PatchApplyRequestSchema = z.object({
   sessionId: z.string().min(1),
   patch: z.string().min(1),
   strip: z.number().int().min(0).max(3).default(1),
-  signedAt: z.string().datetime(),
-  signature: z.string().min(1),
 });
 export type PatchApplyRequest = z.infer<typeof PatchApplyRequestSchema>;
 
@@ -627,8 +691,6 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     requestId: z.string().min(1),
     approvalId: z.string().min(1),
     approved: z.boolean(),
-    signedAt: z.string().datetime(),
-    signature: z.string().min(1),
   }),
   z.object({
     type: z.literal("controlSignal"),
@@ -747,8 +809,6 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
     patch: z.string().min(1),
     strip: z.number().int().min(0).max(3).default(1),
-    signedAt: z.string().datetime(),
-    signature: z.string().min(1),
   }),
   z.object({
     type: z.literal("gitStatus"),
@@ -854,8 +914,6 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("resolveApproval"),
     approvalId: z.string().min(1),
     approved: z.boolean(),
-    signedAt: z.string().datetime(),
-    signature: z.string().min(1),
   }),
   z.object({
     type: z.literal("controlSignal"),
@@ -1047,16 +1105,12 @@ export type ApiUpdateProject = z.infer<typeof ApiUpdateProjectSchema>;
 
 export const ApiApprovalResponseSchema = z.object({
   approved: z.boolean(),
-  signedAt: z.string().datetime(),
-  signature: z.string().min(1),
 });
 export type ApiApprovalResponse = z.infer<typeof ApiApprovalResponseSchema>;
 
 export const ApiApplyPatchSchema = z.object({
   patch: z.string().min(1),
   strip: z.number().int().min(0).max(3).default(1),
-  signedAt: z.string().datetime(),
-  signature: z.string().min(1),
 });
 export type ApiApplyPatch = z.infer<typeof ApiApplyPatchSchema>;
 

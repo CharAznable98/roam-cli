@@ -44,6 +44,7 @@ declare module "@roamcli/shared/protocol" {
 
   export const RunnerProfileSchema: ParserSchema<RunnerProfile>;
   export const RunnerCommandSchema: ParserSchema<RunnerCommand>;
+  export const RunnerAuthenticateSchema: ParserSchema<RunnerAuthenticate>;
   export const DEFAULT_MAX_IMAGES_PER_TURN: number;
   export const DEFAULT_MAX_IMAGE_BYTES: number;
 
@@ -72,6 +73,12 @@ declare module "@roamcli/shared/protocol" {
     publicKey: string;
     capabilities: RunnerCapability[];
     version: string;
+  }
+
+  export interface RunnerAuthenticate {
+    type: "runnerAuthenticate";
+    token: string;
+    runner: RunnerRegistration;
   }
 
   export interface Session {
@@ -174,7 +181,8 @@ declare module "@roamcli/shared/protocol" {
     status: ApprovalStatus;
     requestedAt: string;
     resolvedAt?: string;
-    clientSignature?: string;
+    resolvedBy?: "owner";
+    resolverSessionId?: string;
   }
 
   export interface Artifact {
@@ -522,8 +530,6 @@ declare module "@roamcli/shared/protocol" {
         sessionId: string;
         patch: string;
         strip?: number;
-        signedAt: string;
-        signature: string;
       }
     | ({ type: "gitStatus" } & GitCommandBase)
     | ({
@@ -557,8 +563,6 @@ declare module "@roamcli/shared/protocol" {
         type: "resolveApproval";
         approvalId: string;
         approved: boolean;
-        signedAt: string;
-        signature: string;
       }
     | {
         type: "controlSignal";
