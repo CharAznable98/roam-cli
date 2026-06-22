@@ -15,9 +15,13 @@ coverage/
 
 # Runtime state and local data
 .roamcli/
+.roamcli-blackbox-workspace/
+.roamcli-deploy/
 .roamcli-server/
 .roamcli-server-local-*/
 .roam-runner/
+**/.roamcli-blackbox-workspace/
+**/.roamcli-deploy/
 **/.roamcli-server/
 **/.roamcli-server-local-*/
 **/.roam-runner/

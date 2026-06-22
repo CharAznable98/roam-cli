@@ -130,6 +130,9 @@ class CodexProcessSession implements AgentSession {
     child.on("close", (code, signal) => {
       void this.#finish(code, signal).catch(() => undefined);
     });
+    if (shouldCloseStdinAfterStart(this.#options.args)) {
+      child.stdin.end();
+    }
   }
 
   public deliverInput(input: AgentInput): void {
@@ -634,6 +637,10 @@ function withoutExecOnlyArgs(args: readonly string[]): string[] {
     result.push(arg);
   }
   return result;
+}
+
+function shouldCloseStdinAfterStart(args: readonly string[]): boolean {
+  return args.includes("--dangerously-bypass-approvals-and-sandbox");
 }
 
 export function parseArgs(value: string): string[] {
