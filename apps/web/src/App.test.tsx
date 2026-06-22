@@ -178,6 +178,7 @@ type Deferred<T> = {
 
 type MockGitChange = {
   path: string;
+  oldPath?: string;
   status: string;
   staged: boolean;
 };
@@ -207,6 +208,7 @@ function gitStatusPayload(
   clean: boolean,
   changes: MockGitChange[],
 ) {
+  const visibleChanges = clean ? [] : changes;
   return {
     kind: "repository",
     requestId: "git-status-1",
@@ -220,10 +222,13 @@ function gitStatusPayload(
     clean,
     unborn: false,
     groups: [
-      { id: "staged", changes: [] },
+      {
+        id: "staged",
+        changes: visibleChanges.filter((change) => change.staged),
+      },
       {
         id: "changes",
-        changes: clean ? [] : changes,
+        changes: visibleChanges.filter((change) => !change.staged),
       },
       { id: "conflicts", changes: [] },
       { id: "untracked", changes: [] },
@@ -1261,6 +1266,69 @@ describe("App", () => {
             body.path === "src/App.tsx" &&
             body.oldRef === "parent123" &&
             body.newRef === "abc123"
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it("renders children under changed file path nodes in tree view", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "foo",
+        status: "deleted",
+        staged: false,
+      },
+      {
+        path: "foo/bar",
+        status: "added",
+        staged: false,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+
+    expect(await tools.findByRole("button", { name: "foo" })).toBeInTheDocument();
+    expect(
+      await tools.findByRole("button", { name: "foo/bar" }),
+    ).toBeInTheDocument();
+  });
+
+  it("includes old paths when unstaging staged rename groups", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/New.tsx",
+        oldPath: "src/Old.tsx",
+        status: "renamed",
+        staged: true,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/New.tsx");
+    fireEvent.click(tools.getByLabelText("Staged actions"));
+    fireEvent.click(tools.getByRole("button", { name: "Unstage all" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/unstage") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            Array.isArray(body.paths) &&
+            body.paths.join("\n") === "src/Old.tsx\nsrc/New.tsx"
           );
         }),
       ).toBe(true),

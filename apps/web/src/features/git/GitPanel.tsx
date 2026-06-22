@@ -654,7 +654,7 @@ export function GitPanel({
                           () =>
                             onStagePaths({
                               context: selectedContext,
-                              paths: [selectedChange.path],
+                              paths: gitActionPaths([selectedChange]),
                             }),
                           {
                             pending: stagedMessage(1),
@@ -668,7 +668,7 @@ export function GitPanel({
                           () =>
                             onUnstagePaths({
                               context: selectedContext,
-                              paths: [selectedChange.path],
+                              paths: gitActionPaths([selectedChange]),
                             }),
                           {
                             pending: unstagedMessage(1),
@@ -687,7 +687,7 @@ export function GitPanel({
                             () =>
                               onDiscardPaths({
                                 context: selectedContext,
-                                paths: [selectedChange.path],
+                                paths: gitActionPaths([selectedChange]),
                               }),
                             {
                               pending: "Changes discarded.",
@@ -996,23 +996,35 @@ function ChangeTreeNodeView({
   onSelectChange: (change: GitChange) => void;
   depth: number;
 }) {
+  const children = node.children.map((child) => (
+    <ChangeTreeNodeView
+      key={child.path}
+      node={child}
+      selectedChange={selectedChange}
+      onSelectChange={onSelectChange}
+      depth={depth + 1}
+    />
+  ));
   if (node.change) {
     return (
-      <button
-        type="button"
-        aria-label={node.change.path}
-        className={
-          selectedChange?.path === node.change.path &&
-          selectedChange.staged === node.change.staged
-            ? "is-selected"
-            : ""
-        }
-        style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={() => onSelectChange(node.change as GitChange)}
-      >
-        <span className={`git-status-dot ${node.change.status}`} />
-        <span className="truncate">{node.name}</span>
-      </button>
+      <>
+        <button
+          type="button"
+          aria-label={node.change.path}
+          className={
+            selectedChange?.path === node.change.path &&
+            selectedChange.staged === node.change.staged
+              ? "is-selected"
+              : ""
+          }
+          style={{ paddingLeft: 8 + depth * 14 }}
+          onClick={() => onSelectChange(node.change as GitChange)}
+        >
+          <span className={`git-status-dot ${node.change.status}`} />
+          <span className="truncate">{node.name}</span>
+        </button>
+        {children}
+      </>
     );
   }
   return (
@@ -1021,15 +1033,7 @@ function ChangeTreeNodeView({
         <ChevronRight size={13} />
         <span className="truncate">{node.name}</span>
       </summary>
-      {node.children.map((child) => (
-        <ChangeTreeNodeView
-          key={child.path}
-          node={child}
-          selectedChange={selectedChange}
-          onSelectChange={onSelectChange}
-          depth={depth + 1}
-        />
-      ))}
+      {children}
     </details>
   );
 }
@@ -1089,7 +1093,7 @@ function GroupHeader({
   onStageAll: (paths: string[]) => void;
   onUnstageAll: (paths: string[]) => void;
 }) {
-  const paths = group.changes.map((change) => change.path);
+  const paths = gitActionPaths(group.changes);
   const canStage = group.id === "changes" || group.id === "untracked";
   const canUnstage = group.id === "staged";
   return (
@@ -1612,6 +1616,17 @@ function stagedMessage(count: number): string {
 
 function unstagedMessage(count: number): string {
   return count === 1 ? "Unstaged 1 file." : `Unstaged ${count} files.`;
+}
+
+function gitActionPaths(changes: GitChange[]): string[] {
+  const paths = new Set<string>();
+  for (const change of changes) {
+    if (change.oldPath) {
+      paths.add(change.oldPath);
+    }
+    paths.add(change.path);
+  }
+  return [...paths];
 }
 
 type ChangeTreeNode = {
