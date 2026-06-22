@@ -259,6 +259,7 @@ export class WorkspaceCommandHandler {
         context: command.context,
         path: command.path,
         mode: command.mode ?? "working_tree",
+        ...(command.oldPath === undefined ? {} : { oldPath: command.oldPath }),
         ...(command.oldRef === undefined ? {} : { oldRef: command.oldRef }),
         ...(command.newRef === undefined ? {} : { newRef: command.newRef }),
       });

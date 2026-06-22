@@ -390,6 +390,7 @@ async function runUserJourney(browser, scenario) {
     pass(`${scenario.name}: file browse/edit/save`);
 
     await assertProjectGitUi(page, scenario, project, fileName);
+    await assertMobileGitTouchTargets(page, scenario);
     await captureScreenshot(page, scenario, "git-project-diff");
     pass(`${scenario.name}: project Git tab diff`);
 
@@ -506,7 +507,7 @@ async function assertManagedWorktreeGitUi(
   await captureScreenshot(page, scenario, "git-worktree-diff");
 
   await clickGitActionAndExpectJob(page, "/v1/git/stage", () =>
-    page.getByRole("button", { name: "Stage", exact: true }).click(),
+    clickGitMenuItem(page, "File actions", "Stage"),
   );
   await waitForGitStatus(gitContext, (status) =>
     status.groups.some(
@@ -527,9 +528,10 @@ async function assertManagedWorktreeGitUi(
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-commit");
 
+  await page.getByRole("tab", { name: "Branch & Sync" }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await clickGitActionAndExpectJob(page, "/v1/git/worktree/remove", () =>
-    page.getByRole("button", { name: "Remove worktree" }).click(),
+    clickGitMenuItem(page, "Branch actions", "Remove worktree"),
   );
   await waitFor(async () => {
     const payload = await requestJson(`/v1/sessions/${session.id}`);
@@ -578,10 +580,20 @@ async function waitForGitStatus(gitContext, predicate) {
         body: JSON.stringify(gitContext),
       });
       const status = payload.result;
-      return status !== undefined && predicate(status);
+      return status?.kind === "repository" && predicate(status);
     },
     `Git status ${JSON.stringify(gitContext)}`,
   );
+}
+
+async function clickGitMenuItem(page, menuLabel, itemName) {
+  const menu = page
+    .locator(".git-action-menu", {
+      has: page.locator(`summary[aria-label="${menuLabel}"]`),
+    })
+    .last();
+  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: itemName, exact: true }).click();
 }
 
 async function clickGitActionAndExpectJob(page, path, click) {
@@ -624,6 +636,68 @@ async function waitForGitDiffReady(page) {
 async function assertNoRunnerRequestFailed(page) {
   if (await hasVisibleText(page, "Runner request failed")) {
     throw new Error("Runner request failed notification is visible");
+  }
+}
+
+async function assertMobileGitTouchTargets(page, scenario) {
+  if (!scenario.mobile) {
+    return;
+  }
+  const firstActionMenu = page.locator(".git-panel .git-action-menu").first();
+  if ((await firstActionMenu.count()) > 0) {
+    await firstActionMenu.locator("summary").click();
+  }
+  const failures = await page.evaluate(() => {
+    const minSize = 44;
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none"
+      );
+    };
+    const targets = [
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-action-menu > summary"),
+      ).map((element, index) => ({
+        name: `Git action summary ${index + 1}`,
+        element,
+      })),
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-action-menu-content button"),
+      )
+        .filter(visible)
+        .map((element, index) => ({
+          name: `Git action menu item ${index + 1}`,
+          element,
+        })),
+      ...Array.from(
+        document.querySelectorAll(".git-panel .git-tree-folder summary"),
+      ).map((element, index) => ({
+        name: `Git tree folder ${index + 1}`,
+        element,
+      })),
+    ];
+    return targets
+      .map(({ name, element }) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          name,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          tooSmall: rect.width < minSize || rect.height < minSize,
+        };
+      })
+      .filter((target) => target.tooSmall);
+  });
+  await page.keyboard.press("Escape");
+  if (failures.length > 0) {
+    throw new Error(
+      `mobile Git touch targets below 44px: ${JSON.stringify(failures)}`,
+    );
   }
 }
 
@@ -1046,6 +1120,7 @@ async function createSessionFromUi(page, scenario, values) {
       name: `New Session - ${values.projectName}`,
     });
     await dialog.waitFor();
+    await waitForNewSessionFormReady(dialog);
     await dialog
       .locator('input[placeholder="Optional task name"]')
       .fill(values.title);
@@ -1085,6 +1160,7 @@ async function createSessionFromUi(page, scenario, values) {
     name: `New Session - ${values.projectName}`,
   });
   await dialog.waitFor();
+  await waitForNewSessionFormReady(dialog);
   await dialog
     .locator('input[placeholder="Optional task name"]')
     .fill(values.title);
@@ -1110,6 +1186,23 @@ async function createSessionFromUi(page, scenario, values) {
         session.title === values.title,
     );
   }, `session ${values.title} to be persisted`);
+}
+
+async function waitForNewSessionFormReady(dialog) {
+  await waitFor(async () => {
+    const loading = await dialog
+      .locator(".new-session-loading")
+      .isVisible()
+      .catch(() => false);
+    if (loading) {
+      return false;
+    }
+    return dialog
+      .locator("label.field:visible", { hasText: "Execution" })
+      .locator("select")
+      .isVisible()
+      .catch(() => false);
+  }, "new session form to finish loading");
 }
 
 async function assertMobileConnectionSheet(page) {

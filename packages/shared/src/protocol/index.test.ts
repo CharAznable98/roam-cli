@@ -163,6 +163,34 @@ describe("protocol schemas", () => {
     ).toBe("session:updated");
   });
 
+  it("accepts legacy git status runner events without a result kind", () => {
+    const event = RunnerEventSchema.parse({
+      type: "gitStatusResult",
+      result: {
+        requestId: "git-status-1",
+        context: { kind: "project", projectId: "project-1" },
+        branch: "main",
+        detached: false,
+        headSha: "abc123",
+        upstream: "origin/main",
+        ahead: 0,
+        behind: 0,
+        clean: true,
+        unborn: false,
+        groups: [{ id: "changes", changes: [] }],
+      },
+    });
+
+    expect(event).toMatchObject({
+      type: "gitStatusResult",
+      result: {
+        kind: "repository",
+        requestId: "git-status-1",
+        clean: true,
+      },
+    });
+  });
+
   it("validates file rpc payloads", () => {
     expect(
       FileTreeResultSchema.parse({

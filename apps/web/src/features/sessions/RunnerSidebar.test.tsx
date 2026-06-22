@@ -407,6 +407,22 @@ describe("RunnerSidebar", () => {
           query: "",
           entries: [],
         }))}
+        onFetchGitStatus={vi.fn(async (context) => ({
+          kind: "repository" as const,
+          requestId: "git-status-test",
+          context,
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: false,
+          groups: [],
+        }))}
+        onFetchGitBranches={vi.fn(async (context) => ({
+          requestId: "git-branches-test",
+          context,
+          branches: [],
+        }))}
       />,
     );
 

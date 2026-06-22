@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { Project, RunnerRegistration } from "@roamcli/shared/protocol";
+import type {
+  GitBranchList,
+  Project,
+  RunnerRegistration,
+} from "@roamcli/shared/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NewSessionForm } from "./NewSessionForm";
 
@@ -70,6 +74,7 @@ describe("NewSessionForm image attachments", () => {
     const { container } = render(
       <NewSessionForm project={project} runner={runner} onCreate={onCreate} />,
     );
+    await screen.findByPlaceholderText("Describe the work");
 
     fireEvent.change(fileInput(container), {
       target: {
@@ -99,6 +104,167 @@ describe("NewSessionForm image attachments", () => {
         ],
       }),
     );
+  });
+});
+
+describe("NewSessionForm Git options", () => {
+  it("disables managed worktrees for directories that are not git repositories", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onFetchGitStatus={async (context) => ({
+          kind: "not_git_repository",
+          requestId: "git-status-1",
+          context,
+          message: "This directory is not a Git repository.",
+        })}
+      />,
+    );
+
+    const execution = await screen.findByLabelText("Execution");
+    expect(execution).toHaveValue("direct");
+    expect(
+      screen.getByRole("option", { name: "New branch worktree" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "This directory is not a Git repository. Local sessions are available.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "local only task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        gitBaseRef: expect.any(String),
+      }),
+    );
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "direct" }),
+    );
+  });
+
+  it("disables managed worktrees for repositories without commits", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onFetchGitStatus={async (context) => ({
+          kind: "repository",
+          requestId: "git-status-1",
+          context,
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: true,
+          groups: [],
+        })}
+      />,
+    );
+
+    const execution = await screen.findByLabelText("Execution");
+    expect(execution).toHaveValue("direct");
+    expect(
+      screen.getByRole("option", { name: "New branch worktree" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "This repository has no commits yet. Local sessions are available until the first commit exists.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Base ref")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "local unborn task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "direct" }),
+    );
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        gitBaseRef: expect.any(String),
+      }),
+    );
+  });
+
+  it("defaults base ref to the current branch while branch refs load asynchronously", async () => {
+    let resolveBranches!: (value: GitBranchList) => void;
+    const branchesPromise = new Promise<GitBranchList>((resolve) => {
+      resolveBranches = resolve;
+    });
+
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={vi.fn()}
+        onFetchGitStatus={async (context) => ({
+          kind: "repository",
+          requestId: "git-status-1",
+          context,
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: false,
+          groups: [],
+        })}
+        onFetchGitBranches={() => branchesPromise}
+      />,
+    );
+
+    const baseRef = await screen.findByLabelText("Base ref");
+    expect(baseRef).toHaveValue("main");
+    expect(
+      screen.getByRole("option", { name: "Current branch (main)" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Loading branch refs...")).toBeInTheDocument();
+
+    resolveBranches({
+      requestId: "git-branches-1",
+      context: { kind: "project", projectId: project.id },
+          branches: [
+            { name: "main", current: true, remote: false },
+            { name: "feature/git-ui", current: false, remote: false },
+            { name: "origin/main", current: false, remote: true },
+            {
+              name: "origin/HEAD -> origin/main",
+              current: false,
+              remote: true,
+            },
+            { name: "origin/HEAD", current: false, remote: true },
+          ],
+        });
+
+    expect(
+      await screen.findByRole("option", { name: "feature/git-ui (local)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "origin/main (remote)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", {
+        name: "origin/HEAD -> origin/main (remote)",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "origin/HEAD (remote)" }),
+    ).not.toBeInTheDocument();
+    expect(baseRef).toHaveValue("main");
   });
 });
 

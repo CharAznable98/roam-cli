@@ -14,7 +14,7 @@ import type {
   GitContextRef,
   GitFileDiff,
   GitJob,
-  GitStatus,
+  GitStatusResult,
   Session,
 } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
@@ -48,13 +48,13 @@ export class GitService {
 
   async status(
     context: ApiGitContext,
-  ): Promise<ServiceResult<{ result: GitStatus }>> {
+  ): Promise<ServiceResult<{ result: GitStatusResult }>> {
     const resolved = this.resolveContext(context);
     if (!resolved.ok) {
       return resolved;
     }
     const requestId = newId("git_status");
-    const result = await this.rpc.requestRunner<GitStatus>(
+    const result = await this.rpc.requestRunner<GitStatusResult>(
       resolved.value.runnerId,
       {
         type: "gitStatus",
@@ -84,6 +84,7 @@ export class GitService {
         context: resolved.value.context,
         cwd: resolved.value.cwd,
         path: query.path,
+        ...(query.oldPath === undefined ? {} : { oldPath: query.oldPath }),
         mode: query.mode,
         ...(query.oldRef === undefined ? {} : { oldRef: query.oldRef }),
         ...(query.newRef === undefined ? {} : { newRef: query.newRef }),

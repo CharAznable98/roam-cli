@@ -102,7 +102,8 @@ export function AppShell({ controller }: AppShellProps) {
     searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
-    fetchGitBlame,
+    fetchGitHistory,
+    fetchGitBranches,
     initGitRepository,
     stageGitPaths,
     unstageGitPaths,
@@ -352,6 +353,8 @@ export function AppShell({ controller }: AppShellProps) {
               onCreateSession={createSession}
               onListAgentSkills={listAgentSkills}
               onSearchWorkspacePaths={searchWorkspacePaths}
+              onFetchGitStatus={fetchGitStatus}
+              onFetchGitBranches={fetchGitBranches}
             />
             {selectedSession ? (
               <ChatPanel
@@ -443,7 +446,8 @@ export function AppShell({ controller }: AppShellProps) {
                     defaultContext={selectedGitContext}
                     onFetchStatus={fetchGitStatus}
                     onFetchDiff={fetchGitDiff}
-                    onFetchBlame={fetchGitBlame}
+                    onFetchHistory={fetchGitHistory}
+                    onFetchBranches={fetchGitBranches}
                     onInitRepository={initGitRepository}
                     onStagePaths={stageGitPaths}
                     onUnstagePaths={unstageGitPaths}
@@ -451,6 +455,14 @@ export function AppShell({ controller }: AppShellProps) {
                     onCommit={commitGitChanges}
                     onRemoteOperation={runGitRemoteOperation}
                     onRemoveWorktree={removeGitWorktree}
+                    onNotify={(tone, title, message) =>
+                      dispatch({
+                        type: "notificationPushed",
+                        tone,
+                        title,
+                        message,
+                      })
+                    }
                   />
                 </div>
                 <div className="workspace-surface approvals-surface">
@@ -534,6 +546,8 @@ export function AppShell({ controller }: AppShellProps) {
                   runner={selectedRunner}
                   onListAgentSkills={listAgentSkills}
                   onSearchWorkspacePaths={searchWorkspacePaths}
+                  onFetchGitStatus={fetchGitStatus}
+                  onFetchGitBranches={fetchGitBranches}
                   onCreate={(values) =>
                     createSession(selectedProject.id, values)
                   }

@@ -1054,13 +1054,6 @@ export function useRoamController() {
         return await api.fetchGitStatus(context);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        if (!isNonGitRepositoryError(message)) {
-          dispatch({
-            type: "errorChanged",
-            title: "Git status failed",
-            message,
-          });
-        }
         throw new Error(message);
       }
     },
@@ -1074,7 +1067,6 @@ export function useRoamController() {
         return await api.fetchGitDiff(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({ type: "errorChanged", title: "Git diff failed", message });
         throw new Error(message);
       }
     },
@@ -1088,7 +1080,6 @@ export function useRoamController() {
         return await api.fetchGitBlame(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({ type: "errorChanged", title: "Git blame failed", message });
         throw new Error(message);
       }
     },
@@ -1102,11 +1093,6 @@ export function useRoamController() {
         return await api.fetchGitHistory(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git history failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -1120,11 +1106,6 @@ export function useRoamController() {
         return await api.fetchGitBranches(context);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git branches failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -1144,22 +1125,9 @@ export function useRoamController() {
       run: () => Promise<Awaited<ReturnType<RoamApiClient["stageGitPaths"]>>>,
     ) => {
       try {
-        const job = await run();
-        if (job.status === "failed") {
-          dispatch({
-            type: "errorChanged",
-            title: "Git operation failed",
-            message: job.errorSummary ?? `${job.operation} failed`,
-          });
-        }
-        return job;
+        return await run();
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
-        dispatch({
-          type: "errorChanged",
-          title: "Git operation failed",
-          message,
-        });
         throw new Error(message);
       }
     },
@@ -1315,10 +1283,6 @@ function authViewFromErrorMessage(
   message: string,
 ): Extract<AuthViewState, "setup_required" | "login"> {
   return message.includes("setup_required") ? "setup_required" : "login";
-}
-
-function isNonGitRepositoryError(message: string): boolean {
-  return message.toLowerCase().includes("not a git repository");
 }
 
 function hydrateInitialSelection(state: AppState): AppState {
