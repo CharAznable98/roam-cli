@@ -40,6 +40,7 @@ import {
   FileTreeQuerySchema,
   ProjectParamsSchema,
   RunnerParamsSchema,
+  SessionDeleteQuerySchema,
   SessionParamsSchema,
 } from "./schemas.js";
 
@@ -95,11 +96,7 @@ function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
     if (!result.ok) {
       return sendAuthError(reply, result.error);
     }
-    context.services.auth.setSessionCookie(
-      reply,
-      result.value.token,
-      request,
-    );
+    context.services.auth.setSessionCookie(reply, result.value.token, request);
     return reply.code(201).send({
       auth: {
         status: "authenticated",
@@ -122,11 +119,7 @@ function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
     if (!result.ok) {
       return sendAuthError(reply, result.error);
     }
-    context.services.auth.setSessionCookie(
-      reply,
-      result.value.token,
-      request,
-    );
+    context.services.auth.setSessionCookie(reply, result.value.token, request);
     return {
       auth: {
         status: "authenticated",
@@ -351,6 +344,7 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      activities: context.store.listAgentActivities(session.id),
       attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
       artifacts: context.store.listArtifacts(session.id),
@@ -436,14 +430,21 @@ function registerSessionRoutes(
 
   app.delete("/v1/sessions/:id", async (request, reply) => {
     const params = SessionParamsSchema.parse(request.params);
-    const result = context.services.sessions.deleteSession(params.id);
-    if (!result.ok) {
-      if (result.error === "session_not_found") {
-        return reply.code(404).send({ error: "session_not_found" });
+    const query = SessionDeleteQuerySchema.parse(request.query);
+    try {
+      const result = await context.services.sessions.deleteSession(params.id, {
+        worktree: query.worktree,
+      });
+      if (!result.ok) {
+        if (result.error === "session_not_found") {
+          return reply.code(404).send({ error: "session_not_found" });
+        }
+        return sendServiceError(reply, result);
       }
-      return reply.code(400).send({ error: result.error });
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
     }
-    return reply.code(204).send();
   });
 }
 
@@ -995,8 +996,15 @@ function sendServiceError(
   ) {
     return reply.code(404).send({ error: result.error });
   }
-  if (result.error === "worktree_not_available") {
-    return reply.code(409).send({ error: result.error });
+  if (
+    result.error === "worktree_not_available" ||
+    result.error === "worktree_remove_failed"
+  ) {
+    return reply.code(409).send({
+      error: result.error,
+      ...(result.message ? { message: result.message } : {}),
+      ...(result.code ? { code: result.code } : {}),
+    });
   }
   return reply.code(400).send({
     error: result.error,

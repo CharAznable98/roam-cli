@@ -69,6 +69,10 @@ export type AuthViewState =
   | "login"
   | "authenticated";
 
+export type SessionArchiveOptions = {
+  worktree?: "keep" | "remove";
+};
+
 export function useRoamController() {
   const [state, dispatch] = useReducer(
     appReducer,
@@ -862,21 +866,18 @@ export function useRoamController() {
     }
   };
 
-  const deleteSelectedSession = () => {
-    if (!selectedSession || !apiRef.current) return;
-    if (!window.confirm(`Delete session "${selectedSession.title}"?`)) {
-      return;
+  const archiveSession = async (
+    sessionId: string,
+    options: SessionArchiveOptions = {},
+  ) => {
+    const api = requireApiClient();
+    dispatch({ type: "sessionArchiveStarted", sessionId });
+    try {
+      await api.deleteSession(sessionId, options);
+      dispatch({ type: "sessionDeleted", sessionId });
+    } finally {
+      dispatch({ type: "sessionArchiveFinished", sessionId });
     }
-    const sessionId = selectedSession.id;
-    void apiRef.current
-      .deleteSession(sessionId)
-      .then(() => dispatch({ type: "sessionDeleted", sessionId }))
-      .catch((deleteError: unknown) =>
-        dispatch({
-          type: "errorChanged",
-          message: errorMessage(deleteError),
-        }),
-      );
   };
 
   const selectFile = (
@@ -1230,6 +1231,11 @@ export function useRoamController() {
           ),
         )
     : [];
+  const sessionActivities = selectedSession
+    ? state.activities.filter(
+        (activity) => activity.sessionId === selectedSession.id,
+      )
+    : [];
   const sessionApprovals = selectedSession
     ? state.approvals.filter(
         (approval) => approval.sessionId === selectedSession.id,
@@ -1272,6 +1278,7 @@ export function useRoamController() {
     runnerSessions: projectSessions,
     selectedSession,
     sessionMessages,
+    sessionActivities,
     sessionApprovals,
     sessionHunks,
     sessionFiles,
@@ -1289,7 +1296,7 @@ export function useRoamController() {
     resolveHunk,
     applyAcceptedPatch,
     sendControl,
-    deleteSelectedSession,
+    archiveSession,
     selectFile,
     openFileForEdit,
     startSelectedFileEdit,

@@ -184,6 +184,69 @@ describe("claude code agent plugin", () => {
     });
   });
 
+  it("maps SDK system task messages to activity instead of assistant messages", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    sdk.query.mockReturnValue(
+      fakeQuery([
+        {
+          type: "system",
+          subtype: "status",
+          status: "requesting",
+        },
+        {
+          type: "system",
+          subtype: "task_started",
+          description: "Explore file preview component",
+        },
+        {
+          type: "system",
+          subtype: "task_progress",
+          description: "Running List root directory contents",
+        },
+      ]),
+    );
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(events.filter((event) => event.type === "activity")).toHaveLength(
+        3,
+      );
+    });
+    expect(events.filter((event) => event.type === "activity")).toEqual([
+      {
+        type: "activity",
+        kind: "status",
+        label: "Requesting",
+      },
+      {
+        type: "activity",
+        kind: "task_started",
+        label: "Exploring file preview component",
+      },
+      {
+        type: "activity",
+        kind: "task_progress",
+        label: "Listing root directory contents",
+      },
+    ]);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message" &&
+          event.content.startsWith("Claude Code task"),
+      ),
+    ).toBe(false);
+  });
+
   it("queues active user messages for the next resumed SDK query", async () => {
     const events: AgentRuntimeEvent[] = [];
     const firstQuery = deferredQuery([

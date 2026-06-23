@@ -13,6 +13,15 @@ declare module "@roamcli/shared/protocol" {
   export type ApprovalKind = "execCommand" | "applyPatch";
   export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
   export type ArtifactKind = "patch" | "file" | "log";
+  export type AgentActivityKind =
+    | "status"
+    | "task_started"
+    | "task_progress"
+    | "task_notification"
+    | "approval"
+    | "tool"
+    | "system"
+    | "thought";
   export type GitDiffMode =
     | "working_tree"
     | "staged"
@@ -107,6 +116,15 @@ declare module "@roamcli/shared/protocol" {
     role: ChatRole;
     content: string;
     encrypted: boolean;
+    createdAt: string;
+  }
+
+  export interface AgentActivity {
+    id: string;
+    sessionId: string;
+    agent: AgentKind;
+    kind: AgentActivityKind;
+    label: string;
     createdAt: string;
   }
 
@@ -534,13 +552,13 @@ declare module "@roamcli/shared/protocol" {
       }
     | ({ type: "gitStatus" } & GitCommandBase)
     | ({
-      type: "gitFileDiff";
-      path: string;
-      oldPath?: string;
-      mode?: GitDiffMode;
-      oldRef?: string;
-      newRef?: string;
-    } & GitCommandBase)
+        type: "gitFileDiff";
+        path: string;
+        oldPath?: string;
+        mode?: GitDiffMode;
+        oldRef?: string;
+        newRef?: string;
+      } & GitCommandBase)
     | ({ type: "gitBlame"; path: string; ref?: string } & GitCommandBase)
     | ({
         type: "gitCommitPage";
@@ -583,6 +601,13 @@ declare module "@roamcli/shared/protocol" {
         sessionId: string;
         content: string;
         encrypted: boolean;
+      }
+    | {
+        type: "agentActivity";
+        sessionId: string;
+        agent: AgentKind;
+        kind: AgentActivityKind;
+        label: string;
       }
     | { type: "token"; sessionId: string; content: string; encrypted: boolean }
     | { type: "fileTreeResult"; result: FileTreeResult }

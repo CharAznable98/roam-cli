@@ -15,36 +15,31 @@ import type {
   GitFileDiff,
   GitJob,
   GitStatusResult,
-  Session,
 } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import { newId } from "../../infra/ids.js";
-import {
+import type {
   RunnerRpcClient,
-  RunnerRpcError,
-  type RunnerRpcCommand,
+  RunnerRpcCommand,
 } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { fail, ok, type ServiceResult } from "../result.js";
-
-type GitResolvedContext = {
-  projectId: string;
-  runnerId: string;
-  cwd: string;
-  context: GitContextRef;
-  session?: Session;
-};
+import { GitJobRunner, type GitResolvedContext } from "./git-job-runner.js";
 
 export class GitService {
-  private readonly writeQueues = new Map<string, Promise<unknown>>();
+  private readonly gitJobs: GitJobRunner;
 
   constructor(
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
     private readonly rpc: RunnerRpcClient,
     private readonly runnerRpcTimeoutMs: number,
-  ) {}
+    gitJobs?: GitJobRunner,
+  ) {
+    this.gitJobs =
+      gitJobs ?? new GitJobRunner(store, hub, rpc, runnerRpcTimeoutMs);
+  }
 
   async status(
     context: ApiGitContext,
@@ -277,44 +272,7 @@ export class GitService {
     if (!resolved.ok) {
       return resolved;
     }
-    return this.enqueueWrite(resolved.value, async () => {
-      const requestId = newId(`git_${operation}`);
-      const queuedJob = this.createQueuedJob(
-        requestId,
-        operation,
-        resolved.value,
-      );
-      try {
-        const job = await this.rpc.requestRunner<GitJob>(
-          resolved.value.runnerId,
-          buildCommand(resolved.value, requestId),
-          this.runnerRpcTimeoutMs,
-        );
-        return ok({ job });
-      } catch (error: unknown) {
-        const failed = this.failQueuedJob(queuedJob, error);
-        if (error instanceof RunnerRpcError) {
-          throw error;
-        }
-        return ok({ job: failed });
-      }
-    });
-  }
-
-  private enqueueWrite<T>(
-    resolved: GitResolvedContext,
-    work: () => Promise<ServiceResult<T>>,
-  ): Promise<ServiceResult<T>> {
-    const key = contextQueueKey(resolved.context);
-    const previous = this.writeQueues.get(key) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(work);
-    const cleanup = current.finally(() => {
-      if (this.writeQueues.get(key) === cleanup) {
-        this.writeQueues.delete(key);
-      }
-    });
-    this.writeQueues.set(key, cleanup);
-    return current;
+    return this.gitJobs.run(resolved.value, operation, buildCommand);
   }
 
   private resolveContext(
@@ -356,44 +314,4 @@ export class GitService {
       session,
     });
   }
-
-  private createQueuedJob(
-    requestId: string,
-    operation: string,
-    resolved: GitResolvedContext,
-  ): GitJob {
-    const job: GitJob = {
-      id: requestId,
-      projectId: resolved.projectId,
-      ...(resolved.context.kind === "session_worktree"
-        ? { sessionId: resolved.context.sessionId }
-        : {}),
-      contextKind: resolved.context.kind,
-      operation,
-      status: "queued",
-      createdAt: nowIso(),
-    };
-    this.store.upsertGitJob(job);
-    this.hub.broadcast({ type: "git:job", job });
-    return job;
-  }
-
-  private failQueuedJob(job: GitJob, error: unknown): GitJob {
-    const failed: GitJob = {
-      ...job,
-      status: "failed",
-      finishedAt: nowIso(),
-      errorCode: error instanceof RunnerRpcError ? error.code : "git_error",
-      errorSummary: error instanceof Error ? error.message : String(error),
-    };
-    this.store.upsertGitJob(failed);
-    this.hub.broadcast({ type: "git:job", job: failed });
-    return failed;
-  }
-}
-
-function contextQueueKey(context: GitContextRef): string {
-  return context.kind === "project"
-    ? `project:${context.projectId}`
-    : `session_worktree:${context.sessionId}`;
 }

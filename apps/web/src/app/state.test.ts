@@ -612,6 +612,76 @@ describe("app reducer", () => {
     expect(dismissed.notifications).toEqual([]);
   });
 
+  it("ignores runner errors for sessions that are no longer active", () => {
+    const activeError = appReducer(
+      { ...initialAppState, sessions: [makeSession("session-1", "project-1")] },
+      {
+        type: "serverEventReceived",
+        event: {
+          type: "error",
+          sessionId: "session-1",
+          message: "Session is not running",
+          code: "SESSION_NOT_RUNNING",
+        },
+      },
+    );
+    const staleError = appReducer(initialAppState, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+
+    expect(activeError.notifications).toMatchObject([
+      {
+        title: "Runner request failed",
+        message: "Session is not running",
+      },
+    ]);
+    expect(staleError.notifications).toEqual([]);
+  });
+
+  it("ignores session-not-running errors while a session archive is in flight", () => {
+    const state = appReducer(
+      { ...initialAppState, sessions: [makeSession("session-1", "project-1")] },
+      { type: "sessionArchiveStarted", sessionId: "session-1" },
+    );
+
+    const archivedStopError = appReducer(state, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+    expect(archivedStopError.notifications).toEqual([]);
+
+    const finished = appReducer(archivedStopError, {
+      type: "sessionArchiveFinished",
+      sessionId: "session-1",
+    });
+    const activeError = appReducer(finished, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+    expect(activeError.notifications).toMatchObject([
+      {
+        title: "Runner request failed",
+        message: "Session is not running",
+      },
+    ]);
+  });
+
   it("does not clear existing notifications when a legacy error field is cleared", () => {
     const withNotification = appReducer(initialAppState, {
       type: "fileTreeFailed",

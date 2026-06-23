@@ -68,9 +68,7 @@ export const AccountSecurityStateSchema = z.object({
   runnerTokenLastUsedAt: z.string().datetime().optional(),
   runnerTokenLastRunnerId: z.string().optional(),
 });
-export type AccountSecurityState = z.infer<
-  typeof AccountSecurityStateSchema
->;
+export type AccountSecurityState = z.infer<typeof AccountSecurityStateSchema>;
 
 export const ApiSetupOwnerSchema = z.object({
   setupToken: z.string().min(1),
@@ -208,22 +206,19 @@ const GitStatusResultDiscriminatedSchema = z.discriminatedUnion("kind", [
   GitStatusSchema,
   GitNotRepositoryStatusSchema,
 ]);
-export const GitStatusResultSchema = z.preprocess(
-  (value) => {
-    if (
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      (value as { kind?: unknown }).kind === undefined &&
-      "clean" in value &&
-      "groups" in value
-    ) {
-      return { ...value, kind: "repository" };
-    }
-    return value;
-  },
-  GitStatusResultDiscriminatedSchema,
-);
+export const GitStatusResultSchema = z.preprocess((value) => {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === undefined &&
+    "clean" in value &&
+    "groups" in value
+  ) {
+    return { ...value, kind: "repository" };
+  }
+  return value;
+}, GitStatusResultDiscriminatedSchema);
 export type GitStatusResult = z.infer<typeof GitStatusResultSchema>;
 
 export const GitDiffModeSchema = z.enum([
@@ -372,6 +367,28 @@ export const MessageSchema = z.object({
   createdAt: z.string().datetime(),
 });
 export type Message = z.infer<typeof MessageSchema>;
+
+export const AgentActivityKindSchema = z.enum([
+  "status",
+  "task_started",
+  "task_progress",
+  "task_notification",
+  "approval",
+  "tool",
+  "system",
+  "thought",
+]);
+export type AgentActivityKind = z.infer<typeof AgentActivityKindSchema>;
+
+export const AgentActivitySchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  agent: AgentKindSchema,
+  kind: AgentActivityKindSchema,
+  label: z.string().min(1),
+  createdAt: z.string().datetime(),
+});
+export type AgentActivity = z.infer<typeof AgentActivitySchema>;
 
 export const SessionStatusCheckResultSchema = z.object({
   requestId: z.string().min(1),
@@ -940,6 +957,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("message:created"), message: MessageSchema }),
   z.object({
+    type: z.literal("activity:created"),
+    activity: AgentActivitySchema,
+  }),
+  z.object({
     type: z.literal("message_attachment:created"),
     attachment: MessageAttachmentSchema,
   }),
@@ -971,6 +992,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("error"),
     message: z.string(),
+    sessionId: z.string().optional(),
     code: z.string().optional(),
   }),
 ]);
@@ -1005,6 +1027,13 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
     content: z.string(),
     encrypted: z.boolean().default(false),
+  }),
+  z.object({
+    type: z.literal("agentActivity"),
+    sessionId: z.string().min(1),
+    agent: AgentKindSchema,
+    kind: AgentActivityKindSchema,
+    label: z.string().min(1),
   }),
   z.object({
     type: z.literal("token"),

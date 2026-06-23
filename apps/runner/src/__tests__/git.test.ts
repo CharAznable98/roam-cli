@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import {
   discardGitPaths,
   readGitFileDiff,
   readGitStatus,
+  removeGitWorktree,
   stageGitPaths,
 } from "../workspace/git.js";
 
@@ -134,6 +135,100 @@ describe("runner git workspace operations", () => {
       context,
       message: "This directory is not a Git repository.",
     });
+  });
+
+  it("removes a registered git worktree", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-worktree-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const worktree = join(
+      workspace,
+      ".roam-runner/worktrees/project-1/session-1",
+    );
+    await git(workspace, ["worktree", "add", "-b", "session-1", worktree]);
+
+    await expect(
+      removeGitWorktree({
+        workspace,
+        cwd: ".roam-runner/worktrees/project-1/session-1",
+        requestId: "remove-worktree",
+        projectId: "project-1",
+        context: { kind: "session_worktree", sessionId: "session-1" },
+        operation: "remove_worktree",
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    await expect(stat(worktree)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("treats an already-missing worktree path as removed", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-missing-wt-"));
+
+    await expect(
+      removeGitWorktree({
+        workspace,
+        cwd: ".roam-runner/worktrees/project-1/session-1",
+        requestId: "remove-missing-worktree",
+        projectId: "project-1",
+        context: { kind: "session_worktree", sessionId: "session-1" },
+        operation: "remove_worktree",
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("prunes stale worktree metadata when the worktree path is already missing", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-prune-wt-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const worktreeRelativePath = ".roam-runner/worktrees/project-1/session-1";
+    const worktree = join(workspace, worktreeRelativePath);
+    await git(workspace, ["worktree", "add", "-b", "session-1", worktree]);
+    await rm(worktree, { recursive: true, force: true });
+
+    await expect(
+      removeGitWorktree({
+        workspace,
+        cwd: worktreeRelativePath,
+        requestId: "remove-prunable-worktree",
+        projectId: "project-1",
+        context: { kind: "session_worktree", sessionId: "session-1" },
+        operation: "remove_worktree",
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+
+    await expect(gitOutput(workspace, ["worktree", "list", "--porcelain"]))
+      .resolves.not.toContain(worktree);
+  });
+
+  it("does not remove existing directories that are not git worktrees", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-bad-wt-"));
+    const worktree = join(
+      workspace,
+      ".roam-runner/worktrees/project-1/session-1",
+    );
+    await mkdir(worktree, { recursive: true });
+
+    await expect(
+      removeGitWorktree({
+        workspace,
+        cwd: ".roam-runner/worktrees/project-1/session-1",
+        requestId: "remove-bad-worktree",
+        projectId: "project-1",
+        context: { kind: "session_worktree", sessionId: "session-1" },
+        operation: "remove_worktree",
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorSummary: "Directory is not a git repository",
+    });
+    await expect(stat(worktree)).resolves.toBeDefined();
   });
 
   it("reads root commit file diffs against the empty tree", async () => {
