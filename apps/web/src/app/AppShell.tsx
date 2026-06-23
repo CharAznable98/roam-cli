@@ -54,6 +54,7 @@ type AppShellProps = {
 };
 
 type SettingsView = "home" | "account" | "change-password" | "web-push";
+type AccountRefreshState = "idle" | "loading" | "ready" | "error";
 
 export function AppShell({ controller }: AppShellProps) {
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
@@ -62,8 +63,8 @@ export function AppShell({ controller }: AppShellProps) {
     useState(false);
   const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>("home");
-  const [settingsAccountRefreshing, setSettingsAccountRefreshing] =
-    useState(false);
+  const [settingsAccountRefreshState, setSettingsAccountRefreshState] =
+    useState<AccountRefreshState>("idle");
   const {
     state,
     authView,
@@ -196,23 +197,26 @@ export function AppShell({ controller }: AppShellProps) {
 
   useEffect(() => {
     if (authView !== "authenticated" || state.activeTab !== "settings") {
-      setSettingsAccountRefreshing(false);
+      setSettingsAccountRefreshState("idle");
       return;
     }
 
     let active = true;
-    setSettingsAccountRefreshing(true);
+    setSettingsAccountRefreshState("loading");
     void refreshAccountSecurity()
+      .then(() => {
+        if (active) {
+          setSettingsAccountRefreshState("ready");
+        }
+      })
       .catch((accountError: unknown) => {
         notify(
           "error",
           "Account settings unavailable",
           errorMessage(accountError),
         );
-      })
-      .finally(() => {
         if (active) {
-          setSettingsAccountRefreshing(false);
+          setSettingsAccountRefreshState("error");
         }
       });
 
@@ -512,7 +516,7 @@ export function AppShell({ controller }: AppShellProps) {
                 <div className="workspace-surface settings-surface">
                   <SettingsPanel
                     account={accountSecurity}
-                    accountRefreshing={settingsAccountRefreshing}
+                    accountRefreshState={settingsAccountRefreshState}
                     runnerCommand={runnerCommand}
                     view={settingsView}
                     onViewChange={setSettingsView}
@@ -731,7 +735,7 @@ function AuthGate({
 
 function SettingsPanel({
   account,
-  accountRefreshing,
+  accountRefreshState,
   runnerCommand,
   view,
   onViewChange,
@@ -741,7 +745,7 @@ function SettingsPanel({
   onRegenerateRunnerToken,
 }: {
   account: AccountSecurityState | undefined;
-  accountRefreshing: boolean;
+  accountRefreshState: AccountRefreshState;
   runnerCommand: string;
   view: SettingsView;
   onViewChange: (view: SettingsView) => void;
@@ -781,7 +785,7 @@ function SettingsPanel({
             title="Account & Security"
             onBack={() => onViewChange("home")}
           />
-          {account && !accountRefreshing ? (
+          {account && accountRefreshState === "ready" ? (
             <AccountSecurityPanel
               account={account}
               runnerCommand={runnerCommand}
@@ -790,6 +794,10 @@ function SettingsPanel({
               onLogoutAll={onLogoutAll}
               onRegenerateRunnerToken={onRegenerateRunnerToken}
             />
+          ) : accountRefreshState === "error" ? (
+            <div className="empty-state compact">
+              Account settings could not be loaded.
+            </div>
           ) : (
             <div className="empty-state compact">
               Loading account settings...

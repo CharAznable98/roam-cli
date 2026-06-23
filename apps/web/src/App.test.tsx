@@ -1110,6 +1110,34 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
   });
 
+  it("keeps cached account hidden when Settings account refresh fails", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const failedAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(failedAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+
+    await act(async () => {
+      failedAccount.reject(new Error("account API unavailable"));
+      await expect(failedAccount.promise).rejects.toThrow(
+        "account API unavailable",
+      );
+    });
+
+    expect(
+      await screen.findByText("Account settings could not be loaded."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Account settings unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Runner token")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Regenerate" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps Settings reachable before runners connect", async () => {
     runnerOnline = false;
     defaultProjectVisible = false;
