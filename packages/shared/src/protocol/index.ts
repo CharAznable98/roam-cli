@@ -68,9 +68,7 @@ export const AccountSecurityStateSchema = z.object({
   runnerTokenLastUsedAt: z.string().datetime().optional(),
   runnerTokenLastRunnerId: z.string().optional(),
 });
-export type AccountSecurityState = z.infer<
-  typeof AccountSecurityStateSchema
->;
+export type AccountSecurityState = z.infer<typeof AccountSecurityStateSchema>;
 
 export const ApiSetupOwnerSchema = z.object({
   setupToken: z.string().min(1),
@@ -208,22 +206,19 @@ const GitStatusResultDiscriminatedSchema = z.discriminatedUnion("kind", [
   GitStatusSchema,
   GitNotRepositoryStatusSchema,
 ]);
-export const GitStatusResultSchema = z.preprocess(
-  (value) => {
-    if (
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      (value as { kind?: unknown }).kind === undefined &&
-      "clean" in value &&
-      "groups" in value
-    ) {
-      return { ...value, kind: "repository" };
-    }
-    return value;
-  },
-  GitStatusResultDiscriminatedSchema,
-);
+export const GitStatusResultSchema = z.preprocess((value) => {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === undefined &&
+    "clean" in value &&
+    "groups" in value
+  ) {
+    return { ...value, kind: "repository" };
+  }
+  return value;
+}, GitStatusResultDiscriminatedSchema);
 export type GitStatusResult = z.infer<typeof GitStatusResultSchema>;
 
 export const GitDiffModeSchema = z.enum([
@@ -971,6 +966,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("error"),
     message: z.string(),
+    sessionId: z.string().optional(),
     code: z.string().optional(),
   }),
 ]);

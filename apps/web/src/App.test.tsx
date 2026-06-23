@@ -389,6 +389,8 @@ describe("App", () => {
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
+  let failNextSessionArchive: boolean;
+  let emitSessionNotRunningOnArchive: boolean;
   let runnerOnline: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
@@ -422,6 +424,8 @@ describe("App", () => {
     failNextProjectCreate = false;
     failNextSessionCreate = false;
     failNextSessionRename = false;
+    failNextSessionArchive = false;
+    emitSessionNotRunningOnArchive = false;
     runnerOnline = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
@@ -634,6 +638,29 @@ describe("App", () => {
             });
           }
           if (init?.method === "DELETE") {
+            if (failNextSessionArchive) {
+              failNextSessionArchive = false;
+              return jsonResponse(
+                {
+                  error: "worktree_remove_failed",
+                  message: "Directory is not a git repository",
+                  code: "GIT_OPERATION_ERROR",
+                },
+                409,
+              );
+            }
+            if (emitSessionNotRunningOnArchive) {
+              sockets[0]?.dispatchEvent(
+                new MessageEvent("message", {
+                  data: JSON.stringify({
+                    type: "error",
+                    sessionId: "session-1",
+                    message: "Session is not running",
+                    code: "SESSION_NOT_RUNNING",
+                  }),
+                }),
+              );
+            }
             return new Response(null, { status: 204 });
           }
           return jsonResponse({
@@ -818,9 +845,14 @@ describe("App", () => {
             });
           }
           return jsonResponse({
-            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges, {
-              unborn: gitStatusUnborn,
-            }),
+            result: gitStatusPayload(
+              context,
+              gitStatusClean,
+              gitStatusChanges,
+              {
+                unborn: gitStatusUnborn,
+              },
+            ),
           });
         }
         if (requestUrl.pathname === "/v1/git/branches") {
@@ -1385,7 +1417,9 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    expect((await tools.findAllByText("Initial commit")).length).toBeGreaterThan(0);
+    expect(
+      (await tools.findAllByText("Initial commit")).length,
+    ).toBeGreaterThan(0);
     expect(await tools.findByText("Changed files")).toBeInTheDocument();
     await waitFor(() =>
       expect(
@@ -1425,7 +1459,9 @@ describe("App", () => {
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
 
-    expect(await tools.findByRole("button", { name: "foo" })).toBeInTheDocument();
+    expect(
+      await tools.findByRole("button", { name: "foo" }),
+    ).toBeInTheDocument();
     expect(
       await tools.findByRole("button", { name: "foo/bar" }),
     ).toBeInTheDocument();
@@ -1517,7 +1553,9 @@ describe("App", () => {
 
     expect(await tools.findByText("No commits found.")).toBeInTheDocument();
     expect(
-      fetchCalls.some((call) => new URL(call.url).pathname === "/v1/git/history"),
+      fetchCalls.some(
+        (call) => new URL(call.url).pathname === "/v1/git/history",
+      ),
     ).toBe(false);
   });
 
@@ -1550,7 +1588,9 @@ describe("App", () => {
     await tools.findByText("src/App.tsx");
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
-    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(0);
+    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(
+      0,
+    );
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -1597,7 +1637,9 @@ describe("App", () => {
     await tools.findByText("src/App.tsx");
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
-    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(0);
+    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(
+      0,
+    );
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -1790,9 +1832,9 @@ describe("App", () => {
       await tools.findByText("Working tree is clean."),
     ).toBeInTheDocument();
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
-    expect((await tools.findAllByText("Session commit")).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await tools.findAllByText("Session commit")).length,
+    ).toBeGreaterThan(0);
 
     fireEvent.click(tools.getByRole("button", { name: "Load more" }));
     gitHistoryCommits = [
@@ -1817,9 +1859,9 @@ describe("App", () => {
       target: { value: "project:project-1" },
     });
 
-    expect((await tools.findAllByText("Project commit")).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await tools.findAllByText("Project commit")).length,
+    ).toBeGreaterThan(0);
 
     await act(async () => {
       staleHistoryPage.resolve(
@@ -2463,7 +2505,9 @@ describe("App", () => {
     const dialog = screen.getByRole("dialog", {
       name: "New Session - Real Project",
     });
-    expect(await within(dialog).findByDisplayValue("/workspace")).toBeInTheDocument();
+    expect(
+      await within(dialog).findByDisplayValue("/workspace"),
+    ).toBeInTheDocument();
     fireEvent.change(await within(dialog).findByLabelText("Prompt"), {
       target: { value: "Run the focused task" },
     });
@@ -3569,12 +3613,18 @@ describe("App", () => {
     expect(within(conversation).getByText("final answer")).toBeInTheDocument();
   });
 
-  it("deletes the selected session through the API and removes local session state", async () => {
+  it("archives a direct session through the API and removes local session state", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");
 
     fireEvent.click(
-      openSessionActions().getByRole("menuitem", { name: /Delete/ }),
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive session" }),
     );
 
     await waitFor(() =>
@@ -3585,13 +3635,102 @@ describe("App", () => {
     ).toBeInTheDocument();
     const deleteCall = fetchCalls.find(
       (call) =>
-        call.url.endsWith("/v1/sessions/session-1") &&
+        new URL(call.url).pathname === "/v1/sessions/session-1" &&
         call.init?.method === "DELETE",
     );
     expect(deleteCall).toBeDefined();
-    expect(window.confirm).toHaveBeenCalledWith(
-      'Delete session "Real session"?',
+    expect(new URL(deleteCall!.url).search).toBe("");
+    expect(window.confirm).not.toHaveBeenCalledWith(
+      'Archive session "Real session"?',
     );
+  });
+
+  it("archives a managed worktree session with remove strategy", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    emitSessionNotRunningOnArchive = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    expect(
+      within(dialog).getByText(remoteSessionExecutionFolder),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive and remove" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
+    const deleteCall = fetchCalls.find((call) => {
+      const requestUrl = new URL(call.url);
+      return (
+        requestUrl.pathname === "/v1/sessions/session-1" &&
+        requestUrl.searchParams.get("worktree") === "remove" &&
+        call.init?.method === "DELETE"
+      );
+    });
+    expect(deleteCall).toBeDefined();
+    expect(screen.queryByText("Session is not running")).not.toBeInTheDocument();
+  });
+
+  it("keeps the archive dialog open after remove failure and allows archive only", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    failNextSessionArchive = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive and remove" }),
+    );
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Directory is not a git repository",
+    );
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Real session" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive only" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
+    const removeCall = fetchCalls.find((call) => {
+      const requestUrl = new URL(call.url);
+      return (
+        requestUrl.pathname === "/v1/sessions/session-1" &&
+        requestUrl.searchParams.get("worktree") === "remove" &&
+        call.init?.method === "DELETE"
+      );
+    });
+    const keepCall = fetchCalls.find((call) => {
+      const requestUrl = new URL(call.url);
+      return (
+        requestUrl.pathname === "/v1/sessions/session-1" &&
+        requestUrl.searchParams.get("worktree") === "keep" &&
+        call.init?.method === "DELETE"
+      );
+    });
+    expect(removeCall).toBeDefined();
+    expect(keepCall).toBeDefined();
   });
 
   it("does not import mock data into the runtime app", () => {

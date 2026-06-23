@@ -809,6 +809,78 @@
     padding: 14px;
   }
 
+  .session-archive-dialog {
+    width: min(100%, 520px);
+  }
+
+  .archive-dialog-subtitle {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .archive-dialog-content {
+    display: grid;
+    gap: 10px;
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .archive-dialog-content p {
+    margin: 0;
+  }
+
+  .archive-dialog-path {
+    display: block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-muted);
+    color: var(--text-strong);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 8px 10px;
+  }
+
+  .archive-dialog-warning {
+    color: var(--signal-red);
+    font-weight: 700;
+  }
+
+  .archive-dialog-error {
+    display: grid;
+    gap: 4px;
+    border: 1px solid rgba(180, 35, 24, 0.24);
+    border-radius: var(--radius-control);
+    background: #fff4f2;
+    color: var(--signal-red);
+    padding: 9px 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .archive-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .archive-dialog-actions .small-button {
+    min-height: 44px;
+    padding-bottom: 8px;
+    padding-top: 8px;
+  }
+
+  .archive-dialog-actions svg.animate-spin {
+    animation: roam-spin 0.9s linear infinite;
+  }
+
   .modal-sheet {
     width: 100%;
     max-height: calc(100dvh - 16px);
@@ -3279,6 +3351,12 @@
   .primary-action-button,
   .small-button {
     min-height: 44px;
+  }
+
+  .archive-dialog-actions .small-button {
+    min-height: 44px;
+    padding-bottom: 8px;
+    padding-top: 8px;
   }
 
   .field input,

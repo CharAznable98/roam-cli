@@ -232,6 +232,7 @@ export class RunnerEventService {
     this.hub.broadcast({
       type: "error",
       message: event.message,
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
       ...(event.code ? { code: event.code } : {}),
     });
     if (event.sessionId && event.code === "SESSION_NOT_RUNNING") {
