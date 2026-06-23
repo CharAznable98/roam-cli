@@ -992,6 +992,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("error"),
     message: z.string(),
+    sessionId: z.string().optional(),
     code: z.string().optional(),
   }),
 ]);

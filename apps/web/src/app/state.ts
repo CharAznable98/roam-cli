@@ -68,6 +68,7 @@ export interface AppState {
   selectedRunnerId: string;
   selectedSessionId: string;
   mobileNewSessionOpen: boolean;
+  archivingSessionIds: Record<string, true>;
   loadState: LoadState;
   connectionState: ConnectionState;
   notifications: AppNotification[];
@@ -99,6 +100,7 @@ export const initialAppState: AppState = {
   selectedRunnerId: "",
   selectedSessionId: "",
   mobileNewSessionOpen: false,
+  archivingSessionIds: {},
   loadState: "loading",
   connectionState: "closed",
   notifications: [],
@@ -117,6 +119,8 @@ export type AppAction =
   | { type: "runnerSelected"; runnerId: string; nextSessionId: string }
   | { type: "sessionSelected"; sessionId: string }
   | { type: "sessionCreated"; session: Session }
+  | { type: "sessionArchiveStarted"; sessionId: string }
+  | { type: "sessionArchiveFinished"; sessionId: string }
   | { type: "sessionDeleted"; sessionId: string }
   | { type: "sessionWorkspaceCleared" }
   | {
@@ -306,6 +310,22 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedSessionId: action.session.id,
         activeTab: "chat",
         mobileNewSessionOpen: false,
+      };
+    case "sessionArchiveStarted":
+      return {
+        ...state,
+        archivingSessionIds: {
+          ...state.archivingSessionIds,
+          [action.sessionId]: true,
+        },
+      };
+    case "sessionArchiveFinished":
+      return {
+        ...state,
+        archivingSessionIds: omitKey(
+          state.archivingSessionIds,
+          action.sessionId,
+        ),
       };
     case "sessionDeleted":
       return removeSessionState(state, action.sessionId);
@@ -975,6 +995,14 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
         );
   }
   if (event.type === "error") {
+    if (
+      event.sessionId &&
+      (!state.sessions.some((session) => session.id === event.sessionId) ||
+        (event.code === "SESSION_NOT_RUNNING" &&
+          state.archivingSessionIds[event.sessionId]))
+    ) {
+      return state;
+    }
     return pushNotification(
       state,
       "error",
@@ -1056,6 +1084,7 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     fileTreeState: omitKey(state.fileTreeState, sessionId),
     fileTreePathState: omitKey(state.fileTreePathState, sessionId),
     fileTreeRequestIds: omitKey(state.fileTreeRequestIds, sessionId),
+    archivingSessionIds: omitKey(state.archivingSessionIds, sessionId),
   };
 }
 

@@ -460,7 +460,7 @@ export function ChatPanel({
                 }}
               >
                 <Trash2 size={17} />
-                <span className="session-action-title">Delete</span>
+                <span className="session-action-title">Archive</span>
               </button>
             </div>
           ) : null}

@@ -1912,6 +1912,50 @@ describe("server", () => {
     expect(detail.json().session.archivedAt).toEqual(expect.any(String));
   });
 
+  it("keeps serving after managed worktree archive removal cannot reach the runner", async () => {
+    const now = new Date().toISOString();
+    createTestProject(app);
+    app.roam.store.createSession({
+      id: "session-offline-worktree-delete",
+      title: "Offline worktree delete",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+      gitBranchName: "session-1",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/v1/sessions/session-offline-worktree-delete?worktree=remove",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(deleted.statusCode).toBe(409);
+    expect(deleted.json()).toEqual({
+      error: "worktree_remove_failed",
+      message: "runner is offline",
+      code: "runner_offline",
+    });
+    expect(
+      app.roam.store.getSession("session-offline-worktree-delete")?.archivedAt,
+    ).toBeUndefined();
+
+    const sessions = await app.inject({
+      method: "GET",
+      url: "/v1/sessions",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(sessions.statusCode).toBe(200);
+    expect(sessions.json().sessions).toContainEqual(
+      expect.objectContaining({ id: "session-offline-worktree-delete" }),
+    );
+  });
+
   it("renames a session and broadcasts an update", async () => {
     const now = "2026-06-05T00:00:00.000Z";
     createTestProject(app);

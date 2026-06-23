@@ -564,8 +564,8 @@ describe("ChatPanel", () => {
       within(menu).getByRole("menuitem", { name: /Stop/ }),
     ).not.toBeDisabled();
     expect(
-      within(menu).getByRole("menuitem", { name: /Delete/ }),
-    ).toHaveTextContent(/^Delete$/);
+      within(menu).getByRole("menuitem", { name: /Archive/ }),
+    ).toHaveTextContent(/^Archive$/);
     expect(screen.queryByText("Edit session title")).not.toBeInTheDocument();
     expect(screen.queryByText("Refresh this session")).not.toBeInTheDocument();
     expect(screen.queryByText("Continue agent work")).not.toBeInTheDocument();

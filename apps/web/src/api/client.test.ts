@@ -48,8 +48,88 @@ describe("createRoamApiClient", () => {
       requests.every((request) => request.credentials === "same-origin"),
     ).toBe(true);
     expect(
-      requests.every((request) => request.headers.get("authorization") === null),
+      requests.every(
+        (request) => request.headers.get("authorization") === null,
+      ),
     ).toBe(true);
+  });
+
+  it("sends the session archive worktree strategy as a query parameter", async () => {
+    let requestedUrl = "";
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (url) => {
+        requestedUrl = String(url);
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await client.deleteSession("session-1", { worktree: "remove" });
+
+    expect(requestedUrl).toBe(
+      "http://127.0.0.1:8787/v1/sessions/session-1?worktree=remove",
+    );
+  });
+
+  it("formats worktree archive failures as user-facing messages", async () => {
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async () =>
+        Response.json(
+          {
+            error: "worktree_remove_failed",
+            message: "Directory is not a git repository.",
+            code: "GIT_OPERATION_ERROR",
+          },
+          { status: 409, statusText: "Conflict" },
+        ),
+    });
+
+    await expect(
+      client.deleteSession("session-1", { worktree: "remove" }),
+    ).rejects.toThrow("Directory is not a git repository.");
+    await expect(
+      client.deleteSession("session-1", { worktree: "remove" }),
+    ).rejects.not.toThrow(/\/v1\/sessions\/session-1|409 Conflict/);
+  });
+
+  it("formats offline worktree archive failures as user-facing messages", async () => {
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async () =>
+        Response.json(
+          {
+            error: "worktree_remove_failed",
+            message: "runner is offline",
+            code: "runner_offline",
+          },
+          { status: 409, statusText: "Conflict" },
+        ),
+    });
+
+    await expect(
+      client.deleteSession("session-1", { worktree: "remove" }),
+    ).rejects.toThrow("runner is offline");
+    await expect(
+      client.deleteSession("session-1", { worktree: "remove" }),
+    ).rejects.not.toThrow(/\/v1\/sessions\/session-1|409 Conflict/);
+  });
+
+  it("keeps raw HTTP context for unrelated session conflicts", async () => {
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async () =>
+        Response.json(
+          { error: "runner_offline", message: "runner is offline" },
+          { status: 409, statusText: "Conflict" },
+        ),
+    });
+
+    await expect(
+      client.deleteSession("session-1", { worktree: "remove" }),
+    ).rejects.toThrow(
+      "RoamCli API request /v1/sessions/session-1?worktree=remove failed with 409 Conflict: runner is offline.",
+    );
   });
 
   it("sends a JSON content-type header for requests with a body", async () => {

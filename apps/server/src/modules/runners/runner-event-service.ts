@@ -1,5 +1,6 @@
 import {
   type AgentActivity,
+  type GitJob,
   nowIso,
   type Message,
   type RunnerEvent,
@@ -191,6 +192,7 @@ export class RunnerEventService {
 
     if (event.type === "gitJobResult") {
       this.store.upsertGitJob(event.job);
+      this.applyGitJobSessionEffects(event.job);
       this.rpc.resolveRunnerResponse(event.job);
       this.hub.broadcast({ type: "git:job", job: event.job });
       return;
@@ -234,6 +236,28 @@ export class RunnerEventService {
     this.handleErrorEvent(event);
   }
 
+  private applyGitJobSessionEffects(job: GitJob): void {
+    if (
+      job.status !== "succeeded" ||
+      job.operation !== "remove_worktree" ||
+      job.contextKind !== "session_worktree" ||
+      !job.sessionId
+    ) {
+      return;
+    }
+    const session = this.store.getSession(job.sessionId);
+    if (!session || session.worktreeDeletedAt) {
+      return;
+    }
+    const updated = this.store.markSessionWorktreeDeleted(
+      session.id,
+      job.finishedAt ?? nowIso(),
+    );
+    if (updated) {
+      this.hub.broadcast({ type: "session:updated", session: updated });
+    }
+  }
+
   private addActivity(
     input: Pick<AgentActivity, "sessionId" | "agent" | "kind" | "label">,
   ): AgentActivity {
@@ -273,6 +297,7 @@ export class RunnerEventService {
     this.hub.broadcast({
       type: "error",
       message: event.message,
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
       ...(event.code ? { code: event.code } : {}),
     });
     if (event.sessionId && event.code === "SESSION_NOT_RUNNING") {

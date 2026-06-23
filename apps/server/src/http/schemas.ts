@@ -33,3 +33,7 @@ export const DirectoryCreateBodySchema = z.object({
   parentPath: z.string().min(1).default("."),
   name: z.string().min(1),
 });
+
+export const SessionDeleteQuerySchema = z.object({
+  worktree: z.enum(["keep", "remove"]).default("keep"),
+});

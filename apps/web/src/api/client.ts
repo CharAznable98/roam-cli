@@ -98,7 +98,10 @@ export interface RoamApiClient {
   fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   checkSessionStatus(sessionId: string): Promise<Session>;
-  deleteSession(sessionId: string): Promise<void>;
+  deleteSession(
+    sessionId: string,
+    options?: { worktree?: "keep" | "remove" },
+  ): Promise<void>;
   fetchMessageAttachmentContent(
     sessionId: string,
     attachmentId: string,
@@ -506,10 +509,18 @@ export function createRoamApiClient(
       return session;
     },
 
-    async deleteSession(sessionId) {
-      await request<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
-        method: "DELETE",
-      });
+    async deleteSession(sessionId, options = {}) {
+      const query = new URLSearchParams();
+      if (options.worktree) {
+        query.set("worktree", options.worktree);
+      }
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      await request<void>(
+        `/v1/sessions/${encodeURIComponent(sessionId)}${suffix}`,
+        {
+          method: "DELETE",
+        },
+      );
     },
 
     async fetchMessageAttachmentContent(sessionId, attachmentId) {
@@ -778,37 +789,75 @@ function formatHttpError(
       "Check the API origin, reverse proxy, or WebSocket/API routing configuration.",
     ].join(" ");
   }
-  const detail = formatHttpErrorBody(body);
-  return `RoamCli API request ${path} failed with ${status}${detail ? `: ${detail}` : ""}.`;
+  const detail = parseHttpErrorBody(body);
+  if (detail.message && shouldUseBodyMessageOnly(path, response, detail)) {
+    return detail.message;
+  }
+  return `RoamCli API request ${path} failed with ${status}${detail.message ? `: ${detail.message}` : ""}.`;
 }
 
-function formatHttpErrorBody(body: string): string {
+function parseHttpErrorBody(body: string): {
+  message: string;
+  code?: string;
+  error?: string;
+} {
   const trimmedBody = body.trim();
   if (!trimmedBody) {
-    return "";
+    return { message: "" };
   }
   try {
     const parsed: unknown = JSON.parse(trimmedBody);
     if (isRecord(parsed)) {
+      const error = firstStringValue(parsed, ["error"]);
+      const code = firstStringValue(parsed, ["code"]) || error;
       const message = firstStringValue(parsed, ["message", "error", "detail"]);
       if (message) {
-        return message;
+        return {
+          message,
+          ...(code ? { code } : {}),
+          ...(error ? { error } : {}),
+        };
       }
       const nestedError = parsed.error;
       if (isRecord(nestedError)) {
+        const nestedErrorCode = firstStringValue(nestedError, ["error"]);
+        const nestedCode = firstStringValue(nestedError, ["code"]);
         const nestedMessage = firstStringValue(nestedError, [
           "message",
           "detail",
         ]);
         if (nestedMessage) {
-          return nestedMessage;
+          return {
+            message: nestedMessage,
+            ...(nestedCode || nestedErrorCode
+              ? { code: nestedCode || nestedErrorCode }
+              : {}),
+            ...(nestedErrorCode ? { error: nestedErrorCode } : {}),
+          };
         }
       }
     }
   } catch {
-    return trimmedBody;
+    return { message: trimmedBody };
   }
-  return "The server returned an error response without a readable message";
+  return {
+    message: "The server returned an error response without a readable message",
+  };
+}
+
+function shouldUseBodyMessageOnly(
+  path: string,
+  response: Response,
+  detail: { message: string; code?: string; error?: string },
+): boolean {
+  if (response.status === 401 || response.status === 403) {
+    return false;
+  }
+  return (
+    response.status === 409 &&
+    path.startsWith("/v1/sessions/") &&
+    detail.error === "worktree_remove_failed"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

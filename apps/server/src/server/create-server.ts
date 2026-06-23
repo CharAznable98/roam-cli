@@ -15,6 +15,10 @@ import { ApprovalService } from "../modules/approvals/approval-service.js";
 import { ArtifactService } from "../modules/artifacts/artifact-service.js";
 import { AuthService } from "../modules/auth/auth-service.js";
 import { GitService } from "../modules/git/git-service.js";
+import {
+  GitJobRunner,
+  GitMutationQueue,
+} from "../modules/git/git-job-runner.js";
 import { RunnerEventService } from "../modules/runners/runner-event-service.js";
 import { SessionCommandService } from "../modules/sessions/session-command-service.js";
 import { WorkspaceService } from "../modules/workspace/workspace-service.js";
@@ -54,19 +58,34 @@ export async function createServer(
   rpc = new RunnerRpcClient(hub);
   const approvalService = new ApprovalService(store, hub);
   const artifactService = new ArtifactService(store, artifacts, hub);
+  const gitMutationQueue = new GitMutationQueue();
+  const gitJobRunner = new GitJobRunner(
+    store,
+    hub,
+    rpc,
+    config.runnerRpcTimeoutMs,
+    gitMutationQueue,
+  );
   const sessionService = new SessionCommandService(
     store,
     hub,
     approvalService,
     rpc,
     config.runnerRpcTimeoutMs,
+    gitJobRunner,
   );
   const workspaceService = new WorkspaceService(
     store,
     rpc,
     config.runnerRpcTimeoutMs,
   );
-  const gitService = new GitService(store, hub, rpc, config.runnerRpcTimeoutMs);
+  const gitService = new GitService(
+    store,
+    hub,
+    rpc,
+    config.runnerRpcTimeoutMs,
+    gitJobRunner,
+  );
   const runnerEventService = new RunnerEventService(store, hub, rpc);
 
   const context: AppContext = {
@@ -121,11 +140,7 @@ export async function createServer(
     }
     const proto = request.protocol;
     const host = request.host;
-    if (
-      proto === "http" &&
-      host &&
-      !isLoopbackHost(host)
-    ) {
+    if (proto === "http" && host && !isLoopbackHost(host)) {
       console.warn(
         JSON.stringify({
           timestamp: new Date().toISOString(),

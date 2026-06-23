@@ -311,19 +311,25 @@ export async function runGitRemoteOperation(
 export async function removeGitWorktree(
   options: GitMutatingOptions,
 ): Promise<GitJob> {
-  return runGitJob(options, async (cwd) => {
-    await assertGitWorkTree(cwd);
-    await git(cwd, ["worktree", "remove", "--force", cwd]);
-  });
+  return runGitJob(
+    options,
+    async (cwd) => {
+      await git(cwd, ["worktree", "remove", "--force", cwd]);
+    },
+    { missingCwdSucceeds: true, onMissingCwd: pruneGitWorktrees },
+  );
 }
 
 async function runGitJob(
   options: GitMutatingOptions,
   run: (cwd: string) => Promise<void>,
+  config: {
+    missingCwdSucceeds?: boolean;
+    onMissingCwd?: (workspace: string) => Promise<void>;
+  } = {},
 ): Promise<GitJob> {
   const createdAt = nowIso();
   const startedAt = nowIso();
-  const cwd = await resolveGitCwd(options.workspace, options.cwd);
   const baseJob = {
     id: options.requestId,
     projectId: options.projectId,
@@ -337,6 +343,17 @@ async function runGitJob(
   } satisfies Omit<GitJob, "status">;
 
   try {
+    const cwd = config.missingCwdSucceeds
+      ? await resolveGitCwdIfExists(options.workspace, options.cwd)
+      : await resolveGitCwd(options.workspace, options.cwd);
+    if (cwd === undefined) {
+      await config.onMissingCwd?.(options.workspace);
+      return {
+        ...baseJob,
+        status: "succeeded",
+        finishedAt: nowIso(),
+      };
+    }
     if (options.operation !== "init") {
       await assertGitWorkTree(cwd);
     }
@@ -358,12 +375,41 @@ async function runGitJob(
   }
 }
 
+async function pruneGitWorktrees(workspace: string): Promise<void> {
+  const realWorkspace = await realpath(resolve(workspace));
+  if (!(await isGitWorkTree(realWorkspace))) {
+    return;
+  }
+  await git(realWorkspace, ["worktree", "prune"]);
+}
+
 async function resolveGitCwd(workspace: string, cwd: string): Promise<string> {
   const resolved = resolveWorkspaceChild(workspace, cwd);
   const [realWorkspace, realCwd] = await Promise.all([
     realpath(resolve(workspace)),
     realpath(resolved),
   ]);
+  if (!isInside(realWorkspace, realCwd)) {
+    throw new Error(`Git cwd escapes workspace: ${cwd}`);
+  }
+  return realCwd;
+}
+
+async function resolveGitCwdIfExists(
+  workspace: string,
+  cwd: string,
+): Promise<string | undefined> {
+  const resolved = resolveWorkspaceChild(workspace, cwd);
+  const realWorkspace = await realpath(resolve(workspace));
+  let realCwd: string;
+  try {
+    realCwd = await realpath(resolved);
+  } catch (error: unknown) {
+    if (isNodeErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
   if (!isInside(realWorkspace, realCwd)) {
     throw new Error(`Git cwd escapes workspace: ${cwd}`);
   }
@@ -402,6 +448,15 @@ async function git(
     maxBuffer: 10 * 1024 * 1024,
   });
   return { stdout: String(stdout), stderr: String(stderr) };
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === code
+  );
 }
 
 function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
@@ -803,10 +858,10 @@ function normalizeGitError(error: unknown): { code: string; message: string } {
         ? maybe.code
         : typeof maybe.exitCode === "number"
           ? `GIT_EXIT_${maybe.exitCode}`
-          : "GIT_ERROR";
+          : "GIT_OPERATION_ERROR";
     return { code, message: rawMessage };
   }
-  return { code: "GIT_ERROR", message: String(error) };
+  return { code: "GIT_OPERATION_ERROR", message: String(error) };
 }
 
 function isGitObjectMissing(error: unknown): boolean {
