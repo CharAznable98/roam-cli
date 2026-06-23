@@ -391,13 +391,7 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession(sessionRecord());
 
@@ -442,13 +436,7 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession({ ...sessionRecord(), status: "pending" });
 
@@ -487,13 +475,7 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      rpc,
-      100,
-    );
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     store.createProject(projectRecord());
     store.createSession(sessionRecord());
 
@@ -969,6 +951,29 @@ describe("RunnerEventService", () => {
     });
 
     service.handle({
+      type: "agentActivity",
+      sessionId: session.id,
+      agent: "claude-code",
+      kind: "task_progress",
+      label: "Reading apps/web/src/app/useRoamController.ts",
+    });
+    expect(store.listAgentActivities(session.id)).toMatchObject([
+      {
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading apps/web/src/app/useRoamController.ts",
+      },
+    ]);
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({
+        type: "activity:created",
+        activity: expect.objectContaining({
+          label: "Reading apps/web/src/app/useRoamController.ts",
+        }),
+      }),
+    );
+
+    service.handle({
       type: "approvalRequested",
       approval: {
         id: "approval-1",
@@ -982,6 +987,10 @@ describe("RunnerEventService", () => {
       },
     });
     expect(store.getSession(session.id)?.status).toBe("waiting_approval");
+    expect(store.listAgentActivities(session.id).at(-1)).toMatchObject({
+      kind: "approval",
+      label: "Waiting for approval",
+    });
     expect(streamEvents).toContainEqual(
       expect.objectContaining({ type: "approval:requested" }),
     );
@@ -1075,6 +1084,56 @@ describe("RunnerEventService", () => {
         type: "session:updated",
         session: expect.objectContaining({ id: session.id, status: "stopped" }),
       }),
+    );
+  });
+
+  it("timestamps output events monotonically in runner arrival order", () => {
+    const hub = new ConnectionHub(store);
+    const service = new RunnerEventService(
+      store,
+      hub,
+      new RunnerRpcClient(hub),
+    );
+    store.createProject(projectRecord());
+    const session = store.createSession(sessionRecord());
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-05T00:00:00.000Z"));
+    try {
+      service.handle({
+        type: "agentActivity",
+        sessionId: session.id,
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading file.ts",
+      });
+      service.handle({
+        type: "agentActivity",
+        sessionId: session.id,
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+      });
+      service.handle({
+        type: "assistantMessage",
+        sessionId: session.id,
+        content: "done",
+        encrypted: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const activities = store.listAgentActivities(session.id);
+    const [message] = store.listMessages(session.id);
+
+    expect(activities.map((activity) => activity.createdAt)).toEqual([
+      "2026-06-05T00:00:00.000Z",
+      "2026-06-05T00:00:00.001Z",
+    ]);
+    expect(message?.createdAt).toBe("2026-06-05T00:00:00.002Z");
+    expect(Date.parse(activities[1]?.createdAt ?? "")).toBeLessThan(
+      Date.parse(message?.createdAt ?? ""),
     );
   });
 

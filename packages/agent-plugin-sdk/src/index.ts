@@ -1,4 +1,5 @@
 import type {
+  AgentActivityKind,
   AgentSkillSummary,
   RunnerCapability,
   RunnerProfile,
@@ -57,6 +58,7 @@ export type AgentRuntimeEvent =
   | { type: "thread"; threadId: string }
   | { type: "message"; content: string; encrypted?: boolean }
   | { type: "token"; content: string; encrypted?: boolean }
+  | { type: "activity"; kind: AgentActivityKind; label: string }
   | { type: "approval"; draft: ApprovalRequestDraft }
   | { type: "artifact"; draft: ArtifactDraft }
   | { type: "error"; message: string; code?: string };

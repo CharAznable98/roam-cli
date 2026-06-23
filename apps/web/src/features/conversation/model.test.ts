@@ -1,3 +1,4 @@
+import type { AgentActivity } from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendTokenMessage,
@@ -20,12 +21,42 @@ function makeMessage(
   };
 }
 
+function makeActivity(
+  activity: Pick<AgentActivity, "id" | "label" | "kind"> &
+    Partial<AgentActivity>,
+): AgentActivity {
+  return {
+    sessionId: "session-1",
+    agent: "claude-code",
+    createdAt: "2026-06-05T00:00:00.000Z",
+    ...activity,
+  };
+}
+
 function displayShape(items: ConversationDisplayItem[]) {
-  return items.map((item) =>
-    item.type === "message"
-      ? item.message.id
-      : { intermediate: item.messages.map((message) => message.id) },
-  );
+  return items.map(displayItemShape);
+}
+
+function displayItemShape(item: ConversationDisplayItem): unknown {
+  if (item.type === "message") {
+    return item.message.id;
+  }
+  if (item.type === "activityGroup") {
+    return {
+      activity: item.activities.map((activity) => activity.label),
+      latest: item.latest,
+    };
+  }
+  return {
+    intermediate: item.items.map((nested) =>
+      nested.type === "message"
+        ? nested.message.id
+        : {
+            activity: nested.activities.map((activity) => activity.label),
+            latest: nested.latest,
+          },
+    ),
+  };
 }
 
 describe("conversation model", () => {
@@ -133,6 +164,7 @@ describe("conversation model", () => {
         makeMessage({ id: "progress", role: "assistant", content: "working" }),
         makeMessage({ id: "final", role: "assistant", content: "answer" }),
       ],
+      [],
       "completed",
     );
 
@@ -151,16 +183,18 @@ describe("conversation model", () => {
     ];
 
     expect(
-      displayShape(getConversationDisplayItems(messages, "running")),
+      displayShape(getConversationDisplayItems(messages, [], "running")),
     ).toEqual(["user", "progress", "latest"]);
     expect(
-      displayShape(getConversationDisplayItems(messages, "failed")),
+      displayShape(getConversationDisplayItems(messages, [], "failed")),
     ).toEqual(["user", "progress", "latest"]);
     expect(
-      displayShape(getConversationDisplayItems(messages, "stopped")),
+      displayShape(getConversationDisplayItems(messages, [], "stopped")),
     ).toEqual(["user", "progress", "latest"]);
     expect(
-      displayShape(getConversationDisplayItems(messages, "waiting_approval")),
+      displayShape(
+        getConversationDisplayItems(messages, [], "waiting_approval"),
+      ),
     ).toEqual(["user", "progress", "latest"]);
   });
 
@@ -174,6 +208,7 @@ describe("conversation model", () => {
         makeMessage({ id: "progress-2", role: "assistant", content: "work" }),
         makeMessage({ id: "latest-2", role: "assistant", content: "running" }),
       ],
+      [],
       "running",
     );
 
@@ -198,6 +233,7 @@ describe("conversation model", () => {
         }),
         makeMessage({ id: "final", role: "assistant", content: "answer" }),
       ],
+      [],
       "completed",
     );
 
@@ -214,6 +250,7 @@ describe("conversation model", () => {
         makeMessage({ id: "user", role: "user", content: "question" }),
         makeMessage({ id: "final", role: "assistant", content: "answer" }),
       ],
+      [],
       "completed",
     );
 
@@ -228,12 +265,201 @@ describe("conversation model", () => {
         makeMessage({ id: "system", role: "system", content: "note" }),
         makeMessage({ id: "final", role: "assistant", content: "answer" }),
       ],
+      [],
       "completed",
     );
 
     expect(displayShape(items)).toEqual([
       "user",
       { intermediate: ["tool", "system"] },
+      "final",
+    ]);
+  });
+
+  it("groups activity above the next normal message without creating intermediate output", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:03.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+        makeActivity({
+          id: "activity-2",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Reading file.ts", "Running tests"], latest: false },
+      "final",
+    ]);
+  });
+
+  it("keeps tied activity before the following normal message", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Running tests"], latest: false },
+      "final",
+    ]);
+  });
+
+  it("keeps tied activity before the final assistant after earlier activity", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+        makeActivity({
+          id: "activity-2",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Reading file.ts", "Running tests"], latest: false },
+      "final",
+    ]);
+  });
+
+  it("keeps trailing activity as the latest live group", () => {
+    const items = getConversationDisplayItems(
+      [makeMessage({ id: "user", role: "user", content: "question" })],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      "running",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Reading file.ts"], latest: true },
+    ]);
+  });
+
+  it("does not mark trailing activity as live after terminal sessions", () => {
+    for (const status of ["completed", "failed", "stopped"] as const) {
+      const items = getConversationDisplayItems(
+        [makeMessage({ id: "user", role: "user", content: "question" })],
+        [
+          makeActivity({
+            id: `activity-${status}`,
+            kind: "task_progress",
+            label: "Cleaning up",
+            createdAt: "2026-06-05T00:00:01.000Z",
+          }),
+        ],
+        status,
+      );
+
+      expect(displayShape(items)).toEqual([
+        "user",
+        { activity: ["Cleaning up"], latest: false },
+      ]);
+    }
+  });
+
+  it("folds activity groups into intermediate output when message output is collapsed", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "progress",
+          role: "assistant",
+          content: "working",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:04.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+        makeActivity({
+          id: "activity-2",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:03.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      {
+        intermediate: [
+          { activity: ["Reading file.ts"], latest: false },
+          "progress",
+          { activity: ["Running tests"], latest: false },
+        ],
+      },
       "final",
     ]);
   });

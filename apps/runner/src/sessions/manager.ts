@@ -436,10 +436,7 @@ export class SessionManager {
     await this.#workspaceCommands.applyPatch(command);
   }
 
-  public resolveApproval(
-    approvalId: string,
-    approved: boolean,
-  ): void {
+  public resolveApproval(approvalId: string, approved: boolean): void {
     this.#approvals.resolve(approvalId, approved);
   }
 
@@ -558,6 +555,18 @@ export class SessionManager {
           encrypted: event.encrypted ?? false,
         });
         return;
+      case "activity":
+        {
+          const running = this.#sessions.get(sessionId);
+          await this.#emit({
+            type: "agentActivity",
+            sessionId,
+            agent: running?.session.agent ?? "unknown",
+            kind: event.kind,
+            label: event.label,
+          });
+        }
+        return;
       case "approval":
         {
           const running = this.#sessions.get(sessionId);
@@ -580,10 +589,7 @@ export class SessionManager {
     }
   }
 
-  async #emitArtifact(
-    sessionId: string,
-    draft: ArtifactDraft,
-  ): Promise<void> {
+  async #emitArtifact(sessionId: string, draft: ArtifactDraft): Promise<void> {
     const cwd = this.#sessionCwds.get(sessionId);
     if (cwd === undefined) {
       await this.#emit({
@@ -749,9 +755,5 @@ export class SessionManager {
 }
 
 function isTerminalStatus(status: Session["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "stopped"
-  );
+  return status === "completed" || status === "failed" || status === "stopped";
 }

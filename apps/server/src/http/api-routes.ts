@@ -95,11 +95,7 @@ function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
     if (!result.ok) {
       return sendAuthError(reply, result.error);
     }
-    context.services.auth.setSessionCookie(
-      reply,
-      result.value.token,
-      request,
-    );
+    context.services.auth.setSessionCookie(reply, result.value.token, request);
     return reply.code(201).send({
       auth: {
         status: "authenticated",
@@ -122,11 +118,7 @@ function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {
     if (!result.ok) {
       return sendAuthError(reply, result.error);
     }
-    context.services.auth.setSessionCookie(
-      reply,
-      result.value.token,
-      request,
-    );
+    context.services.auth.setSessionCookie(reply, result.value.token, request);
     return {
       auth: {
         status: "authenticated",
@@ -351,6 +343,7 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      activities: context.store.listAgentActivities(session.id),
       attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
       artifacts: context.store.listArtifacts(session.id),
