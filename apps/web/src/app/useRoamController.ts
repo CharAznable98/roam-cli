@@ -910,6 +910,9 @@ export function useRoamController() {
   };
 
   const cancelSelectedFileEdit = () => {
+    if (!confirmDiscardSelectedFileChanges(state)) {
+      return;
+    }
     dispatch({ type: "fileEditCancelled" });
   };
 

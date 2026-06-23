@@ -163,6 +163,9 @@ export function GitPanel({
   const selectedContextIdentity = selectedContext
     ? contextKey(selectedContext)
     : "";
+  const selectedContextMatchesDefault =
+    defaultContext !== undefined &&
+    selectedContextIdentity === defaultContextKey;
   const status = isRepositoryStatus(statusResult) ? statusResult : undefined;
   const nonGitStatus =
     statusResult?.kind === "not_git_repository" ? statusResult : undefined;
@@ -243,6 +246,7 @@ export function GitPanel({
     selectedChange !== undefined &&
     !selectedChange.staged &&
     selectedChange.status !== "deleted" &&
+    selectedContextMatchesDefault &&
     showTextDiff;
 
   useLayoutEffect(() => {

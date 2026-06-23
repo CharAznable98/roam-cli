@@ -536,6 +536,11 @@ async function assertManagedWorktreeGitUi(
     `${values.editedValue}\n`,
     "utf8",
   );
+  await writeFile(
+    resolve(project.directory, values.fileName),
+    `project-${values.editedValue}\n`,
+    "utf8",
+  );
 
   await openTab(page, scenario, "git");
   await expectGitContextLabel(page, `Worktree - ${session.title}`);
@@ -546,6 +551,16 @@ async function assertManagedWorktreeGitUi(
   await assertGitDiffFullscreen(page);
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-diff");
+  await selectGitContext(page, `Project - ${project.name}`);
+  await waitForGitStatus(
+    { kind: "project", projectId: project.id },
+    (status) => !status.clean,
+  );
+  await waitForGitDiffReady(page);
+  await assertNoVisibleButton(page, "Edit");
+  await selectGitContext(page, `Worktree - ${session.title}`);
+  await waitForGitStatus(gitContext, (status) => !status.clean);
+  await waitForGitDiffReady(page);
   await assertGitDiffEditOpensFile(page, scenario, values.fileName);
   await captureScreenshot(page, scenario, "git-worktree-diff-edit-file");
   await openTab(page, scenario, "git");
@@ -604,6 +619,11 @@ async function expectGitContextLabel(page, text) {
         .catch(() => false),
     `Git context label ${text}`,
   );
+}
+
+async function selectGitContext(page, text) {
+  await page.locator(".git-context-field select").selectOption({ label: text });
+  await expectGitContextLabel(page, text);
 }
 
 async function assertProjectGitUi(page, scenario, project, fileName) {
@@ -679,7 +699,19 @@ async function assertFileEditCancelDiscards(page, fileName, values) {
       (await saveButton.count()) > 0 && (await saveButton.isEnabled()),
     "Save file button to become enabled after dirty edit",
   );
-  await filesPanel.getByRole("button", { name: "Cancel", exact: true }).click();
+  const dialogPromise = page.waitForEvent("dialog");
+  const cancelClick = filesPanel
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  const dialog = await dialogPromise;
+  const expectedMessage = `Discard unsaved changes in ${fileName}?`;
+  if (dialog.message() !== expectedMessage) {
+    throw new Error(
+      `Unexpected cancel confirmation: ${dialog.message()} (expected ${expectedMessage})`,
+    );
+  }
+  await dialog.accept();
+  await cancelClick;
   await assertFileOpensReadOnly(page, fileName, values.original);
 }
 

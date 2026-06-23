@@ -1518,6 +1518,38 @@ describe("App", () => {
     ).toHaveValue("export function RealContent() { return null; }");
   });
 
+  it("hides diff editing when the selected Git context is not the active file session context", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(tools.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+
+    fireEvent.change(tools.getByRole("combobox"), {
+      target: { value: "project:project-1" },
+    });
+
+    expect(tools.getByRole("combobox")).toHaveValue("project:project-1");
+    await waitFor(() =>
+      expect(
+        tools.queryByRole("button", { name: "Edit" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   it("does not offer direct editing for staged or history diffs", async () => {
     gitStatusClean = false;
     gitStatusChanges = [
@@ -3027,9 +3059,10 @@ describe("App", () => {
     );
   });
 
-  it("cancels file edits by discarding local changes without confirmation", async () => {
+  it("confirms before cancelling dirty file edits", async () => {
     const confirm = vi.mocked(window.confirm);
     confirm.mockClear();
+    confirm.mockReturnValueOnce(false);
     render(<App />);
 
     fireEvent.click(await findSessionFile(/App\.tsx/));
@@ -3042,7 +3075,18 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(confirm).toHaveBeenCalledWith(
+      "Discard unsaved changes in src/App.tsx?",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const unsaved = true;\n");
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+
+    confirm.mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(confirm).toHaveBeenCalledTimes(2);
     expect(await findFileSourcePreview("src/App.tsx")).toHaveValue(
       "export function RealContent() { return null; }",
     );
