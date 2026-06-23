@@ -1,6 +1,6 @@
-import { Bell, Files, GitBranch, MessageSquare } from "lucide-react";
+import { Bell, Files, GitBranch, MessageSquare, Settings } from "lucide-react";
 
-export type WorkspaceTab = "chat" | "files" | "git" | "approvals";
+export type WorkspaceTab = "chat" | "files" | "git" | "approvals" | "settings";
 
 export const workspaceTabs: Array<{
   id: WorkspaceTab;
@@ -11,4 +11,5 @@ export const workspaceTabs: Array<{
   { id: "files", label: "Files", icon: Files },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "approvals", label: "Approvals", icon: Bell },
+  { id: "settings", label: "Settings", icon: Settings },
 ];

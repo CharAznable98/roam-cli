@@ -5,6 +5,7 @@ import type { MarkdownFileLinkTarget } from "../features/conversation/file-links
 import { FilePanel } from "../features/files/FilePanel";
 import { GitPanel } from "../features/git/GitPanel";
 import { PushSettings } from "../features/pwa/PushSettings";
+import { getNotificationSupport } from "../features/pwa/pwa";
 import type {
   AccountSecurityState,
   ApiChangePassword,
@@ -12,11 +13,16 @@ import type {
   Session,
 } from "@roamcli/shared/protocol";
 import {
+  ArrowLeft,
+  Bell,
+  ChevronRight,
+  Copy,
   FolderPlus,
   KeyRound,
   LogOut,
   Plus,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   Wifi,
@@ -31,6 +37,7 @@ import {
 } from "../features/sessions/RunnerSidebar";
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -46,12 +53,15 @@ type AppShellProps = {
   controller: ReturnType<typeof useRoamController>;
 };
 
+type SettingsView = "home" | "account" | "change-password" | "web-push";
+
 export function AppShell({ controller }: AppShellProps) {
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
   const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
   const [mobileSessionSwitcherOpen, setMobileSessionSwitcherOpen] =
     useState(false);
   const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState<SettingsView>("home");
   const {
     state,
     authView,
@@ -112,9 +122,6 @@ export function AppShell({ controller }: AppShellProps) {
     runGitRemoteOperation,
     removeGitWorktree,
   } = controller;
-  const [accountModalOpen, setAccountModalOpen] = useState(false);
-  const accountOpenRequestIdRef = useRef(0);
-
   const setActiveTab = useCallback(
     (tab: WorkspaceTab) => dispatch({ type: "activeTabChanged", tab }),
     [dispatch],
@@ -143,14 +150,8 @@ export function AppShell({ controller }: AppShellProps) {
   const hasWorkspaceData =
     activeProjects.length > 0 ||
     state.sessions.some((session) => !session.archivedAt);
-  const showNoRunnerEmpty =
-    state.loadState === "ready" &&
-    state.runners.length === 0 &&
-    !hasWorkspaceData;
   const showApiErrorEmpty = state.loadState === "error";
-  const showWorkspace =
-    state.loadState === "ready" &&
-    (state.runners.length > 0 || hasWorkspaceData);
+  const showWorkspace = state.loadState === "ready";
   const canUseStream = state.connectionState === "open";
   const canUseSelectedRunner = canUseStream && Boolean(selectedRunner);
   const compactStatus = getCompactStatusLabel(
@@ -172,50 +173,86 @@ export function AppShell({ controller }: AppShellProps) {
     setMobileSessionModalOpen(false);
   }, [selectedProject?.id]);
 
-  const closeAccountSecurity = useCallback(() => {
-    accountOpenRequestIdRef.current += 1;
-    setAccountModalOpen(false);
-  }, []);
-
   useEffect(() => {
     if (authView !== "authenticated") {
-      closeAccountSecurity();
+      setSettingsView("home");
     }
-  }, [authView, closeAccountSecurity]);
+  }, [authView]);
 
-  const openAccountSecurity = useCallback(() => {
-    const requestId = accountOpenRequestIdRef.current + 1;
-    accountOpenRequestIdRef.current = requestId;
-    void refreshAccountSecurity()
-      .then(() => {
-        if (accountOpenRequestIdRef.current === requestId) {
-          setAccountModalOpen(true);
-        }
-      })
-      .catch(() => {
-        if (accountOpenRequestIdRef.current === requestId) {
-          setAccountModalOpen(false);
-        }
+  useEffect(() => {
+    if (state.activeTab !== "settings") {
+      setSettingsView("home");
+    }
+  }, [state.activeTab]);
+
+  const notify = useCallback(
+    (tone: AppNotification["tone"], title: string, message: string) => {
+      dispatch({ type: "notificationPushed", tone, title, message });
+    },
+    [dispatch],
+  );
+
+  useEffect(() => {
+    if (
+      authView === "authenticated" &&
+      state.activeTab === "settings" &&
+      !accountSecurity
+    ) {
+      void refreshAccountSecurity().catch((accountError: unknown) => {
+        notify(
+          "error",
+          "Account settings unavailable",
+          errorMessage(accountError),
+        );
       });
-  }, [refreshAccountSecurity]);
+    }
+  }, [
+    accountSecurity,
+    authView,
+    notify,
+    refreshAccountSecurity,
+    state.activeTab,
+  ]);
 
   const logoutFromAccountSecurity = useCallback(async () => {
-    await logoutOwner();
-    closeAccountSecurity();
-  }, [closeAccountSecurity, logoutOwner]);
+    try {
+      await logoutOwner();
+    } catch (logoutError: unknown) {
+      notify("error", "Log out failed", errorMessage(logoutError));
+    }
+  }, [logoutOwner, notify]);
 
   const logoutAllFromAccountSecurity = useCallback(async () => {
-    await logoutAllOwnerSessions();
-    closeAccountSecurity();
-  }, [closeAccountSecurity, logoutAllOwnerSessions]);
+    try {
+      await logoutAllOwnerSessions();
+    } catch (logoutError: unknown) {
+      notify("error", "Log out all failed", errorMessage(logoutError));
+    }
+  }, [logoutAllOwnerSessions, notify]);
 
   const changePasswordFromAccountSecurity = useCallback(
     async (input: ApiChangePassword) => {
-      await changeOwnerPassword(input);
-      closeAccountSecurity();
+      try {
+        await changeOwnerPassword(input);
+      } catch (changeError: unknown) {
+        notify("error", "Password change failed", errorMessage(changeError));
+      }
     },
-    [changeOwnerPassword, closeAccountSecurity],
+    [changeOwnerPassword, notify],
   );
+
+  const regenerateRunnerTokenFromSettings = useCallback(async () => {
+    try {
+      await regenerateRunnerToken();
+      notify(
+        "success",
+        "Runner token regenerated",
+        "The runner token and command have been updated.",
+      );
+    } catch (runnerError: unknown) {
+      notify("error", "Runner token update failed", errorMessage(runnerError));
+    }
+  }, [notify, regenerateRunnerToken]);
 
   if (authView !== "authenticated") {
     return (
@@ -241,14 +278,6 @@ export function AppShell({ controller }: AppShellProps) {
               ? "stream connected"
               : "stream disconnected"}
           </span>
-          <button
-            className="small-button"
-            type="button"
-            onClick={openAccountSecurity}
-          >
-            <ShieldCheck size={16} />
-            Account & Security
-          </button>
           <span
             className={`topbar-status ${
               state.loadState === "error" ? "error" : "success"
@@ -261,19 +290,10 @@ export function AppShell({ controller }: AppShellProps) {
         </div>
         <div className="mobile-topbar-actions">
           <button
-            className="mobile-icon-button"
-            type="button"
-            aria-label="Open Account & Security"
-            title="Account & Security"
-            onClick={openAccountSecurity}
-          >
-            <ShieldCheck size={16} />
-          </button>
-          <button
             className={`compact-status-button ${compactStatus.tone}`}
             type="button"
-            aria-label="Open connection settings"
-            title="Connection settings"
+            aria-label="Open connection status"
+            title="Connection status"
             onClick={() => setMobileStatusModalOpen(true)}
           >
             <CompactStatusIcon size={16} />
@@ -289,19 +309,6 @@ export function AppShell({ controller }: AppShellProps) {
 
       {state.loadState === "loading" ? (
         <div className="empty-state">Loading remote RoamCli state...</div>
-      ) : null}
-
-      {showNoRunnerEmpty ? (
-        <div className="empty-state">
-          <div>
-            <h2>No runners are online</h2>
-            <p>
-              The RoamCli server is connected. Start a runner to create or
-              resume sessions.
-            </p>
-            <pre>{runnerCommand}</pre>
-          </div>
-        </div>
       ) : null}
 
       {showApiErrorEmpty ? (
@@ -381,23 +388,31 @@ export function AppShell({ controller }: AppShellProps) {
               <section className="chat-column" aria-label="Conversation">
                 <div className="empty-state compact session-empty-state">
                   <span>
-                    {selectedProject
-                      ? "Create a session in the selected project."
-                      : "Create a project to start a session."}
+                    {state.runners.length === 0 && !hasWorkspaceData
+                      ? "No runners are online"
+                      : selectedProject
+                        ? "Create a session in the selected project."
+                        : "Create a project to start a session."}
                   </span>
                   <p className="session-empty-meta">
-                    {selectedProject
-                      ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
-                      : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
+                    {state.runners.length === 0 && !hasWorkspaceData
+                      ? "Start a runner to create or resume sessions."
+                      : selectedProject
+                        ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
+                        : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
                   </p>
-                  <button
-                    className="small-button"
-                    type="button"
-                    aria-label="Choose session"
-                    onClick={() => setMobileSessionSwitcherOpen(true)}
-                  >
-                    Choose session
-                  </button>
+                  {state.runners.length === 0 && !hasWorkspaceData ? (
+                    <pre>{runnerCommand}</pre>
+                  ) : (
+                    <button
+                      className="small-button"
+                      type="button"
+                      aria-label="Choose session"
+                      onClick={() => setMobileSessionSwitcherOpen(true)}
+                    >
+                      Choose session
+                    </button>
+                  )}
                 </div>
               </section>
             )}
@@ -466,7 +481,6 @@ export function AppShell({ controller }: AppShellProps) {
                   />
                 </div>
                 <div className="workspace-surface approvals-surface">
-                  <PushSettings />
                   <ApprovalCenter
                     approvals={sessionApprovals}
                     hunks={sessionHunks}
@@ -481,6 +495,18 @@ export function AppShell({ controller }: AppShellProps) {
                         !selectedSession ||
                         artifact.sessionId === selectedSession.id,
                     )}
+                  />
+                </div>
+                <div className="workspace-surface settings-surface">
+                  <SettingsPanel
+                    account={accountSecurity}
+                    runnerCommand={runnerCommand}
+                    view={settingsView}
+                    onViewChange={setSettingsView}
+                    onLogout={logoutFromAccountSecurity}
+                    onLogoutAll={logoutAllFromAccountSecurity}
+                    onChangePassword={changePasswordFromAccountSecurity}
+                    onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
                   />
                 </div>
               </div>
@@ -575,22 +601,6 @@ export function AppShell({ controller }: AppShellProps) {
             runnerCount={state.runners.length}
             streamReconnect={streamReconnect}
             onReconnect={reconnectStream}
-          />
-        </SidebarModal>
-      ) : null}
-      {accountModalOpen && accountSecurity ? (
-        <SidebarModal
-          title="Account & Security"
-          variant="sheet"
-          onClose={closeAccountSecurity}
-        >
-          <AccountSecurityPanel
-            account={accountSecurity}
-            runnerCommand={runnerCommand}
-            onLogout={logoutFromAccountSecurity}
-            onLogoutAll={logoutAllFromAccountSecurity}
-            onChangePassword={changePasswordFromAccountSecurity}
-            onRegenerateRunnerToken={regenerateRunnerToken}
           />
         </SidebarModal>
       ) : null}
@@ -706,48 +716,172 @@ function AuthGate({
   );
 }
 
-function AccountSecurityPanel({
+function SettingsPanel({
   account,
   runnerCommand,
+  view,
+  onViewChange,
   onLogout,
   onLogoutAll,
   onChangePassword,
   onRegenerateRunnerToken,
 }: {
-  account: AccountSecurityState;
+  account: AccountSecurityState | undefined;
   runnerCommand: string;
+  view: SettingsView;
+  onViewChange: (view: SettingsView) => void;
   onLogout: () => Promise<void>;
   onLogoutAll: () => Promise<void>;
   onChangePassword: (input: ApiChangePassword) => Promise<void>;
   onRegenerateRunnerToken: () => Promise<void>;
 }) {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
+  return (
+    <section className="tool-panel settings-panel" aria-label="Settings">
+      {view === "home" ? (
+        <>
+          <div className="tool-panel-header">
+            <h2 className="panel-title">Settings</h2>
+          </div>
+          <div className="settings-list" role="list">
+            <SettingsListItem
+              icon={<ShieldCheck size={18} />}
+              title="Account & Security"
+              description="Owner password, runner token, and web sessions"
+              onClick={() => onViewChange("account")}
+            />
+            <SettingsListItem
+              icon={<Bell size={18} />}
+              title="Web Push"
+              description="Browser notification permission"
+              status={getNotificationSupport()}
+              onClick={() => onViewChange("web-push")}
+            />
+          </div>
+        </>
+      ) : null}
+
+      {view === "account" ? (
+        <>
+          <SettingsDetailHeader
+            title="Account & Security"
+            onBack={() => onViewChange("home")}
+          />
+          {account ? (
+            <AccountSecurityPanel
+              account={account}
+              runnerCommand={runnerCommand}
+              onChangePasswordOpen={() => onViewChange("change-password")}
+              onLogout={onLogout}
+              onLogoutAll={onLogoutAll}
+              onRegenerateRunnerToken={onRegenerateRunnerToken}
+            />
+          ) : (
+            <div className="empty-state compact">
+              Loading account settings...
+            </div>
+          )}
+        </>
+      ) : null}
+
+      {view === "change-password" ? (
+        <>
+          <SettingsDetailHeader
+            title="Change Password"
+            backLabel="Account & Security"
+            onBack={() => onViewChange("account")}
+          />
+          <ChangePasswordPanel onChangePassword={onChangePassword} />
+        </>
+      ) : null}
+
+      {view === "web-push" ? (
+        <>
+          <SettingsDetailHeader
+            title="Web Push"
+            onBack={() => onViewChange("home")}
+          />
+          <div className="settings-detail">
+            <PushSettings />
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function SettingsListItem({
+  icon,
+  title,
+  description,
+  status,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  status?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button className="settings-list-item" type="button" onClick={onClick}>
+      <span className="settings-list-icon">{icon}</span>
+      <span className="settings-list-copy">
+        <span className="settings-list-title">{title}</span>
+        <span className="settings-list-description">{description}</span>
+      </span>
+      <span className="settings-list-trailing">
+        {status ? <span className="settings-status">{status}</span> : null}
+        <ChevronRight size={16} />
+      </span>
+    </button>
+  );
+}
+
+function SettingsDetailHeader({
+  title,
+  backLabel = "Settings",
+  onBack,
+}: {
+  title: string;
+  backLabel?: string;
+  onBack: () => void;
+}) {
+  return (
+    <div className="tool-panel-header settings-detail-header">
+      <button
+        className="small-button settings-back-button"
+        type="button"
+        onClick={onBack}
+      >
+        <ArrowLeft size={15} />
+        {backLabel}
+      </button>
+      <h2 className="panel-title">{title}</h2>
+    </div>
+  );
+}
+
+function AccountSecurityPanel({
+  account,
+  runnerCommand,
+  onChangePasswordOpen,
+  onLogout,
+  onLogoutAll,
+  onRegenerateRunnerToken,
+}: {
+  account: AccountSecurityState;
+  runnerCommand: string;
+  onChangePasswordOpen: () => void;
+  onLogout: () => Promise<void>;
+  onLogoutAll: () => Promise<void>;
+  onRegenerateRunnerToken: () => Promise<void>;
+}) {
   const [submitting, setSubmitting] = useState<
-    "password" | "runner" | "logout" | "all" | ""
+    "runner" | "logout" | "all" | ""
   >("");
 
   const copy = (value: string) => {
     void navigator.clipboard?.writeText(value);
-  };
-
-  const submitPassword = async (event: FormEvent) => {
-    event.preventDefault();
-    setError("");
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    setSubmitting("password");
-    try {
-      await onChangePassword({ currentPassword, newPassword });
-    } catch (changeError: unknown) {
-      setError(errorMessage(changeError));
-    } finally {
-      setSubmitting("");
-    }
   };
 
   const regenerate = async () => {
@@ -759,14 +893,14 @@ function AccountSecurityPanel({
       return;
     }
     setSubmitting("runner");
-    setError("");
-    try {
-      await onRegenerateRunnerToken();
-    } catch (runnerError: unknown) {
-      setError(errorMessage(runnerError));
-    } finally {
-      setSubmitting("");
-    }
+    await onRegenerateRunnerToken();
+    setSubmitting("");
+  };
+
+  const logout = async () => {
+    setSubmitting("logout");
+    await onLogout();
+    setSubmitting("");
   };
 
   const logoutAll = async () => {
@@ -775,10 +909,11 @@ function AccountSecurityPanel({
     }
     setSubmitting("all");
     await onLogoutAll();
+    setSubmitting("");
   };
 
   return (
-    <div className="account-security-panel">
+    <div className="account-security-panel settings-detail">
       <section className="settings-section">
         <h3>Runner Token</h3>
         <div className="secret-display" aria-label="Runner token">
@@ -791,6 +926,7 @@ function AccountSecurityPanel({
             type="button"
             onClick={() => copy(account.runnerToken)}
           >
+            <Copy size={14} />
             Copy token
           </button>
           <button
@@ -798,15 +934,17 @@ function AccountSecurityPanel({
             type="button"
             onClick={() => copy(runnerCommand)}
           >
+            <Copy size={14} />
             Copy command
           </button>
           <button
-            className="danger-button"
+            className="small-button danger"
             type="button"
             onClick={() => void regenerate()}
             disabled={submitting === "runner"}
           >
-            Regenerate
+            <RotateCcw size={14} />
+            {submitting === "runner" ? "Regenerating" : "Regenerate"}
           </button>
         </div>
         <p className="settings-meta">
@@ -834,76 +972,122 @@ function AccountSecurityPanel({
           <button
             className="small-button"
             type="button"
-            onClick={() => {
-              setSubmitting("logout");
-              void onLogout();
-            }}
+            onClick={() => void logout()}
+            disabled={submitting === "logout"}
           >
             <LogOut size={14} />
             Log out
           </button>
           <button
-            className="danger-button"
+            className="small-button danger"
             type="button"
             onClick={() => void logoutAll()}
             disabled={submitting === "all"}
           >
+            <LogOut size={14} />
             Log out all
           </button>
         </div>
       </section>
 
-      <form
-        className="settings-section"
-        onSubmit={(event) => void submitPassword(event)}
-      >
-        <h3>Change Password</h3>
-        <label className="field">
-          <span>Current password</span>
-          <input
-            value={currentPassword}
-            onChange={(event) => setCurrentPassword(event.target.value)}
-            type="password"
-            autoComplete="current-password"
-            required
-          />
-        </label>
-        <label className="field">
-          <span>New password</span>
-          <input
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            required
-          />
-        </label>
-        <label className="field">
-          <span>Confirm new password</span>
-          <input
-            value={confirmPassword}
-            onChange={(event) => setConfirmPassword(event.target.value)}
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            required
-          />
-        </label>
-        {error ? (
-          <div className="form-error" role="alert">
-            {error}
-          </div>
-        ) : null}
+      <section className="settings-section">
         <button
-          className="primary-action-button"
-          type="submit"
-          disabled={submitting === "password"}
+          className="settings-list-item compact"
+          type="button"
+          onClick={onChangePasswordOpen}
         >
-          Change password
+          <span className="settings-list-icon">
+            <KeyRound size={18} />
+          </span>
+          <span className="settings-list-copy">
+            <span className="settings-list-title">Change Password</span>
+            <span className="settings-list-description">
+              Update owner access credentials
+            </span>
+          </span>
+          <span className="settings-list-trailing">
+            <ChevronRight size={16} />
+          </span>
         </button>
-      </form>
+      </section>
     </div>
+  );
+}
+
+function ChangePasswordPanel({
+  onChangePassword,
+}: {
+  onChangePassword: (input: ApiChangePassword) => Promise<void>;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [validationError, setValidationError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const submitPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    setValidationError("");
+    if (newPassword !== confirmPassword) {
+      setValidationError("Passwords do not match.");
+      return;
+    }
+    setSubmitting(true);
+    await onChangePassword({ currentPassword, newPassword });
+    setSubmitting(false);
+  };
+
+  return (
+    <form
+      className="settings-detail password-settings-form"
+      onSubmit={(event) => void submitPassword(event)}
+    >
+      <label className="field">
+        <span>Current password</span>
+        <input
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+          type="password"
+          autoComplete="current-password"
+          required
+        />
+      </label>
+      <label className="field">
+        <span>New password</span>
+        <input
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+          type="password"
+          autoComplete="new-password"
+          minLength={12}
+          required
+        />
+      </label>
+      <label className="field">
+        <span>Confirm new password</span>
+        <input
+          value={confirmPassword}
+          onChange={(event) => setConfirmPassword(event.target.value)}
+          type="password"
+          autoComplete="new-password"
+          minLength={12}
+          required
+        />
+      </label>
+      {validationError ? (
+        <div className="form-error" role="alert">
+          {validationError}
+        </div>
+      ) : null}
+      <button
+        className="primary-action-button"
+        type="submit"
+        disabled={submitting}
+      >
+        <KeyRound size={16} />
+        {submitting ? "Changing password" : "Change password"}
+      </button>
+    </form>
   );
 }
 

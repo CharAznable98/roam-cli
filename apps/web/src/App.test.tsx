@@ -318,6 +318,10 @@ function openSessionSwitcher(name: RegExp = /Real session|Created session/) {
   return within(screen.getByRole("dialog", { name: "Switch Session" }));
 }
 
+function openSettingsTab() {
+  fireEvent.click(screen.getAllByRole("button", { name: "Settings" })[0]!);
+}
+
 async function findSessionFile(name: RegExp) {
   const src = await screen.findByRole("treeitem", { name: /src/ });
   if (src.getAttribute("aria-expanded") !== "true") {
@@ -370,6 +374,26 @@ function authMockResponse(
     authStatus = { status: "unauthenticated" };
     return new Response(null, { status: 204 });
   }
+  if (pathname === "/v1/auth/logout-all" && init?.method === "POST") {
+    authStatus = { status: "unauthenticated" };
+    return new Response(null, { status: 204 });
+  }
+  if (pathname === "/v1/auth/password" && init?.method === "POST") {
+    authStatus = { status: "unauthenticated" };
+    return new Response(null, { status: 204 });
+  }
+  if (
+    pathname === "/v1/auth/runner-token/regenerate" &&
+    init?.method === "POST"
+  ) {
+    return jsonResponse({
+      account: {
+        ...accountSecurity,
+        runnerToken: "runner-token-regenerated",
+        runnerTokenUpdatedAt: "2026-06-05T00:01:00.000Z",
+      },
+    });
+  }
   if (pathname === "/v1/auth/account") {
     return jsonResponse({ account: accountSecurity });
   }
@@ -390,6 +414,8 @@ describe("App", () => {
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
   let runnerOnline: boolean;
+  let defaultProjectVisible: boolean;
+  let defaultSessionVisible: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
   let statusCheckResultStatus: string;
@@ -423,6 +449,8 @@ describe("App", () => {
     failNextSessionCreate = false;
     failNextSessionRename = false;
     runnerOnline = true;
+    defaultProjectVisible = true;
+    defaultSessionVisible = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
     statusCheckResultStatus = "stopped";
@@ -568,7 +596,9 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/projects") {
-          return jsonResponse({ projects: [project] });
+          return jsonResponse({
+            projects: defaultProjectVisible ? [project] : [],
+          });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/archive") {
           return jsonResponse({
@@ -595,18 +625,20 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({
-            sessions: [
-              {
-                ...session,
-                title: remoteSessionTitle,
-                status: remoteSessionStatus,
-                executionMode: remoteSessionExecutionMode,
-                executionFolder: remoteSessionExecutionFolder,
-                ...(remoteSessionWorktreeDeletedAt === undefined
-                  ? {}
-                  : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
-              },
-            ],
+            sessions: defaultSessionVisible
+              ? [
+                  {
+                    ...session,
+                    title: remoteSessionTitle,
+                    status: remoteSessionStatus,
+                    executionMode: remoteSessionExecutionMode,
+                    executionFolder: remoteSessionExecutionFolder,
+                    ...(remoteSessionWorktreeDeletedAt === undefined
+                      ? {}
+                      : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
+                  },
+                ]
+              : [],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
@@ -818,9 +850,14 @@ describe("App", () => {
             });
           }
           return jsonResponse({
-            result: gitStatusPayload(context, gitStatusClean, gitStatusChanges, {
-              unborn: gitStatusUnborn,
-            }),
+            result: gitStatusPayload(
+              context,
+              gitStatusClean,
+              gitStatusChanges,
+              {
+                unborn: gitStatusUnborn,
+              },
+            ),
           });
         }
         if (requestUrl.pathname === "/v1/git/branches") {
@@ -965,40 +1002,81 @@ describe("App", () => {
     });
   });
 
-  it("exposes account security from the mobile topbar", async () => {
+  it("exposes account security from the Settings tab", async () => {
     render(<App />);
 
     await screen.findByText("Loaded from API");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Account & Security" }),
-    );
+    expect(
+      screen.queryByRole("button", { name: "Open Account & Security" }),
+    ).not.toBeInTheDocument();
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
 
-    const dialog = await screen.findByRole("dialog", {
-      name: "Account & Security",
-    });
-    expect(within(dialog).getByLabelText("Runner token")).toHaveTextContent(
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Change Password/ }));
+    expect(screen.getByLabelText("Current password")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
+    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+  });
+
+  it("keeps Settings reachable before runners connect", async () => {
+    runnerOnline = false;
+    defaultProjectVisible = false;
+    defaultSessionVisible = false;
+    render(<App />);
+
+    await screen.findByText("No runners are online");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
     expect(
-      within(dialog).getByText(/--token 'runner-token'/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/--token 'runner-token'/).length,
+    ).toBeGreaterThan(0);
   });
 
-  it("closes account security after logout and does not reopen after login", async () => {
+  it("uses native confirmation and global notification for runner token regeneration", async () => {
     render(<App />);
 
     await screen.findByText("Loaded from API");
-    fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Account & Security",
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Log out" }));
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Regenerate the Runner token? Current online runners stay connected, but old-token reconnects will fail.",
+    );
+    expect(
+      await screen.findByText("runner-token-regenerated"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Runner token regenerated")).toBeInTheDocument();
+  });
+
+  it("leaves Settings for login after logout and does not restore a settings child view after login", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
 
     expect(
       await screen.findByRole("heading", { name: "Owner Login" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("dialog", { name: "Account & Security" }),
+      screen.queryByRole("region", { name: "Settings" }),
     ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Password"), {
@@ -1007,9 +1085,11 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+    openSettingsTab();
     expect(
-      screen.queryByRole("dialog", { name: "Account & Security" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /Account & Security/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
   });
 
   it("shows setup after an authenticated browser loses owner configuration", async () => {
@@ -1385,7 +1465,9 @@ describe("App", () => {
         ),
       ).toBe(true),
     );
-    expect((await tools.findAllByText("Initial commit")).length).toBeGreaterThan(0);
+    expect(
+      (await tools.findAllByText("Initial commit")).length,
+    ).toBeGreaterThan(0);
     expect(await tools.findByText("Changed files")).toBeInTheDocument();
     await waitFor(() =>
       expect(
@@ -1425,7 +1507,9 @@ describe("App", () => {
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
 
-    expect(await tools.findByRole("button", { name: "foo" })).toBeInTheDocument();
+    expect(
+      await tools.findByRole("button", { name: "foo" }),
+    ).toBeInTheDocument();
     expect(
       await tools.findByRole("button", { name: "foo/bar" }),
     ).toBeInTheDocument();
@@ -1517,7 +1601,9 @@ describe("App", () => {
 
     expect(await tools.findByText("No commits found.")).toBeInTheDocument();
     expect(
-      fetchCalls.some((call) => new URL(call.url).pathname === "/v1/git/history"),
+      fetchCalls.some(
+        (call) => new URL(call.url).pathname === "/v1/git/history",
+      ),
     ).toBe(false);
   });
 
@@ -1550,7 +1636,9 @@ describe("App", () => {
     await tools.findByText("src/App.tsx");
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
-    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(0);
+    expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(
+      0,
+    );
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -1597,7 +1685,9 @@ describe("App", () => {
     await tools.findByText("src/App.tsx");
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
-    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(0);
+    expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(
+      0,
+    );
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -1790,9 +1880,9 @@ describe("App", () => {
       await tools.findByText("Working tree is clean."),
     ).toBeInTheDocument();
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
-    expect((await tools.findAllByText("Session commit")).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await tools.findAllByText("Session commit")).length,
+    ).toBeGreaterThan(0);
 
     fireEvent.click(tools.getByRole("button", { name: "Load more" }));
     gitHistoryCommits = [
@@ -1817,9 +1907,9 @@ describe("App", () => {
       target: { value: "project:project-1" },
     });
 
-    expect((await tools.findAllByText("Project commit")).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await tools.findAllByText("Project commit")).length,
+    ).toBeGreaterThan(0);
 
     await act(async () => {
       staleHistoryPage.resolve(
@@ -2463,7 +2553,9 @@ describe("App", () => {
     const dialog = screen.getByRole("dialog", {
       name: "New Session - Real Project",
     });
-    expect(await within(dialog).findByDisplayValue("/workspace")).toBeInTheDocument();
+    expect(
+      await within(dialog).findByDisplayValue("/workspace"),
+    ).toBeInTheDocument();
     fireEvent.change(await within(dialog).findByLabelText("Prompt"), {
       target: { value: "Run the focused task" },
     });
