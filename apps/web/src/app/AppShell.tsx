@@ -204,8 +204,8 @@ export function AppShell({ controller }: AppShellProps) {
     let active = true;
     setSettingsAccountRefreshState("loading");
     void refreshAccountSecurity()
-      .then(() => {
-        if (active) {
+      .then((account) => {
+        if (active && account) {
           setSettingsAccountRefreshState("ready");
         }
       })
@@ -379,6 +379,13 @@ export function AppShell({ controller }: AppShellProps) {
                 onFetchAttachmentContent={fetchMessageAttachmentContent}
                 onListAgentSkills={listAgentSkills}
                 onSearchWorkspacePaths={searchWorkspacePaths}
+                statusBanner={
+                  state.loadState === "error" ? (
+                    <ApiConnectionBanner
+                      onOpenConnection={() => setMobileStatusModalOpen(true)}
+                    />
+                  ) : undefined
+                }
               />
             ) : (
               <section className="chat-column" aria-label="Conversation">
@@ -621,6 +628,25 @@ export function AppShell({ controller }: AppShellProps) {
           />
         </SidebarModal>
       ) : null}
+    </div>
+  );
+}
+
+function ApiConnectionBanner({
+  onOpenConnection,
+}: {
+  onOpenConnection: () => void;
+}) {
+  return (
+    <div className="chat-api-error-banner" role="status">
+      <div>
+        <span>API connection failed</span>
+        <p>Reconnect the backend route or update connection settings.</p>
+      </div>
+      <button className="small-button" type="button" onClick={onOpenConnection}>
+        <WifiOff size={16} />
+        Connection settings
+      </button>
     </div>
   );
 }

@@ -1110,6 +1110,55 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
   });
 
+  it("discards superseded Settings account refresh responses", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const staleAccount = deferred<Response>();
+    const freshAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(staleAccount);
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    queuedAccountSecurityResponses.push(freshAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    await act(async () => {
+      freshAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-fresh",
+            runnerTokenUpdatedAt: "2026-06-05T00:04:00.000Z",
+          },
+        }),
+      );
+      await freshAccount.promise;
+    });
+    expect(await screen.findByText("runner-token-fresh")).toBeInTheDocument();
+
+    await act(async () => {
+      staleAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-stale",
+            runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+          },
+        }),
+      );
+      await staleAccount.promise;
+    });
+    await flushAppEffects();
+
+    expect(screen.getByText("runner-token-fresh")).toBeInTheDocument();
+    expect(screen.queryByText("runner-token-stale")).not.toBeInTheDocument();
+  });
+
   it("keeps cached account hidden when Settings account refresh fails", async () => {
     render(<App />);
 
@@ -1244,6 +1293,35 @@ describe("App", () => {
       fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
         .length,
     ).toBeGreaterThan(1);
+  });
+
+  it("keeps connection settings reachable when an API error leaves a selected session visible", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    failBootstrapRunners = true;
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open connection status" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reconnect now" }),
+    );
+
+    expect(
+      await screen.findByText("RoamCli API request failed"),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+
+    const connectionButton = await screen.findByRole("button", {
+      name: "Connection settings",
+    });
+    fireEvent.click(connectionButton);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Connection" }),
+    ).toBeInTheDocument();
   });
 
   it("keeps Settings reachable when the bootstrap API fails", async () => {

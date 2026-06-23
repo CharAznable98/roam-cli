@@ -21,8 +21,9 @@ import {
   X,
 } from "lucide-react";
 import {
-  FormEvent,
-  KeyboardEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -71,6 +72,7 @@ type ChatPanelProps = {
     | undefined;
   onListAgentSkills?: AgentSkillFetcher | undefined;
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
+  statusBanner?: ReactNode;
 };
 
 export function ChatPanel({
@@ -90,6 +92,7 @@ export function ChatPanel({
   onFetchAttachmentContent,
   onListAgentSkills = emptyAgentSkillList,
   onSearchWorkspacePaths = emptyPathSearch,
+  statusBanner,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
@@ -456,6 +459,8 @@ export function ChatPanel({
           ) : null}
         </div>
       </div>
+
+      {statusBanner}
 
       {renameDialogOpen ? (
         <div

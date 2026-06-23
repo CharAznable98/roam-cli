@@ -1265,6 +1265,41 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .chat-api-error-banner {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid rgba(180, 35, 24, 0.16);
+    background: #fff7ed;
+    padding: 8px 10px;
+    color: var(--signal-red);
+  }
+
+  .chat-api-error-banner > div {
+    min-width: 0;
+  }
+
+  .chat-api-error-banner span {
+    display: block;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .chat-api-error-banner p {
+    margin: 2px 0 0;
+    color: #8a5200;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .chat-api-error-banner .small-button {
+    flex-shrink: 0;
+  }
+
   .session-title-button {
     display: grid;
     width: 100%;
