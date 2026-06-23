@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-06-21
+- Last refreshed: 2026-06-23
 - Primary product surfaces:
   - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
   - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
@@ -21,8 +21,16 @@
   - `apps/web/src/app/AppShell.tsx`, `apps/web/src/app/navigation.ts`, and `apps/web/src/app/BottomTabs.tsx`: current workspace tab model.
   - `apps/web/src/features/sessions/NewSessionForm.tsx`: current direct / managed worktree session creation UI.
   - `apps/web/src/features/files/FilePanel.tsx`: current lightweight file tree and text editor surface.
+  - `apps/web/src/features/git/GitPanel.tsx`: current Monaco diff preview surface.
+  - `apps/web/src/features/conversation/MarkdownMessage.tsx`: current Markdown rendering implementation and safe raw-HTML boundary.
+  - `apps/web/src/App.test.tsx` and `scripts/blackbox-browser.mjs`: current file preview/edit/save and Git diff smoke coverage.
   - `apps/web/src/index.css` and `apps/web/tailwind.config.ts`: responsive shell, restrained operational palette, and component styling.
   - 2026-06-21 Web redesign pass: `apps/web/src/app/AppShell.tsx` and `apps/web/src/index.css` reviewed for shell hierarchy, panel rhythm, mobile touch targets, and operational status visibility.
+  - 2026-06-23 file preview optimization design interview: read-only default preview, explicit edit entry, app-level fullscreen, button-driven save state, Markdown read-only rendering, and Git diff edit routing.
+  - `packages/agent-claude-code/src/index.ts`: Claude Code SDK system task/status messages are currently summarized as plain assistant messages.
+  - `apps/runner/src/sessions/manager.ts`: agent runtime `message` events are translated into persisted `assistantMessage` runner events.
+  - `apps/server/src/modules/runners/runner-event-service.ts`: `assistantMessage` events are stored as normal assistant `Message` records.
+  - `apps/web/src/features/conversation/model.ts` and `apps/web/src/features/conversation/ChatPanel.tsx`: current conversation display items, intermediate output grouping, and collapsible message rendering.
 
 ## Brand
 
@@ -44,6 +52,8 @@
 ## Product goals
 
 - Goals:
+  - Keep agent execution activity visible without polluting the user-readable conversation.
+  - Represent Claude Code task/status progress as non-message `AgentActivity` events instead of assistant text.
   - Add a Project-bound Git tab that manages local Git capabilities for the selected Project.
   - Keep all Git, GitLens-like inspection, diff, branch, remote, stash, merge, rebase, and worktree controls inside the Git tab.
   - Support Session creation in two modes: local mode and worktree mode.
@@ -52,12 +62,16 @@
   - Use Monaco as the Git tab file/diff inspection foundation.
   - Store the minimum product data needed for identity, session-worktree association, job audit, and session Git artifacts.
 - Non-goals:
+  - Do not show provider lifecycle strings such as `Claude Code task progress:` as assistant/user conversation messages.
+  - Do not make activity groups the primary approval action surface.
   - No PR, issue, CI, review comment, provider login, or provider token management.
   - No automatic nested repository discovery under the Project directory.
   - No strong preflight blocking for destructive Git actions beyond clear user confirmation.
   - No long-term persistence of full diff, blame, commit graph, file history, stdout, or stderr.
   - No Git credential storage in Server or Web.
 - Success signals:
+  - Users can see the latest running agent action without the chat transcript turning into a status log.
+  - Historical agent activity is available through collapsed groups but does not compete with normal messages.
   - Users can understand which Project/session/worktree the Git tab is operating on.
   - Worktree sessions are branch-backed and can commit, push, and be cleaned up predictably.
   - Diff, blame, history, and commit inspection feel responsive on desktop and usable on mobile.
@@ -89,6 +103,17 @@
   - Add a top-level workspace tab named `Git`.
   - Git capabilities must not be split across Files, Approvals, or Chat.
   - Bottom/mobile navigation adds the same Git tab.
+- Conversation activity timeline:
+  - Normal conversation messages are only user-visible user and assistant content.
+  - `tool`, `thought`, `system`, `approval`, and provider status/progress events are auxiliary activity, not normal message boundaries.
+  - Frontend display merges `Message` records and `AgentActivity` records by timestamp.
+  - Consecutive auxiliary events between two normal messages collapse into one `activityGroup`.
+  - Each `activityGroup` renders immediately above the next normal message.
+  - If the latest activity has no following normal message yet, its group renders at the end of the message list.
+  - Only the latest `activityGroup` shows the latest short action in its collapsed row.
+  - Historical `activityGroup` rows show only `Activity (N)`.
+  - When a following normal message appears, the previous latest `activityGroup` automatically becomes historical and collapses.
+  - If an `Intermediate output` group collapses a span of non-final output, any `activityGroup` inside that span collapses inside the same intermediate group.
 - Git tab top-level structure:
   - Header: Project repo identity, active Git context, selected session context label, branch/upstream/ahead-behind status, dirty count, and sync state.
   - Context selector: Project repository and current Project session worktrees only.
@@ -134,6 +159,10 @@
 - Principle 5: Simple default UI, complete advanced surface.
   - Default commit UI stays small.
   - Advanced actions live in menus or contextual actions.
+- Principle 6: Activity explains execution, messages carry conversation.
+  - Agent lifecycle and tool/task progress must be available as operational context.
+  - They must not be persisted as assistant prose or rendered as assistant prose.
+  - The visible transcript remains readable without expanding activity groups.
 - Tradeoffs:
   - The platform warns before dangerous actions but does not strongly block them.
   - Full command output is copyable for active jobs but not persisted long term.
@@ -177,7 +206,11 @@
   - `StatusPill` for compact state indicators.
   - Notification stack for request errors.
   - Form and button patterns from session creation and file editing.
+  - Existing `details` / `summary` collapsible-message styling for low-emphasis expandable activity groups.
 - New/changed components:
+  - `AgentActivityGroup`: collapsed non-message activity segment between normal messages.
+  - `AgentActivityItem`: short action row shown only when a group is expanded.
+  - `ConversationDisplayItem`: extend the display model to interleave `message`, `activityGroup`, and `intermediateGroup` items.
   - `GitPanel`: root Git tab container.
   - `GitContextHeader`: active context, selected session marker, branch/upstream/sync state.
   - `GitContextSelector`: Project repo and session worktree switcher.
@@ -190,6 +223,8 @@
   - `GitJobOutput`: active job failure/output panel with copy button.
   - `GitEmptyState`: non-Git repo init state.
 - Variants and states:
+  - Agent activity group: latest/running, historical, inside intermediate output.
+  - Agent activity kind: status, task_started, task_progress, task_notification, approval, tool, system, thought.
   - Git context: project, selected session local, selected session worktree, other session worktree.
   - Repo state: clean, dirty, conflict, unborn, detached HEAD, remote-diverged, runner-offline.
   - Diff state: loading, ready, too large, binary, read-only, editable current side.
@@ -252,6 +287,8 @@
 - Loading:
   - Status refresh shows lightweight inline progress.
   - Long Git operations create a Git job and progress state.
+  - Latest agent activity group shows one short current action plus step count.
+  - Activity groups never stream as normal message text.
 - Empty:
   - No Git repo: show init repo action.
   - Clean working tree: show clean state, branch/upstream, and sync actions.
@@ -262,6 +299,7 @@
   - Do not persist complete stdout/stderr long term.
 - Success:
   - Job success updates status and displays concise completion feedback.
+  - When a normal message arrives after activity, the preceding latest group becomes historical and collapses to `Activity (N)`.
 - Disabled:
   - Worktree mode disabled for non-Git and unborn repos.
   - Commit disabled when there are no staged changes.
@@ -270,6 +308,7 @@
   - Runner offline keeps Project/Session records visible.
   - Live Git status/diff/history unavailable until runner returns.
   - Existing minimal audit/job state remains visible.
+  - Persisted agent activity reloads with session detail after refresh or reconnect.
 
 ## Content voice
 
@@ -284,6 +323,56 @@
   - Before destructive actions, name the object and consequence.
   - Keep confirmations short; no type-to-confirm requirement.
   - Do not over-explain Git errors; show copyable output for agent diagnosis.
+  - Agent activity copy is productized into short actions such as `Starting task`, `Exploring file preview component`, `Reading apps/web/src/app/useRoamController.ts`, `Waiting for approval`, and `Task completed`.
+  - Do not expose provider prefixes such as `Claude Code status:` or `Claude Code task progress:` in default UI.
+
+## Feature design: File preview optimization
+
+- Default mode:
+  - Opening any file starts in read-only preview mode.
+  - Editable text files show an `Edit` button in read-only mode.
+  - Unsupported files do not show edit or save controls.
+  - Editable means runner-returned text content that is not truncated. Filesystem write permission is discovered on save failure, not preflighted in Web.
+- Edit mode:
+  - Clicking `Edit` switches the current file into source edit mode.
+  - Edit mode shows `Cancel` and `Save`.
+  - `Save` is visible only in edit mode.
+  - `Save` is disabled when content is clean or a save is in progress.
+  - `Save` is enabled when the edited buffer differs from the loaded file content.
+  - Save success keeps the user in edit mode and disables `Save` until the next change.
+  - Save failure keeps the user in edit mode, reports through the existing notification path, and allows retry.
+  - `Cancel` exits edit mode. If the buffer is dirty, confirm before discarding changes.
+  - Switching files or closing edit/fullscreen while dirty must also confirm before discarding changes.
+- Status expression:
+  - Remove persistent `Editable`, `Read-only`, `Saved`, and `Unsaved` badges from the file preview header.
+  - Express state through button visibility, disabled state, and loading state rather than status copy.
+- Markdown files:
+  - In read-only mode, `.md` files default to rendered Markdown.
+  - Read-only Markdown view provides a rendered/source toggle.
+  - The Markdown rendered/source preference is page-session scoped and not persisted; first open after refresh defaults to rendered Markdown.
+  - Edit mode for Markdown is always source editing in Monaco, not WYSIWYG editing.
+  - Markdown rendering must reuse the safe message-rendering boundary: no raw HTML insertion into the DOM.
+- Fullscreen:
+  - Fullscreen is an app-level overlay, not the browser Fullscreen API.
+  - Fullscreen expands only the current preview/editor/diff surface, not the file tree.
+  - Fullscreen retains file name, mode controls, Markdown toggle, `Edit`, `Cancel`, and `Save` where applicable.
+  - `Esc` and a visible close control exit fullscreen.
+  - Monaco-based views must relayout after entering and exiting fullscreen.
+- Git diff preview:
+  - Git diff preview remains read-only.
+  - Only working tree, unstaged, text, non-binary, non-too-large, non-deleted diffs show `Edit`.
+  - Git diff `Edit` opens the same path in the Files panel directly in edit mode.
+  - Staged diffs, commit/history diffs, deleted files, binary diffs, and too-large diffs do not show `Edit`.
+  - Git diff preview also supports the same app-level fullscreen behavior for the current diff surface.
+- Acceptance criteria:
+  - Selecting a text file shows read-only preview first, with `Edit` but no `Save`.
+  - Clicking `Edit` shows `Cancel` and `Save`; clean content disables `Save`; dirty content enables `Save`.
+  - Image, binary, and truncated files never show `Edit` or `Save`.
+  - `.md` read-only preview defaults to rendered Markdown and can switch to source preview.
+  - `.md` edit mode always opens source editing.
+  - Dirty cancel/file switch/fullscreen close prompts before discarding edits.
+  - App-level fullscreen works for ordinary file preview/editing and Git diff preview.
+  - Working tree eligible diff `Edit` routes to Files edit mode; ineligible diffs have no edit control.
 
 ## Implementation constraints
 
@@ -291,6 +380,15 @@
   - React 19 + Vite + Tailwind.
   - Use existing reducer/controller state pattern before adding a new state library.
   - Use lucide icons for common Git actions.
+- Agent activity protocol:
+  - Use a generic `AgentActivity` model rather than a Claude Code-specific protocol.
+  - First implementation may emit activities only from Claude Code.
+  - Persist agent activities separately from `Message` records so they reload with session detail but do not enter conversation history or transcript exports.
+  - Suggested minimum fields: `id`, `sessionId`, `agent`, `kind`, `label`, `createdAt`.
+  - Frontend must not parse provider-formatted prose to detect activity; runner/plugin code emits structured activity with a productized `label`.
+  - Approval requests remain actionable through the existing Approvals surface; activity only records short status such as `Waiting for approval`.
+  - WebSocket updates broadcast activity creation separately from `message:created`.
+  - Reducer/display tests must cover latest-group live summary, historical collapse, reload persistence, and intermediate output containment.
 - Git execution:
   - Runner executes all Git operations.
   - Use `simple-git` for common Git commands and native `git` fallback for advanced commands.
@@ -394,6 +492,7 @@ type GitContextRef =
   - Runner tests using temporary Git repos for status, diff, branch worktree, commit, stash, and error handling.
   - Server tests for context resolution, job persistence, runner routing, and minimal persistence.
   - Web reducer/component tests for context switching, status groups, commit box, dangerous confirmations, and responsive Git tab states.
+  - Web tests for default read-only file preview, edit/cancel/save button states, dirty discard confirmation, Markdown rendered/source toggle, fullscreen overlay, and Git diff edit routing.
   - Playwright or browser smoke tests for desktop/tablet/mobile Git tab layout once implemented.
 
 ## Open questions

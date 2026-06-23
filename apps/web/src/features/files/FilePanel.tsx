@@ -1,7 +1,17 @@
 import { Editor, type OnMount } from "@monaco-editor/react";
 import type { FileContentResult, FileNode } from "@roamcli/shared/protocol";
-import { Pencil, RefreshCw, Save } from "lucide-react";
-import { useEffect, useRef } from "react";
+import {
+  Code2,
+  Eye,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  RefreshCw,
+  Save,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { MarkdownMessage } from "../conversation/MarkdownMessage";
 import { LazyFileTree, type TreePathStates } from "./LazyFileTree";
 
 type FilePanelProps = {
@@ -11,11 +21,14 @@ type FilePanelProps = {
   selectedPath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
+  editMode: boolean;
   contentState: "idle" | "loading" | "ready" | "error";
   saveState: "idle" | "loading" | "ready" | "error";
   onSelectFile: (path: string) => void;
   onLoadDirectory: (path: string) => void;
   onRefreshTree: () => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
   onChangeContent: (content: string) => void;
   onSaveFile: () => void;
   treeId?: string | undefined;
@@ -28,11 +41,14 @@ export function FilePanel({
   selectedPath,
   fileContent,
   editorContent,
+  editMode,
   contentState,
   saveState,
   onSelectFile,
   onLoadDirectory,
   onRefreshTree,
+  onStartEdit,
+  onCancelEdit,
   onChangeContent,
   onSaveFile,
   treeId,
@@ -48,14 +64,41 @@ export function FilePanel({
     editorContent !== visibleTextContent.content;
   const canEdit =
     visibleTextContent !== undefined && !visibleTextContent.truncated;
-  const canSave = canEdit && isDirty && saveState !== "loading";
+  const isEditing = canEdit && editMode;
+  const canSave = isEditing && isDirty && saveState !== "loading";
   const canSaveRef = useRef(canSave);
   const onSaveFileRef = useRef(onSaveFile);
+  const [markdownMode, setMarkdownMode] = useState<"rendered" | "source">(
+    "rendered",
+  );
+  const [fullscreen, setFullscreen] = useState(false);
+  const isMarkdown =
+    visibleTextContent !== undefined && isMarkdownPath(visibleTextContent.path);
+  const showRenderedMarkdown =
+    visibleTextContent !== undefined &&
+    !isEditing &&
+    isMarkdown &&
+    markdownMode === "rendered";
 
   useEffect(() => {
     canSaveRef.current = canSave;
     onSaveFileRef.current = onSaveFile;
   }, [canSave, onSaveFile]);
+
+  useEffect(() => {
+    setFullscreen(false);
+  }, [selectedPath]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
@@ -107,50 +150,99 @@ export function FilePanel({
             resetKey={treeId}
           />
         </div>
-        <div className="editor-placeholder">
+        <div
+          className={`editor-placeholder ${fullscreen ? "is-fullscreen" : ""}`}
+        >
           <div>
             <div className="editor-header">
               <div className="min-w-0">
                 <p className="text-xs uppercase text-ink-500">Viewer</p>
                 <h3>{selectedPath || "No file selected"}</h3>
               </div>
-              <div className="editor-status" aria-label="File save status">
-                <span
-                  className={`editor-state-badge ${
-                    canEdit ? "editable" : "readonly"
-                  }`}
-                >
-                  <Pencil size={13} />
-                  {canEdit ? "Editable" : "Read-only"}
-                </span>
-                <span
-                  className={`editor-state-badge ${
-                    saveState === "error"
-                      ? "error"
-                      : isDirty
-                        ? "dirty"
-                        : "saved"
-                  }`}
-                >
-                  <Save size={13} />
-                  {saveState === "loading"
-                    ? "Saving"
-                    : saveState === "error"
-                      ? "Error"
-                      : isDirty
-                        ? "Unsaved"
-                        : "Saved"}
-                </span>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Save file"
-                  title="Save file"
-                  disabled={!canSave}
-                  onClick={onSaveFile}
-                >
-                  <Save size={15} />
-                </button>
+              <div className="editor-status" aria-label="File preview actions">
+                {isMarkdown && !isEditing ? (
+                  <div
+                    className="file-view-toggle"
+                    role="group"
+                    aria-label="Markdown view"
+                  >
+                    <button
+                      type="button"
+                      className={markdownMode === "rendered" ? "is-active" : ""}
+                      aria-pressed={markdownMode === "rendered"}
+                      onClick={() => setMarkdownMode("rendered")}
+                    >
+                      <Eye size={13} />
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      className={markdownMode === "source" ? "is-active" : ""}
+                      aria-pressed={markdownMode === "source"}
+                      onClick={() => setMarkdownMode("source")}
+                    >
+                      <Code2 size={13} />
+                      Source
+                    </button>
+                  </div>
+                ) : null}
+                {visibleContent ? (
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label={
+                      fullscreen
+                        ? "Exit fullscreen preview"
+                        : "Fullscreen preview"
+                    }
+                    title={
+                      fullscreen
+                        ? "Exit fullscreen preview"
+                        : "Fullscreen preview"
+                    }
+                    onClick={() => setFullscreen((current) => !current)}
+                  >
+                    {fullscreen ? (
+                      <Minimize2 size={15} />
+                    ) : (
+                      <Maximize2 size={15} />
+                    )}
+                  </button>
+                ) : null}
+                {canEdit && !isEditing ? (
+                  <button
+                    className="small-button"
+                    type="button"
+                    onClick={onStartEdit}
+                  >
+                    <Pencil size={14} />
+                    Edit
+                  </button>
+                ) : null}
+                {isEditing ? (
+                  <button
+                    className="small-button"
+                    type="button"
+                    disabled={saveState === "loading"}
+                    onClick={onCancelEdit}
+                  >
+                    <X size={14} />
+                    Cancel
+                  </button>
+                ) : null}
+                {isEditing ? (
+                  <button
+                    className="small-button"
+                    type="button"
+                    aria-label="Save file"
+                    title="Save file"
+                    disabled={!canSave}
+                    onClick={onSaveFile}
+                  >
+                    <Save size={14} />
+                    {saveState === "loading" ? "Saving" : "Save"}
+                  </button>
+                ) : null}
               </div>
             </div>
             {visibleContent ? (
@@ -165,21 +257,31 @@ export function FilePanel({
                     : ""}
                   {visibleContent.truncated ? " · truncated" : ""}
                 </p>
-                {isTextContent(visibleContent) ? (
+                {showRenderedMarkdown ? (
+                  <div className="file-markdown-preview">
+                    <MarkdownMessage content={visibleTextContent.content} />
+                  </div>
+                ) : isTextContent(visibleContent) ? (
                   <Editor
                     className="monaco-file-editor"
                     height="100%"
                     language={languageForPath(visibleContent.path)}
                     path={editorModelPath(visibleContent.path)}
-                    value={editorContent}
-                    onChange={(value) => onChangeContent(value ?? "")}
+                    value={isEditing ? editorContent : visibleContent.content}
+                    onChange={(value) => {
+                      if (isEditing) {
+                        onChangeContent(value ?? "");
+                      }
+                    }}
                     onMount={handleEditorMount}
                     wrapperProps={{
-                      "aria-label": `File editor for ${visibleContent.path}`,
+                      "aria-label": `${isEditing ? "File editor" : "File source preview"} for ${visibleContent.path}`,
                     }}
                     options={{
-                      ariaLabel: `Edit ${visibleContent.path}`,
-                      readOnly: !canEdit || saveState === "loading",
+                      ariaLabel: isEditing
+                        ? `Edit ${visibleContent.path}`
+                        : `View source ${visibleContent.path}`,
+                      readOnly: !isEditing || saveState === "loading",
                       minimap: { enabled: false },
                       automaticLayout: true,
                       scrollBeyondLastLine: false,
@@ -266,6 +368,11 @@ function languageForPath(path: string): string {
     yml: "yaml",
   };
   return languages[extension] ?? "plaintext";
+}
+
+function isMarkdownPath(path: string): boolean {
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  return extension === "md" || extension === "markdown";
 }
 
 function editorModelPath(path: string): string {

@@ -612,6 +612,76 @@ describe("app reducer", () => {
     expect(dismissed.notifications).toEqual([]);
   });
 
+  it("ignores runner errors for sessions that are no longer active", () => {
+    const activeError = appReducer(
+      { ...initialAppState, sessions: [makeSession("session-1", "project-1")] },
+      {
+        type: "serverEventReceived",
+        event: {
+          type: "error",
+          sessionId: "session-1",
+          message: "Session is not running",
+          code: "SESSION_NOT_RUNNING",
+        },
+      },
+    );
+    const staleError = appReducer(initialAppState, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+
+    expect(activeError.notifications).toMatchObject([
+      {
+        title: "Runner request failed",
+        message: "Session is not running",
+      },
+    ]);
+    expect(staleError.notifications).toEqual([]);
+  });
+
+  it("ignores session-not-running errors while a session archive is in flight", () => {
+    const state = appReducer(
+      { ...initialAppState, sessions: [makeSession("session-1", "project-1")] },
+      { type: "sessionArchiveStarted", sessionId: "session-1" },
+    );
+
+    const archivedStopError = appReducer(state, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+    expect(archivedStopError.notifications).toEqual([]);
+
+    const finished = appReducer(archivedStopError, {
+      type: "sessionArchiveFinished",
+      sessionId: "session-1",
+    });
+    const activeError = appReducer(finished, {
+      type: "serverEventReceived",
+      event: {
+        type: "error",
+        sessionId: "session-1",
+        message: "Session is not running",
+        code: "SESSION_NOT_RUNNING",
+      },
+    });
+    expect(activeError.notifications).toMatchObject([
+      {
+        title: "Runner request failed",
+        message: "Session is not running",
+      },
+    ]);
+  });
+
   it("does not clear existing notifications when a legacy error field is cleared", () => {
     const withNotification = appReducer(initialAppState, {
       type: "fileTreeFailed",
@@ -803,6 +873,67 @@ describe("app reducer", () => {
     expect(next.fileContent).toBeUndefined();
     expect(next.editorContent).toBe("");
     expect(next.fileContentState).toBe("loading");
+  });
+
+  it("ignores stale file content failures for a different selected file", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/Fast.tsx",
+        fileContent: {
+          requestId: "fast-content",
+          sessionId: "session-1",
+          path: "src/Fast.tsx",
+          kind: "text",
+          content: "export const fast = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+        editorContent: "export const dirty = true;",
+        fileEditMode: true,
+        fileContentState: "ready",
+        fileSaveState: "idle",
+      },
+      {
+        type: "fileContentFailed",
+        sessionId: "session-1",
+        path: "src/Slow.tsx",
+        message: "Slow load failed",
+      },
+    );
+
+    expect(next.fileEditMode).toBe(true);
+    expect(next.fileContentState).toBe("ready");
+    expect(next.editorContent).toBe("export const dirty = true;");
+    expect(next.notifications).toEqual([]);
+  });
+
+  it("marks current file content load failures as errors", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/App.tsx",
+        fileEditMode: true,
+        fileContentState: "loading",
+      },
+      {
+        type: "fileContentFailed",
+        sessionId: "session-1",
+        path: "src/App.tsx",
+        message: "Load failed",
+      },
+    );
+
+    expect(next.fileEditMode).toBe(false);
+    expect(next.fileContentState).toBe("error");
+    expect(next.notifications).toHaveLength(1);
+    expect(next.notifications[0]).toMatchObject({
+      tone: "error",
+      title: "File content request failed",
+      message: "Load failed",
+    });
   });
 
   it("ignores stale file tree path loads after a root reset", () => {
@@ -1186,9 +1317,7 @@ describe("app reducer", () => {
       ],
     });
 
-    expect(
-      broadcastApplied.filesBySession["session-1"]?.[0],
-    ).toMatchObject({
+    expect(broadcastApplied.filesBySession["session-1"]?.[0]).toMatchObject({
       path: "src",
       children: [
         {

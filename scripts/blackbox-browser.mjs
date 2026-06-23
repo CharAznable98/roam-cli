@@ -117,6 +117,12 @@ async function run() {
       tablet: false,
     });
     await runUserJourney(browser, {
+      name: "desktop-direct",
+      viewport: { width: 1440, height: 960 },
+      mobile: false,
+      tablet: false,
+    });
+    await runUserJourney(browser, {
       name: "tablet",
       viewport: { width: 900, height: 1024 },
       mobile: false,
@@ -256,12 +262,22 @@ async function runUserJourney(browser, scenario) {
   );
   const projectDirectorySuffix = relative(workspace, projectDir);
   const fileName = `roamcli-blackbox-${scenario.name}-${runNonce}.txt`;
+  const markdownFileName = `roamcli-blackbox-${scenario.name}-${runNonce}.md`;
+  const imageFileName = `roamcli-blackbox-${scenario.name}-${runNonce}.png`;
   const initialValue = `initial-${scenario.name}-${Date.now()}`;
+  const markdownHeading = `Markdown file ${scenario.name} ${Date.now()}`;
+  const markdownValue = `# ${markdownHeading}\n\n- rendered file item\n`;
   const editedValue = `edited-${scenario.name}-${Date.now()}`;
   const patchedValue = `patched-${scenario.name}-${Date.now()}`;
   const executionMode =
     scenario.name === "desktop" ? "managed_worktree" : "direct";
-  await prepareProjectDirectory(projectDir, fileName, initialValue);
+  await prepareProjectDirectory(projectDir, {
+    fileName,
+    initialValue,
+    markdownFileName,
+    markdownValue,
+    imageFileName,
+  });
   tempDirs.push(projectDir);
 
   const context = await browser.newContext({ viewport: scenario.viewport });
@@ -382,16 +398,40 @@ async function runUserJourney(browser, scenario) {
 
     await openTab(page, scenario, "files");
     await page.getByRole("treeitem", { name: fileName }).click();
+    await assertFileOpensReadOnly(page, fileName, `${initialValue}\n`);
+    await assertFileEditCancelDiscards(page, fileName, {
+      original: `${initialValue}\n`,
+      cancelled: `cancelled-${scenario.name}-${Date.now()}\n`,
+    });
+    await page
+      .locator('section[aria-label="Files"]')
+      .getByRole("button", { name: "Edit", exact: true })
+      .click();
     await replaceEditorContent(page, fileName, `${editedValue}\n`);
     await page.getByRole("button", { name: "Save file" }).click();
     await expectFileContent(session.id, fileName, `${editedValue}\n`);
-    await expectText(page, "Saved");
+    await expectSaveButtonDisabled(page);
+    await assertNoVisibleText(page, "Saved");
     await captureScreenshot(page, scenario, "file-edit-save");
     pass(`${scenario.name}: file browse/edit/save`);
+
+    await assertMarkdownFilePreview(page, scenario, {
+      fileName: markdownFileName,
+      heading: markdownHeading,
+      source: markdownValue,
+    });
+    await captureScreenshot(page, scenario, "file-markdown-preview");
+    pass(`${scenario.name}: markdown file preview`);
+
+    await assertImageFilePreview(page, scenario, imageFileName);
+    await captureScreenshot(page, scenario, "file-image-preview");
+    pass(`${scenario.name}: image file preview`);
 
     await assertProjectGitUi(page, scenario, project, fileName);
     await assertMobileGitTouchTargets(page, scenario);
     await captureScreenshot(page, scenario, "git-project-diff");
+    await assertGitDiffEditOpensFile(page, scenario, fileName);
+    await captureScreenshot(page, scenario, "git-diff-edit-file");
     pass(`${scenario.name}: project Git tab diff`);
 
     await waitForSessionStatus(session.id, "completed");
@@ -496,6 +536,11 @@ async function assertManagedWorktreeGitUi(
     `${values.editedValue}\n`,
     "utf8",
   );
+  await writeFile(
+    resolve(project.directory, values.fileName),
+    `project-${values.editedValue}\n`,
+    "utf8",
+  );
 
   await openTab(page, scenario, "git");
   await expectGitContextLabel(page, `Worktree - ${session.title}`);
@@ -503,8 +548,23 @@ async function assertManagedWorktreeGitUi(
   await expectText(page, "Working tree diff");
   await waitForGitStatus(gitContext, (status) => !status.clean);
   await waitForGitDiffReady(page);
+  await assertGitDiffFullscreen(page);
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-diff");
+  await selectGitContext(page, `Project - ${project.name}`);
+  await waitForGitStatus(
+    { kind: "project", projectId: project.id },
+    (status) => !status.clean,
+  );
+  await waitForGitDiffReady(page);
+  await assertNoVisibleButton(page, "Edit");
+  await selectGitContext(page, `Worktree - ${session.title}`);
+  await waitForGitStatus(gitContext, (status) => !status.clean);
+  await waitForGitDiffReady(page);
+  await assertGitDiffEditOpensFile(page, scenario, values.fileName);
+  await captureScreenshot(page, scenario, "git-worktree-diff-edit-file");
+  await openTab(page, scenario, "git");
+  await waitForGitDiffReady(page);
 
   await clickGitActionAndExpectJob(page, "/v1/git/stage", () =>
     clickGitMenuItem(page, "File actions", "Stage"),
@@ -561,6 +621,11 @@ async function expectGitContextLabel(page, text) {
   );
 }
 
+async function selectGitContext(page, text) {
+  await page.locator(".git-context-field select").selectOption({ label: text });
+  await expectGitContextLabel(page, text);
+}
+
 async function assertProjectGitUi(page, scenario, project, fileName) {
   const gitContext = { kind: "project", projectId: project.id };
   await openTab(page, scenario, "git");
@@ -569,7 +634,226 @@ async function assertProjectGitUi(page, scenario, project, fileName) {
   await expectText(page, "Working tree diff");
   await waitForGitStatus(gitContext, (status) => !status.clean);
   await waitForGitDiffReady(page);
+  await assertGitDiffFullscreen(page);
   await assertNoRunnerRequestFailed(page);
+}
+
+async function assertGitDiffEditOpensFile(page, scenario, fileName) {
+  await openTab(page, scenario, "git");
+  await waitForGitDiffReady(page);
+  await page
+    .locator('section[aria-label="Git"]')
+    .getByRole("button", { name: "Edit", exact: true })
+    .click();
+  await waitForFileEditorMode(page, fileName);
+  await assertNoVisibleText(page, "Editable");
+  await assertNoVisibleText(page, "Saved");
+}
+
+async function assertGitDiffFullscreen(page) {
+  const fullscreenButton = page.getByRole("button", {
+    name: "Fullscreen diff",
+  });
+  await fullscreenButton.click();
+  await waitFor(
+    async () =>
+      (await page.locator(".git-diff-pane.is-fullscreen").count()) > 0,
+    "Git diff pane to enter fullscreen",
+  );
+  await page.keyboard.press("Escape");
+  await waitFor(
+    async () =>
+      (await page.locator(".git-diff-pane.is-fullscreen").count()) === 0,
+    "Git diff pane to exit fullscreen",
+  );
+}
+
+async function assertFileOpensReadOnly(page, fileName, expectedValue) {
+  const preview = page.locator(".monaco-file-editor").last();
+  await waitFor(
+    async () => (await preview.count()) > 0 && (await preview.isVisible()),
+    `read-only source preview for ${fileName}`,
+  );
+  await page
+    .locator('section[aria-label="Files"] .editor-header h3', {
+      hasText: fileName,
+    })
+    .waitFor();
+  await expectText(page, expectedValue.trim());
+  await page
+    .locator('section[aria-label="Files"]')
+    .getByRole("button", { name: "Edit", exact: true })
+    .waitFor();
+  await assertNoVisibleButton(page, "Save file");
+  await assertNoVisibleText(page, "Editable");
+  await assertNoVisibleText(page, "Saved");
+}
+
+async function assertFileEditCancelDiscards(page, fileName, values) {
+  const filesPanel = page.locator('section[aria-label="Files"]');
+  await filesPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  await replaceEditorContent(page, fileName, values.cancelled);
+  const saveButton = filesPanel.getByRole("button", { name: "Save file" });
+  await waitFor(
+    async () =>
+      (await saveButton.count()) > 0 && (await saveButton.isEnabled()),
+    "Save file button to become enabled after dirty edit",
+  );
+  const dialogPromise = page.waitForEvent("dialog");
+  const cancelClick = filesPanel
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  const dialog = await dialogPromise;
+  const expectedMessage = `Discard unsaved changes in ${fileName}?`;
+  if (dialog.message() !== expectedMessage) {
+    throw new Error(
+      `Unexpected cancel confirmation: ${dialog.message()} (expected ${expectedMessage})`,
+    );
+  }
+  await dialog.accept();
+  await cancelClick;
+  await assertFileOpensReadOnly(page, fileName, values.original);
+}
+
+async function assertMarkdownFilePreview(page, scenario, values) {
+  const filesPanel = page.locator('section[aria-label="Files"]');
+  await openTab(page, scenario, "files");
+  await page.getByRole("treeitem", { name: values.fileName }).click();
+  await page.getByRole("heading", { name: values.heading }).waitFor();
+  await expectText(page, "rendered file item");
+  const marker = await page
+    .locator(".file-markdown-preview li", { hasText: "rendered file item" })
+    .first()
+    .evaluate((item) => {
+      const list = item.parentElement;
+      const itemStyle = window.getComputedStyle(item);
+      const listStyle = list
+        ? window.getComputedStyle(list)
+        : window.getComputedStyle(item);
+      return {
+        itemDisplay: itemStyle.display,
+        listStyleType: listStyle.listStyleType || itemStyle.listStyleType,
+      };
+    });
+  if (marker.itemDisplay !== "list-item" || marker.listStyleType === "none") {
+    throw new Error(
+      `Markdown list marker is not visible: ${JSON.stringify(marker)}`,
+    );
+  }
+  await waitFor(
+    async () =>
+      (await page
+        .locator('section[aria-label="Files"] .monaco-file-editor')
+        .count()) === 0,
+    `${values.fileName} source editor hidden in rendered markdown mode`,
+  );
+
+  await filesPanel.getByRole("button", { name: "Source", exact: true }).click();
+  const source = page.locator(
+    'section[aria-label="Files"] .monaco-file-editor',
+  );
+  await waitFor(
+    async () => (await source.count()) > 0 && (await source.isVisible()),
+    `${values.fileName} source preview`,
+  );
+  await expectText(page, values.source.split("\n")[0]);
+
+  await filesPanel
+    .getByRole("button", { name: "Preview", exact: true })
+    .click();
+  await filesPanel
+    .getByRole("button", { name: "Fullscreen preview", exact: true })
+    .click();
+  await waitFor(
+    async () =>
+      (await page.locator(".editor-placeholder.is-fullscreen").count()) > 0,
+    "file preview to enter fullscreen",
+  );
+  await page.keyboard.press("Escape");
+  await waitFor(
+    async () =>
+      (await page.locator(".editor-placeholder.is-fullscreen").count()) === 0,
+    "file preview to exit fullscreen",
+  );
+
+  await page
+    .locator('section[aria-label="Files"]')
+    .getByRole("button", { name: "Edit", exact: true })
+    .click();
+  await waitForFileEditorMode(page, values.fileName);
+  await assertNoVisibleButton(page, "Preview");
+  await filesPanel.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("heading", { name: values.heading }).waitFor();
+}
+
+async function assertImageFilePreview(page, scenario, imageFileName) {
+  const filesPanel = page.locator('section[aria-label="Files"]');
+  await openTab(page, scenario, "files");
+  await page.getByRole("treeitem", { name: imageFileName }).click();
+  const image = filesPanel.getByRole("img", {
+    name: `Preview ${imageFileName}`,
+  });
+  await image.waitFor();
+  const metrics = await image.evaluate((element) => {
+    const image = element;
+    const rect = image.getBoundingClientRect();
+    const style = window.getComputedStyle(image);
+    return {
+      complete: image.complete,
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      width: rect.width,
+      height: rect.height,
+      display: style.display,
+      visibility: style.visibility,
+    };
+  });
+  if (
+    !metrics.complete ||
+    metrics.naturalWidth !== 1 ||
+    metrics.naturalHeight !== 1 ||
+    metrics.width < 80 ||
+    metrics.height < 80 ||
+    metrics.display === "none" ||
+    metrics.visibility === "hidden"
+  ) {
+    throw new Error(
+      `1x1 image preview is not discoverable: ${JSON.stringify(metrics)}`,
+    );
+  }
+  await assertNoVisibleButton(page, "Edit");
+  await assertNoVisibleButton(page, "Save file");
+  await filesPanel
+    .getByRole("button", { name: "Fullscreen preview", exact: true })
+    .click();
+  await waitFor(
+    async () =>
+      (await page.locator(".editor-placeholder.is-fullscreen").count()) > 0,
+    "image preview to enter fullscreen",
+  );
+  await page.keyboard.press("Escape");
+  await waitFor(
+    async () =>
+      (await page.locator(".editor-placeholder.is-fullscreen").count()) === 0,
+    "image preview to exit fullscreen",
+  );
+}
+
+async function waitForFileEditorMode(page, fileName) {
+  const filesPanel = page.locator('section[aria-label="Files"]');
+  await filesPanel
+    .locator(".editor-header h3", { hasText: fileName })
+    .waitFor();
+  await filesPanel
+    .getByRole("button", { name: "Cancel", exact: true })
+    .waitFor();
+  await filesPanel.getByRole("button", { name: "Save file" }).waitFor();
+  await waitFor(
+    async () =>
+      (await filesPanel.locator(".monaco-file-editor").count()) > 0 &&
+      (await filesPanel.locator(".monaco-file-editor").last().isVisible()),
+    `file editor for ${fileName}`,
+  );
 }
 
 async function waitForGitStatus(gitContext, predicate) {
@@ -1358,14 +1642,46 @@ async function openTab(page, scenario, tab) {
 }
 
 async function replaceEditorContent(page, fileName, value) {
-  const editor = page.getByLabel(`Edit ${fileName}`, { exact: true });
-  await waitFor(async () => (await editor.count()) > 0, `editor ${fileName}`);
+  await waitForFileEditorMode(page, fileName);
   await page
     .locator(".monaco-file-editor")
-    .click({ position: { x: 24, y: 24 } });
+    .last()
+    .click({
+      position: { x: 24, y: 24 },
+    });
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+A`);
   await page.keyboard.insertText(value);
+}
+
+async function expectSaveButtonDisabled(page) {
+  const saveButton = page.getByRole("button", { name: "Save file" });
+  await waitFor(
+    async () =>
+      (await saveButton.count()) > 0 && (await saveButton.isDisabled()),
+    "Save file button to be disabled",
+  );
+}
+
+async function assertNoVisibleButton(page, name) {
+  await waitFor(
+    async () => {
+      const buttons = page.getByRole("button", { name, exact: true });
+      const count = await buttons.count();
+      for (let index = 0; index < count; index += 1) {
+        if (
+          await buttons
+            .nth(index)
+            .isVisible()
+            .catch(() => false)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    },
+    `button ${JSON.stringify(name)} to be hidden`,
+  );
 }
 
 async function ensureRunnerOnline() {
@@ -1456,9 +1772,25 @@ async function createFakeCodexCommand() {
   return script;
 }
 
-async function prepareProjectDirectory(projectDir, fileName, initialValue) {
+async function prepareProjectDirectory(projectDir, values) {
   await mkdir(projectDir, { recursive: true });
-  await writeFile(resolve(projectDir, fileName), `${initialValue}\n`, "utf8");
+  await writeFile(
+    resolve(projectDir, values.fileName),
+    `${values.initialValue}\n`,
+    "utf8",
+  );
+  await writeFile(
+    resolve(projectDir, values.markdownFileName),
+    values.markdownValue,
+    "utf8",
+  );
+  await writeFile(
+    resolve(projectDir, values.imageFileName),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
   await runCommand("git", ["init"], { cwd: projectDir });
   await runCommand("git", ["config", "user.email", "blackbox@example.test"], {
     cwd: projectDir,
@@ -1466,7 +1798,13 @@ async function prepareProjectDirectory(projectDir, fileName, initialValue) {
   await runCommand("git", ["config", "user.name", "RoamCli Blackbox"], {
     cwd: projectDir,
   });
-  await runCommand("git", ["add", fileName], { cwd: projectDir });
+  await runCommand(
+    "git",
+    ["add", values.fileName, values.markdownFileName, values.imageFileName],
+    {
+      cwd: projectDir,
+    },
+  );
   await runCommand("git", ["commit", "-m", "blackbox initial file"], {
     cwd: projectDir,
   });
@@ -1537,6 +1875,13 @@ async function hasVisibleText(page, text) {
   } catch {
     return false;
   }
+}
+
+async function assertNoVisibleText(page, text) {
+  await waitFor(
+    async () => !(await hasVisibleText(page, text)),
+    `visible text ${JSON.stringify(text)} to be hidden`,
+  );
 }
 
 async function expectFileContent(sessionId, path, expected) {

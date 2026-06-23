@@ -11,13 +11,16 @@ import type {
   ApiChangePassword,
   Project,
   Session,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
+  Archive,
   ArrowLeft,
   Bell,
   ChevronRight,
   Copy,
   FolderPlus,
+  FolderOpen,
   KeyRound,
   LogOut,
   Plus,
@@ -56,6 +59,12 @@ type AppShellProps = {
 type SettingsView = "home" | "account" | "change-password" | "web-push";
 type AccountRefreshState = "idle" | "loading" | "ready" | "error";
 
+type SessionArchiveDialogState = {
+  session: Session;
+  error?: string;
+  submitting?: "keep" | "remove";
+};
+
 export function AppShell({ controller }: AppShellProps) {
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
   const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
@@ -67,6 +76,8 @@ export function AppShell({ controller }: AppShellProps) {
     useState<AccountRefreshState>("idle");
   const [settingsAccountRefreshKey, setSettingsAccountRefreshKey] = useState(0);
   const settingsAccountRefreshPendingRef = useRef(false);
+  const [archiveDialog, setArchiveDialog] =
+    useState<SessionArchiveDialogState | null>(null);
   const {
     state,
     authView,
@@ -89,6 +100,7 @@ export function AppShell({ controller }: AppShellProps) {
     runnerSessions,
     selectedSession,
     sessionMessages,
+    sessionActivities,
     sessionApprovals,
     sessionHunks,
     sessionFiles,
@@ -105,8 +117,11 @@ export function AppShell({ controller }: AppShellProps) {
     resolveHunk,
     applyAcceptedPatch,
     sendControl,
-    deleteSelectedSession,
+    archiveSession,
     selectFile,
+    openFileForEdit,
+    startSelectedFileEdit,
+    cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
@@ -134,6 +149,43 @@ export function AppShell({ controller }: AppShellProps) {
     settingsAccountRefreshPendingRef.current = true;
     setSettingsAccountRefreshKey((key) => key + 1);
   }, []);
+
+  const openArchiveSessionDialog = useCallback(() => {
+    if (selectedSession) {
+      setArchiveDialog({ session: selectedSession });
+    }
+  }, [selectedSession]);
+
+  const closeArchiveSessionDialog = useCallback(() => {
+    setArchiveDialog((current) => (current?.submitting ? current : null));
+  }, []);
+
+  const submitArchiveSession = useCallback(
+    async (worktree: "keep" | "remove") => {
+      if (!archiveDialog) {
+        return;
+      }
+      const { session } = archiveDialog;
+      setArchiveDialog({ session, submitting: worktree });
+      try {
+        const shouldSendWorktreeStrategy =
+          session.executionMode === "managed_worktree" &&
+          !session.worktreeDeletedAt;
+        await archiveSession(
+          session.id,
+          shouldSendWorktreeStrategy ? { worktree } : {},
+        );
+        setArchiveDialog(null);
+      } catch (archiveError: unknown) {
+        setArchiveDialog({
+          session,
+          error: errorMessage(archiveError),
+        });
+      }
+    },
+    [archiveDialog, archiveSession],
+  );
+
   const setActiveTab = useCallback(
     (tab: WorkspaceTab) => {
       dispatch({ type: "activeTabChanged", tab });
@@ -185,6 +237,14 @@ export function AppShell({ controller }: AppShellProps) {
     state.connectionState === "open" && state.loadState !== "error"
       ? Wifi
       : WifiOff;
+  const selectedSessionWorkspaceAvailable =
+    selectedSession !== undefined &&
+    selectedRunner !== undefined &&
+    !(
+      selectedSession.executionMode === "managed_worktree" &&
+      (selectedSession.status === "pending" ||
+        selectedSession.worktreeDeletedAt !== undefined)
+    );
 
   useEffect(() => {
     setMobileSessionModalOpen(false);
@@ -406,10 +466,11 @@ export function AppShell({ controller }: AppShellProps) {
               <ChatPanel
                 session={selectedSession}
                 messages={sessionMessages}
+                activities={sessionActivities}
                 onSend={sendMessage}
                 onControl={sendControl}
                 onRename={renameSelectedSession}
-                onDelete={deleteSelectedSession}
+                onDelete={openArchiveSessionDialog}
                 onCheckStatus={checkSelectedSessionStatus}
                 statusCheckState={sessionStatusCheckState}
                 canSend={canUseSelectedRunner}
@@ -506,11 +567,14 @@ export function AppShell({ controller }: AppShellProps) {
                     selectedPath={state.selectedFilePath}
                     fileContent={state.fileContent}
                     editorContent={state.editorContent}
+                    editMode={state.fileEditMode}
                     contentState={state.fileContentState}
                     saveState={state.fileSaveState}
                     onSelectFile={selectFile}
                     onLoadDirectory={loadSelectedDirectory}
                     onRefreshTree={refreshSelectedFileTree}
+                    onStartEdit={startSelectedFileEdit}
+                    onCancelEdit={cancelSelectedFileEdit}
                     onChangeContent={(content) =>
                       dispatch({ type: "editorContentChanged", content })
                     }
@@ -536,6 +600,8 @@ export function AppShell({ controller }: AppShellProps) {
                     onCommit={commitGitChanges}
                     onRemoteOperation={runGitRemoteOperation}
                     onRemoveWorktree={removeGitWorktree}
+                    canOpenFileForEdit={selectedSessionWorkspaceAvailable}
+                    onOpenFileForEdit={openFileForEdit}
                     onNotify={(tone, title, message) =>
                       dispatch({
                         type: "notificationPushed",
@@ -652,6 +718,14 @@ export function AppShell({ controller }: AppShellProps) {
                 </div>
               )}
             </SidebarModal>
+          ) : null}
+
+          {archiveDialog ? (
+            <SessionArchiveDialog
+              state={archiveDialog}
+              onClose={closeArchiveSessionDialog}
+              onSubmit={submitArchiveSession}
+            />
           ) : null}
         </>
       ) : null}
@@ -799,6 +873,143 @@ function AuthGate({
         )}
       </form>
     </main>
+  );
+}
+
+const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
+  "pending",
+  "running",
+  "waiting_approval",
+]);
+
+function hasActiveRunnerWork(session: Session): boolean {
+  return ACTIVE_RUNNER_STATUSES.has(session.status);
+}
+
+function SessionArchiveDialog({
+  state,
+  onClose,
+  onSubmit,
+}: {
+  state: SessionArchiveDialogState;
+  onClose: () => void;
+  onSubmit: (worktree: "keep" | "remove") => Promise<void>;
+}) {
+  const { session, error, submitting } = state;
+  const canRemoveWorktree =
+    session.executionMode === "managed_worktree" &&
+    !session.worktreeDeletedAt &&
+    !hasActiveRunnerWork(session);
+  const titleId = "session-archive-title";
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (!submitting && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        className="modal-panel session-archive-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <div className="modal-header">
+          <div>
+            <h2 id={titleId}>Archive session</h2>
+            <p className="archive-dialog-subtitle">{session.title}</p>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close archive dialog"
+            onClick={onClose}
+            disabled={Boolean(submitting)}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="archive-dialog-content">
+          {canRemoveWorktree ? (
+            <>
+              <p>
+                This session uses a managed Git worktree. Archiving can remove
+                the worktree from disk while keeping the branch.
+              </p>
+              <code className="archive-dialog-path">
+                {session.executionFolder}
+              </code>
+              <p className="archive-dialog-warning">
+                Removing the worktree discards uncommitted files inside that
+                worktree.
+              </p>
+            </>
+          ) : (
+            <p>
+              This hides the session from active lists. Messages, approvals, and
+              artifacts stay stored.
+            </p>
+          )}
+          {error ? (
+            <div className="archive-dialog-error" role="alert">
+              <strong>
+                {canRemoveWorktree
+                  ? "Worktree cleanup failed."
+                  : "Archive failed."}
+              </strong>
+              <span>{error}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="archive-dialog-actions">
+          {canRemoveWorktree ? (
+            <button
+              className="small-button reject"
+              type="button"
+              onClick={() => void onSubmit("remove")}
+              disabled={Boolean(submitting)}
+            >
+              {submitting === "remove" ? (
+                <RefreshCw size={14} className="animate-spin" />
+              ) : (
+                <Trash2 size={14} />
+              )}
+              <span>{error ? "Retry remove" : "Archive and remove"}</span>
+            </button>
+          ) : null}
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => void onSubmit("keep")}
+            disabled={Boolean(submitting)}
+          >
+            {submitting === "keep" ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : canRemoveWorktree ? (
+              <FolderOpen size={14} />
+            ) : (
+              <Archive size={14} />
+            )}
+            <span>
+              {canRemoveWorktree ? "Archive only" : "Archive session"}
+            </span>
+          </button>
+          <button
+            className="small-button"
+            type="button"
+            onClick={onClose}
+            disabled={Boolean(submitting)}
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

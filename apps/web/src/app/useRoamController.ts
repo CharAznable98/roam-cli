@@ -69,6 +69,10 @@ export type AuthViewState =
   | "login"
   | "authenticated";
 
+export type SessionArchiveOptions = {
+  worktree?: "keep" | "remove";
+};
+
 export function useRoamController() {
   const [state, dispatch] = useReducer(
     appReducer,
@@ -904,26 +908,60 @@ export function useRoamController() {
     }
   };
 
-  const deleteSelectedSession = () => {
-    if (!selectedSession || !apiRef.current) return;
-    if (!window.confirm(`Delete session "${selectedSession.title}"?`)) {
-      return;
+  const archiveSession = async (
+    sessionId: string,
+    options: SessionArchiveOptions = {},
+  ) => {
+    const api = requireApiClient();
+    dispatch({ type: "sessionArchiveStarted", sessionId });
+    try {
+      await api.deleteSession(sessionId, options);
+      dispatch({ type: "sessionDeleted", sessionId });
+    } finally {
+      dispatch({ type: "sessionArchiveFinished", sessionId });
     }
-    const sessionId = selectedSession.id;
-    void apiRef.current
-      .deleteSession(sessionId)
-      .then(() => dispatch({ type: "sessionDeleted", sessionId }))
-      .catch((deleteError: unknown) =>
-        dispatch({
-          type: "errorChanged",
-          message: errorMessage(deleteError),
-        }),
-      );
   };
 
-  const selectFile = (path: string) => {
-    if (!selectedSession || !apiRef.current) return;
-    loadFileContent(selectedSession.id, path);
+  const selectFile = (
+    path: string,
+    options: { edit?: boolean; forceReload?: boolean } = {},
+  ) => {
+    if (!selectedSession || !apiRef.current) return false;
+    const shouldReload =
+      options.forceReload === true ||
+      path !== state.selectedFilePath ||
+      state.fileContent?.path !== path;
+    if (shouldReload && !confirmDiscardSelectedFileChanges(state)) {
+      return false;
+    }
+    if (!shouldReload && path === state.selectedFilePath) {
+      if (options.edit === true && state.fileContent?.path === path) {
+        dispatch({ type: "fileEditStarted" });
+      }
+      return true;
+    }
+    loadFileContent(selectedSession.id, path, options);
+    return true;
+  };
+
+  const openFileForEdit = (path: string) => {
+    if (selectFile(path, { edit: true, forceReload: true })) {
+      dispatch({ type: "activeTabChanged", tab: "files" });
+    }
+  };
+
+  const startSelectedFileEdit = () => {
+    dispatch({ type: "fileEditStarted" });
+  };
+
+  const cancelSelectedFileEdit = () => {
+    if (state.fileSaveState === "loading") {
+      return;
+    }
+    if (!confirmDiscardSelectedFileChanges(state)) {
+      return;
+    }
+    dispatch({ type: "fileEditCancelled" });
   };
 
   const loadSelectedDirectory = (path: string) => {
@@ -945,7 +983,7 @@ export function useRoamController() {
       .saveFileContent(sessionId, path, state.editorContent)
       .then(() => {
         dispatch({ type: "fileSaveSucceeded" });
-        loadFileContent(sessionId, path);
+        loadFileContent(sessionId, path, { edit: state.fileEditMode });
         loadFileTreePath(
           sessionId,
           nearestTreeDirectoryPath(
@@ -963,15 +1001,26 @@ export function useRoamController() {
       );
   };
 
-  const loadFileContent = (sessionId: string, path: string) => {
+  const loadFileContent = (
+    sessionId: string,
+    path: string,
+    options: { edit?: boolean } = {},
+  ) => {
     if (!apiRef.current) return;
-    dispatch({ type: "fileContentLoading", path });
+    dispatch({
+      type: "fileContentLoading",
+      sessionId,
+      path,
+      ...(options.edit === undefined ? {} : { edit: options.edit }),
+    });
     void apiRef.current
       .fetchFileContent(sessionId, path)
       .then((result) => dispatch({ type: "fileContentLoaded", result }))
       .catch((fileError: unknown) =>
         dispatch({
           type: "fileContentFailed",
+          sessionId,
+          path,
           message: errorMessage(fileError),
         }),
       );
@@ -1224,6 +1273,11 @@ export function useRoamController() {
           ),
         )
     : [];
+  const sessionActivities = selectedSession
+    ? state.activities.filter(
+        (activity) => activity.sessionId === selectedSession.id,
+      )
+    : [];
   const sessionApprovals = selectedSession
     ? state.approvals.filter(
         (approval) => approval.sessionId === selectedSession.id,
@@ -1266,6 +1320,7 @@ export function useRoamController() {
     runnerSessions: projectSessions,
     selectedSession,
     sessionMessages,
+    sessionActivities,
     sessionApprovals,
     sessionHunks,
     sessionFiles,
@@ -1283,8 +1338,11 @@ export function useRoamController() {
     resolveHunk,
     applyAcceptedPatch,
     sendControl,
-    deleteSelectedSession,
+    archiveSession,
     selectFile,
+    openFileForEdit,
+    startSelectedFileEdit,
+    cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
@@ -1307,6 +1365,27 @@ export function useRoamController() {
     runGitRemoteOperation,
     removeGitWorktree,
   };
+}
+
+function confirmDiscardSelectedFileChanges(state: AppState): boolean {
+  if (!hasDirtySelectedFileChanges(state)) {
+    return true;
+  }
+  return window.confirm(
+    `Discard unsaved changes in ${state.selectedFilePath}?`,
+  );
+}
+
+function hasDirtySelectedFileChanges(state: AppState): boolean {
+  const loadedContent =
+    state.fileContent?.kind === undefined || state.fileContent?.kind === "text"
+      ? state.fileContent?.content
+      : undefined;
+  return (
+    state.fileEditMode &&
+    loadedContent !== undefined &&
+    state.editorContent !== loadedContent
+  );
 }
 
 function errorMessage(error: unknown): string {

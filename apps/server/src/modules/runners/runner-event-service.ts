@@ -1,4 +1,6 @@
 import {
+  type AgentActivity,
+  type GitJob,
   nowIso,
   type Message,
   type RunnerEvent,
@@ -13,6 +15,8 @@ import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";
 
 export class RunnerEventService {
+  private lastOutputTimestampMs = 0;
+
   constructor(
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
@@ -76,10 +80,20 @@ export class RunnerEventService {
         role: "assistant",
         content: event.content,
         encrypted: event.encrypted,
-        createdAt: nowIso(),
+        createdAt: this.nextOutputTimestamp(),
       };
       this.store.addMessage(message);
       this.hub.broadcast({ type: "message:created", message });
+      return;
+    }
+
+    if (event.type === "agentActivity") {
+      this.addActivity({
+        sessionId: event.sessionId,
+        agent: event.agent,
+        kind: event.kind,
+        label: event.label,
+      });
       return;
     }
 
@@ -87,7 +101,7 @@ export class RunnerEventService {
       this.store.appendAssistantToken(
         event.sessionId,
         event.content,
-        nowIso(),
+        this.nextOutputTimestamp(),
         event.encrypted,
       );
       this.hub.broadcast({
@@ -178,12 +192,20 @@ export class RunnerEventService {
 
     if (event.type === "gitJobResult") {
       this.store.upsertGitJob(event.job);
+      this.applyGitJobSessionEffects(event.job);
       this.rpc.resolveRunnerResponse(event.job);
       this.hub.broadcast({ type: "git:job", job: event.job });
       return;
     }
 
     if (event.type === "approvalRequested") {
+      const session = this.store.getSession(event.approval.sessionId);
+      this.addActivity({
+        sessionId: event.approval.sessionId,
+        agent: session?.agent ?? "unknown",
+        kind: "approval",
+        label: "Waiting for approval",
+      });
       this.store.upsertApproval(event.approval);
       if (!this.isTerminalSession(event.approval.sessionId)) {
         const session = this.store.updateSessionStatus(
@@ -214,6 +236,49 @@ export class RunnerEventService {
     this.handleErrorEvent(event);
   }
 
+  private applyGitJobSessionEffects(job: GitJob): void {
+    if (
+      job.status !== "succeeded" ||
+      job.operation !== "remove_worktree" ||
+      job.contextKind !== "session_worktree" ||
+      !job.sessionId
+    ) {
+      return;
+    }
+    const session = this.store.getSession(job.sessionId);
+    if (!session || session.worktreeDeletedAt) {
+      return;
+    }
+    const updated = this.store.markSessionWorktreeDeleted(
+      session.id,
+      job.finishedAt ?? nowIso(),
+    );
+    if (updated) {
+      this.hub.broadcast({ type: "session:updated", session: updated });
+    }
+  }
+
+  private addActivity(
+    input: Pick<AgentActivity, "sessionId" | "agent" | "kind" | "label">,
+  ): AgentActivity {
+    const activity = this.store.addAgentActivity({
+      id: newId("activity"),
+      sessionId: input.sessionId,
+      agent: input.agent,
+      kind: input.kind,
+      label: input.label,
+      createdAt: this.nextOutputTimestamp(),
+    });
+    this.hub.broadcast({ type: "activity:created", activity });
+    return activity;
+  }
+
+  private nextOutputTimestamp(): string {
+    const next = Math.max(Date.now(), this.lastOutputTimestampMs + 1);
+    this.lastOutputTimestampMs = next;
+    return new Date(next).toISOString();
+  }
+
   private handleErrorEvent(
     event: Extract<RunnerEvent, { type: "error" }>,
   ): void {
@@ -232,6 +297,7 @@ export class RunnerEventService {
     this.hub.broadcast({
       type: "error",
       message: event.message,
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
       ...(event.code ? { code: event.code } : {}),
     });
     if (event.sessionId && event.code === "SESSION_NOT_RUNNING") {

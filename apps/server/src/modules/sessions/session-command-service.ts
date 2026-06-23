@@ -3,6 +3,8 @@ import {
   type AttachmentWriteResult,
   type ApiCreateMessage,
   DEFAULT_MAX_IMAGE_BYTES,
+  type GitContextRef,
+  type GitJob,
   nowIso,
   type ApiCreateSession,
   type ApiUpdateSession,
@@ -26,6 +28,7 @@ import type {
   StoredMessageAttachment,
 } from "../../infra/sqlite-store.js";
 import type { ApprovalService } from "../approvals/approval-service.js";
+import { GitJobRunner } from "../git/git-job-runner.js";
 import { fail, ok, type ServiceResult } from "../result.js";
 import {
   createSessionRecord,
@@ -35,14 +38,24 @@ import {
   runnerSupportsAgent,
 } from "./session-records.js";
 
+export type DeleteSessionOptions = {
+  worktree?: "keep" | "remove";
+};
+
 export class SessionCommandService {
+  private readonly gitJobs: GitJobRunner;
+
   constructor(
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
     private readonly approvals: ApprovalService,
     private readonly rpc: RunnerRpcClient,
     private readonly runnerRpcTimeoutMs: number,
-  ) {}
+    gitJobs?: GitJobRunner,
+  ) {
+    this.gitJobs =
+      gitJobs ?? new GitJobRunner(store, hub, rpc, runnerRpcTimeoutMs);
+  }
 
   async createSession(
     input: ApiCreateSession,
@@ -143,10 +156,29 @@ export class SessionCommandService {
     return ok({ session: this.store.getSession(session.id) ?? session });
   }
 
-  deleteSession(sessionId: string): ServiceResult<void> {
+  async deleteSession(
+    sessionId: string,
+    options: DeleteSessionOptions = {},
+  ): Promise<ServiceResult<void>> {
     const session = this.store.getSession(sessionId);
     if (!session) {
       return fail("session_not_found");
+    }
+
+    const archivedAt = nowIso();
+    const shouldRemoveWorktree =
+      options.worktree === "remove" &&
+      session.executionMode === "managed_worktree";
+    if (
+      shouldRemoveWorktree &&
+      !session.worktreeDeletedAt &&
+      hasActiveRunnerWork(session)
+    ) {
+      return fail("worktree_remove_failed", {
+        message:
+          "Stop the session before archiving and removing its worktree.",
+        code: "session_active",
+      });
     }
 
     this.hub.sendToRunner(session.runnerId, {
@@ -154,11 +186,74 @@ export class SessionCommandService {
       sessionId: session.id,
       signal: "stop",
     });
-    const archivedAt = nowIso();
+    if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
+      const cleanup = await this.removeSessionWorktree(session);
+      if (!cleanup.ok) {
+        return cleanup;
+      }
+    }
     this.deleteRunnerAttachments(session, archivedAt);
-    const archived = this.store.archiveSession(session.id, archivedAt);
+    let archived = this.store.archiveSession(session.id, archivedAt);
+    if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
+      archived =
+        this.store.markSessionWorktreeDeleted(session.id, archivedAt) ??
+        archived;
+    }
     if (archived) {
       this.hub.broadcast({ type: "session:updated", session: archived });
+    }
+    return ok(undefined);
+  }
+
+  private async removeSessionWorktree(
+    session: Session,
+  ): Promise<ServiceResult<void>> {
+    const project = this.store.getProject(session.projectId);
+    if (!project || project.archivedAt) {
+      return fail("project_not_found");
+    }
+    const context = {
+      kind: "session_worktree",
+      sessionId: session.id,
+    } satisfies GitContextRef;
+    let result: ServiceResult<{ job: GitJob }>;
+    try {
+      result = await this.gitJobs.run(
+        {
+          projectId: project.id,
+          runnerId: session.runnerId,
+          cwd: session.executionFolder,
+          context,
+          session,
+        },
+        "remove_worktree",
+        (resolved, requestId) => ({
+          type: "gitRemoveWorktree",
+          requestId,
+          projectId: resolved.projectId,
+          context: resolved.context,
+          cwd: resolved.cwd,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof RunnerRpcError) {
+        return fail("worktree_remove_failed", {
+          message: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
+    if (!result.ok) {
+      return result;
+    }
+    if (result.value.job.status !== "succeeded") {
+      return fail("worktree_remove_failed", {
+        message: result.value.job.errorSummary ?? "Remove worktree failed",
+        ...(result.value.job.errorCode
+          ? { code: result.value.job.errorCode }
+          : {}),
+      });
     }
     return ok(undefined);
   }
@@ -500,10 +595,9 @@ export class SessionCommandService {
       "pending",
       restartedAt,
     );
-    const restarted =
-      pending?.worktreeDeletedAt
-        ? this.store.clearSessionWorktreeDeleted(session.id, restartedAt)
-        : pending;
+    const restarted = pending?.worktreeDeletedAt
+      ? this.store.clearSessionWorktreeDeleted(session.id, restartedAt)
+      : pending;
     if (pending) {
       this.hub.broadcast({
         type: "session:updated",
@@ -512,8 +606,7 @@ export class SessionCommandService {
     }
     this.hub.sendToRunner(session.runnerId, {
       type: "startSession",
-      session:
-        restarted ??
+      session: restarted ??
         pending ?? {
           ...session,
           status: "pending",

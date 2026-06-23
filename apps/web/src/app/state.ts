@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   Approval,
   Artifact,
   FileContentResult,
@@ -47,6 +48,7 @@ export interface AppState {
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];
+  activities: AgentActivity[];
   approvals: Approval[];
   artifacts: Artifact[];
   messageAttachments: MessageAttachment[];
@@ -59,6 +61,7 @@ export interface AppState {
   selectedFilePath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
+  fileEditMode: boolean;
   fileContentState: AsyncState;
   fileSaveState: AsyncState;
   patchApplyState: AsyncState;
@@ -66,6 +69,7 @@ export interface AppState {
   selectedRunnerId: string;
   selectedSessionId: string;
   mobileNewSessionOpen: boolean;
+  archivingSessionIds: Record<string, true>;
   loadState: LoadState;
   connectionState: ConnectionState;
   notifications: AppNotification[];
@@ -77,6 +81,7 @@ export const initialAppState: AppState = {
   runners: [],
   sessions: [],
   messages: [],
+  activities: [],
   approvals: [],
   artifacts: [],
   messageAttachments: [],
@@ -89,6 +94,7 @@ export const initialAppState: AppState = {
   selectedFilePath: "",
   fileContent: undefined,
   editorContent: "",
+  fileEditMode: false,
   fileContentState: "idle",
   fileSaveState: "idle",
   patchApplyState: "idle",
@@ -96,6 +102,7 @@ export const initialAppState: AppState = {
   selectedRunnerId: "",
   selectedSessionId: "",
   mobileNewSessionOpen: false,
+  archivingSessionIds: {},
   loadState: "loading",
   connectionState: "closed",
   notifications: [],
@@ -114,6 +121,8 @@ export type AppAction =
   | { type: "runnerSelected"; runnerId: string; nextSessionId: string }
   | { type: "sessionSelected"; sessionId: string }
   | { type: "sessionCreated"; session: Session }
+  | { type: "sessionArchiveStarted"; sessionId: string }
+  | { type: "sessionArchiveFinished"; sessionId: string }
   | { type: "sessionDeleted"; sessionId: string }
   | { type: "sessionWorkspaceCleared" }
   | {
@@ -162,10 +171,22 @@ export type AppAction =
       message: string;
       requestId?: string;
     }
-  | { type: "fileContentLoading"; path: string }
+  | {
+      type: "fileContentLoading";
+      sessionId: string;
+      path: string;
+      edit?: boolean;
+    }
   | { type: "fileContentLoaded"; result: FileContentResult }
-  | { type: "fileContentFailed"; message: string }
+  | {
+      type: "fileContentFailed";
+      sessionId: string;
+      path: string;
+      message: string;
+    }
   | { type: "editorContentChanged"; content: string }
+  | { type: "fileEditStarted" }
+  | { type: "fileEditCancelled" }
   | { type: "fileSaveStarted" }
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
@@ -213,18 +234,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
         activeProjects,
       );
-      const selectedProjectId =
-        cachedProject
-          ? cachedProject.id
-          : defaultSelection.selectedProjectId;
-      const selectedSessionId =
-        cachedProject
-          ? (cachedSession?.id ??
-            activeSessions.find(
-              (session) => session.projectId === cachedProject.id,
-            )?.id ??
-            "")
-          : defaultSelection.selectedSessionId;
+      const selectedProjectId = cachedProject
+        ? cachedProject.id
+        : defaultSelection.selectedProjectId;
+      const selectedSessionId = cachedProject
+        ? (cachedSession?.id ??
+          activeSessions.find(
+            (session) => session.projectId === cachedProject.id,
+          )?.id ??
+          "")
+        : defaultSelection.selectedSessionId;
       const selectedProject = action.remote.projects.find(
         (project) => project.id === selectedProjectId,
       );
@@ -244,6 +263,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         runners: action.remote.runners,
         sessions: action.remote.sessions,
         messages: action.remote.messages,
+        activities: action.remote.activities ?? [],
         messageAttachments: action.remote.messageAttachments ?? [],
         approvals: action.remote.approvals,
         artifacts: action.remote.artifacts,
@@ -305,6 +325,22 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         activeTab: "chat",
         mobileNewSessionOpen: false,
       };
+    case "sessionArchiveStarted":
+      return {
+        ...state,
+        archivingSessionIds: {
+          ...state.archivingSessionIds,
+          [action.sessionId]: true,
+        },
+      };
+    case "sessionArchiveFinished":
+      return {
+        ...state,
+        archivingSessionIds: omitKey(
+          state.archivingSessionIds,
+          action.sessionId,
+        ),
+      };
     case "sessionDeleted":
       return removeSessionState(state, action.sessionId);
     case "sessionWorkspaceCleared":
@@ -313,6 +349,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: "",
         fileContent: undefined,
         editorContent: "",
+        fileEditMode: false,
         fileContentState: "idle",
         fileSaveState: "idle",
       };
@@ -325,6 +362,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
         fileContent: action.resetSelection ? undefined : state.fileContent,
         editorContent: action.resetSelection ? "" : state.editorContent,
+        fileEditMode: action.resetSelection ? false : state.fileEditMode,
         fileContentState: action.resetSelection
           ? "idle"
           : state.fileContentState,
@@ -401,6 +439,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
         fileContent: action.resetSelection ? undefined : state.fileContent,
         editorContent: action.resetSelection ? "" : state.editorContent,
+        fileEditMode: action.resetSelection ? false : state.fileEditMode,
         fileContentState: action.resetSelection
           ? "idle"
           : state.fileContentState,
@@ -516,6 +555,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.path,
         fileContent: undefined,
         editorContent: "",
+        fileEditMode: action.edit === true,
         fileContentState: "loading",
         fileSaveState: "idle",
       };
@@ -525,22 +565,39 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ? {
             ...state,
             fileContent: action.result,
-            editorContent:
-              action.result.kind === undefined || action.result.kind === "text"
-                ? action.result.content
-                : "",
+            editorContent: textFileContent(action.result) ?? "",
+            fileEditMode:
+              state.fileEditMode && isEditableFileContent(action.result),
             fileContentState: "ready",
           }
         : state;
     case "fileContentFailed":
+      if (
+        action.sessionId !== state.selectedSessionId ||
+        action.path !== state.selectedFilePath ||
+        state.fileContentState !== "loading"
+      ) {
+        return state;
+      }
       return pushNotification(
-        { ...state, fileContentState: "error" },
+        { ...state, fileEditMode: false, fileContentState: "error" },
         "error",
         "File content request failed",
         action.message,
       );
     case "editorContentChanged":
       return { ...state, editorContent: action.content };
+    case "fileEditStarted":
+      return { ...state, fileEditMode: true };
+    case "fileEditCancelled":
+      return {
+        ...state,
+        editorContent: state.fileContent
+          ? (textFileContent(state.fileContent) ?? "")
+          : state.editorContent,
+        fileEditMode: false,
+        fileSaveState: "idle",
+      };
     case "fileSaveStarted":
       return { ...state, fileSaveState: "loading" };
     case "fileSaveSucceeded":
@@ -597,6 +654,10 @@ function mergeSessionDetailState(
     ...state,
     sessions: upsertFreshSession(state.sessions, detail.session),
     messages: mergeDetailMessages(state.messages, detail.messages),
+    activities: mergeDetailActivities(
+      state.activities,
+      detail.activities ?? [],
+    ),
     messageAttachments: attachments.reduce(
       (items, attachment) => upsertBy(items, attachment, (item) => item.id),
       state.messageAttachments,
@@ -675,6 +736,29 @@ function mergeDetailMessages(
       preserveLongerStreamContent(reconciledMessages, reconciledMessage),
     );
   }, currentMessages);
+}
+
+function mergeDetailActivities(
+  currentActivities: AgentActivity[],
+  detailActivities: AgentActivity[],
+): AgentActivity[] {
+  return detailActivities.reduce(
+    (activities, activity) => upsertAgentActivity(activities, activity),
+    currentActivities,
+  );
+}
+
+function upsertAgentActivity(
+  activities: AgentActivity[],
+  next: AgentActivity,
+): AgentActivity[] {
+  const exists = activities.some((activity) => activity.id === next.id);
+  const merged = exists
+    ? activities.map((activity) => (activity.id === next.id ? next : activity))
+    : [...activities, next];
+  return merged.sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  );
 }
 
 function reconcileStreamMessage(
@@ -853,6 +937,12 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       messages: upsertMessage(state.messages, event.message),
     };
   }
+  if (event.type === "activity:created") {
+    return {
+      ...state,
+      activities: upsertAgentActivity(state.activities, event.activity),
+    };
+  }
   if (event.type === "message_attachment:created") {
     return {
       ...state,
@@ -889,12 +979,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     const path = event.result.root.path;
     const requestId = fileTreeRequestGeneration(event.result);
     if (
-      !shouldApplyFileTreeEvent(
-        state,
-        event.result.sessionId,
-        path,
-        requestId,
-      )
+      !shouldApplyFileTreeEvent(state, event.result.sessionId, path, requestId)
     ) {
       return state;
     }
@@ -920,10 +1005,8 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       fileContent: event.result,
-      editorContent:
-        event.result.kind === undefined || event.result.kind === "text"
-          ? event.result.content
-          : "",
+      editorContent: textFileContent(event.result) ?? "",
+      fileEditMode: state.fileEditMode && isEditableFileContent(event.result),
       fileContentState: "ready",
     };
   }
@@ -945,6 +1028,14 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
         );
   }
   if (event.type === "error") {
+    if (
+      event.sessionId &&
+      (!state.sessions.some((session) => session.id === event.sessionId) ||
+        (event.code === "SESSION_NOT_RUNNING" &&
+          state.archivingSessionIds[event.sessionId]))
+    ) {
+      return state;
+    }
     return pushNotification(
       state,
       "error",
@@ -987,7 +1078,9 @@ function selectDefaultProjectSession(
   const onlineRunnerIds = new Set(
     state.runners.map((runner) => runner.runnerId),
   );
-  const activeSessions = state.sessions.filter((session) => !session.archivedAt);
+  const activeSessions = state.sessions.filter(
+    (session) => !session.archivedAt,
+  );
   const selectedProjectId =
     projects.find((project) => onlineRunnerIds.has(project.runnerId))?.id ??
     projects[0]?.id ??
@@ -1007,6 +1100,9 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     messages: state.messages.filter(
       (message) => message.sessionId !== sessionId,
     ),
+    activities: state.activities.filter(
+      (activity) => activity.sessionId !== sessionId,
+    ),
     messageAttachments: state.messageAttachments.filter(
       (attachment) => attachment.sessionId !== sessionId,
     ),
@@ -1021,6 +1117,7 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     fileTreeState: omitKey(state.fileTreeState, sessionId),
     fileTreePathState: omitKey(state.fileTreePathState, sessionId),
     fileTreeRequestIds: omitKey(state.fileTreeRequestIds, sessionId),
+    archivingSessionIds: omitKey(state.archivingSessionIds, sessionId),
   };
 }
 
@@ -1336,4 +1433,14 @@ function notificationKey(
   message: string,
 ): string {
   return `${tone}\n${title}\n${message}`;
+}
+
+function textFileContent(content: FileContentResult): string | undefined {
+  return content.kind === undefined || content.kind === "text"
+    ? content.content
+    : undefined;
+}
+
+function isEditableFileContent(content: FileContentResult): boolean {
+  return textFileContent(content) !== undefined && !content.truncated;
 }

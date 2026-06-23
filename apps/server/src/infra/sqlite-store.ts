@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  AgentActivity,
+  AgentActivityKind,
   AgentKind,
   Approval,
   ApprovalKind,
@@ -58,6 +60,15 @@ interface MessageRow {
   role: ChatRole;
   content: string;
   encrypted: number;
+  created_at: string;
+}
+
+interface AgentActivityRow {
+  id: string;
+  session_id: string;
+  agent: AgentKind;
+  kind: AgentActivityKind;
+  label: string;
   created_at: string;
 }
 
@@ -584,6 +595,32 @@ export class ServerStore {
     return rows.map(toMessage);
   }
 
+  addAgentActivity(activity: AgentActivity): AgentActivity {
+    this.db
+      .prepare(
+        `INSERT INTO agent_activities (id, session_id, agent, kind, label, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        activity.id,
+        activity.sessionId,
+        activity.agent,
+        activity.kind,
+        activity.label,
+        activity.createdAt,
+      );
+    return activity;
+  }
+
+  listAgentActivities(sessionId: string): AgentActivity[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM agent_activities WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(sessionId) as unknown as AgentActivityRow[];
+    return rows.map(toAgentActivity);
+  }
+
   addMessageAttachments(
     attachments: readonly StoredMessageAttachment[],
   ): StoredMessageAttachment[] {
@@ -860,6 +897,16 @@ export class ServerStore {
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS agent_activities (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS message_attachments (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -982,7 +1029,6 @@ export class ServerStore {
       this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
-
 }
 
 function toProject(row: ProjectRow): Project {
@@ -1029,6 +1075,17 @@ function toMessage(row: MessageRow): Message {
     role: row.role,
     content: row.content,
     encrypted: Boolean(row.encrypted),
+    createdAt: row.created_at,
+  };
+}
+
+function toAgentActivity(row: AgentActivityRow): AgentActivity {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    agent: row.agent,
+    kind: row.kind,
+    label: row.label,
     createdAt: row.created_at,
   };
 }

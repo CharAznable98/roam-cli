@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   ImageAttachmentUpload,
   MessageAttachment,
   RunnerCapability,
@@ -29,7 +30,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { getConversationDisplayItems, type UiMessage } from "./model";
+import {
+  getConversationDisplayItems,
+  type ConversationOutputItem,
+  type UiMessage,
+} from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
 import { MarkdownMessage } from "./MarkdownMessage";
 import type {
@@ -53,6 +58,7 @@ const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 type ChatPanelProps = {
   session: Session;
   messages: UiMessage[];
+  activities?: AgentActivity[];
   onSend: (
     content: string,
     attachments: ImageAttachmentUpload[],
@@ -78,6 +84,7 @@ type ChatPanelProps = {
 export function ChatPanel({
   session,
   messages,
+  activities = [],
   onSend,
   onControl,
   onRename,
@@ -113,10 +120,13 @@ export function ChatPanel({
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
-  const conversationLayoutKey = `${session.status}|${messageScrollKey}`;
+  const activityScrollKey = activities
+    .map((activity) => `${activity.id}:${activity.label}`)
+    .join("|");
+  const conversationLayoutKey = `${session.status}|${messageScrollKey}|${activityScrollKey}`;
   const displayItems = useMemo(
-    () => getConversationDisplayItems(messages, session.status),
-    [messages, session.status],
+    () => getConversationDisplayItems(messages, activities, session.status),
+    [messages, activities, session.status],
   );
   const fileLinkContext = useMemo<MarkdownFileLinkContext>(
     () => ({
@@ -453,7 +463,7 @@ export function ChatPanel({
                 }}
               >
                 <Trash2 size={17} />
-                <span className="session-action-title">Delete</span>
+                <span className="session-action-title">Archive</span>
               </button>
             </div>
           ) : null}
@@ -557,7 +567,7 @@ export function ChatPanel({
             </span>
           </div>
         ) : null}
-        {messages.length === 0 ? (
+        {messages.length === 0 && activities.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.
           </div>
@@ -566,10 +576,12 @@ export function ChatPanel({
             item.type === "intermediateGroup" ? (
               <IntermediateOutputGroup
                 key={item.id}
-                messages={item.messages}
+                items={item.items}
                 fileLinkContext={fileLinkContext}
                 onOpenFileLink={onOpenFileLink}
               />
+            ) : item.type === "activityGroup" ? (
+              <AgentActivityGroup key={item.id} group={item} />
             ) : (
               <MessageBubble
                 key={item.id}
@@ -777,11 +789,11 @@ function DraftImageStrip({
 }
 
 function IntermediateOutputGroup({
-  messages,
+  items,
   fileLinkContext,
   onOpenFileLink,
 }: {
-  messages: UiMessage[];
+  items: ConversationOutputItem[];
   fileLinkContext: MarkdownFileLinkContext;
   onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
 }) {
@@ -810,19 +822,82 @@ function IntermediateOutputGroup({
     >
       <summary>
         <ChevronDown size={16} />
-        Intermediate output ({messages.length})
+        Intermediate output ({items.length})
       </summary>
       <div className="intermediate-group-list">
-        {messages.map((message) => (
-          <IntermediateMessage
-            key={message.id}
-            message={message}
-            fileLinkContext={fileLinkContext}
-            onOpenFileLink={onOpenFileLink}
-          />
-        ))}
+        {items.map((item) =>
+          item.type === "activityGroup" ? (
+            <AgentActivityGroup key={item.id} group={item} nested />
+          ) : (
+            <IntermediateMessage
+              key={item.id}
+              message={item.message}
+              fileLinkContext={fileLinkContext}
+              onOpenFileLink={onOpenFileLink}
+            />
+          ),
+        )}
       </div>
     </details>
+  );
+}
+
+function AgentActivityGroup({
+  group,
+  nested = false,
+}: {
+  group: Extract<ConversationOutputItem, { type: "activityGroup" }>;
+  nested?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const latest = group.activities.at(-1);
+  const stepCountLabel = `${group.activities.length} ${group.activities.length === 1 ? "step" : "steps"}`;
+  const title =
+    group.latest && latest
+      ? latest.label
+      : `Activity (${group.activities.length})`;
+  const buttonLabel =
+    group.latest && latest ? `${title} · ${stepCountLabel}` : title;
+
+  useEffect(() => {
+    if (!group.latest) {
+      setOpen(false);
+    }
+  }, [group.latest]);
+
+  return (
+    <div
+      className={`collapsible-message activity-group${nested ? " nested" : ""}${group.latest ? " latest" : ""}${open ? " is-open" : ""}`}
+    >
+      <button
+        className="activity-group-trigger"
+        type="button"
+        aria-label={buttonLabel}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <LoaderCircle
+          size={15}
+          className={group.latest ? "animate-spin" : undefined}
+        />
+        <span className="activity-group-title">{title}</span>
+        {group.latest && latest ? (
+          <span className="activity-group-count" aria-hidden="true">
+            · {stepCountLabel}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <ol className="activity-list">
+          {group.activities.map((activity) => (
+            <li key={activity.id}>
+              <span className="activity-dot" aria-hidden="true" />
+              <span className="activity-label">{activity.label}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
   );
 }
 

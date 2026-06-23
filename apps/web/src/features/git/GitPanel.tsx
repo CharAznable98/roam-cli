@@ -30,7 +30,10 @@ import {
   GitPullRequest,
   History,
   List,
+  Maximize2,
+  Minimize2,
   MoreHorizontal,
+  Pencil,
   RefreshCw,
   RotateCcw,
   Trash2,
@@ -81,6 +84,8 @@ type GitPanelProps = {
   onCommit: (input: ApiGitCommit) => Promise<GitJob>;
   onRemoteOperation: (input: ApiGitRemoteOperation) => Promise<GitJob>;
   onRemoveWorktree: (input: ApiGitRemoveWorktree) => Promise<GitJob>;
+  canOpenFileForEdit: boolean;
+  onOpenFileForEdit: (path: string) => void;
   onNotify: Notify;
 };
 
@@ -101,6 +106,8 @@ export function GitPanel({
   onCommit,
   onRemoteOperation,
   onRemoveWorktree,
+  canOpenFileForEdit,
+  onOpenFileForEdit,
   onNotify,
 }: GitPanelProps) {
   const defaultContextKey = defaultContext ? contextKey(defaultContext) : "";
@@ -158,6 +165,9 @@ export function GitPanel({
   const selectedContextIdentity = selectedContext
     ? contextKey(selectedContext)
     : "";
+  const selectedContextMatchesDefault =
+    defaultContext !== undefined &&
+    selectedContextIdentity === defaultContextKey;
   const status = isRepositoryStatus(statusResult) ? statusResult : undefined;
   const nonGitStatus =
     statusResult?.kind === "not_git_repository" ? statusResult : undefined;
@@ -174,7 +184,10 @@ export function GitPanel({
   );
   const selectedMode = selectedChange?.staged ? "staged" : "working_tree";
   const diffTarget =
-    selectedContext && activeTab === "history" && selectedCommit && selectedCommitFile
+    selectedContext &&
+    activeTab === "history" &&
+    selectedCommit &&
+    selectedCommitFile
       ? {
           key: [
             "history",
@@ -229,8 +242,15 @@ export function GitPanel({
   const diffLanguage = showTextDiff
     ? (diff.language ?? "plaintext")
     : "plaintext";
-  const selectedChangeIsStaged = selectedChange?.staged === true;
   const fileActionBusy = jobState === "loading";
+  const canEditSelectedDiff =
+    activeTab === "changes" &&
+    selectedChange !== undefined &&
+    !selectedChange.staged &&
+    selectedChange.status !== "deleted" &&
+    canOpenFileForEdit &&
+    selectedContextMatchesDefault &&
+    showTextDiff;
 
   useLayoutEffect(() => {
     statusContextKeyRef.current = selectedContextIdentity;
@@ -422,7 +442,12 @@ export function GitPanel({
   };
 
   const loadMoreHistory = () => {
-    if (!selectedContext || !status || status.unborn || !historyPage?.nextCursor) {
+    if (
+      !selectedContext ||
+      !status ||
+      status.unborn ||
+      !historyPage?.nextCursor
+    ) {
       return;
     }
     const requestHistoryScope = historyScope;
@@ -591,14 +616,11 @@ export function GitPanel({
         <NonGitState
           message={nonGitStatus.message}
           onInit={() =>
-            void runJob(
-              () => onInitRepository({ context: selectedContext }),
-              {
-                pending: "Repository initialized.",
-                success: "Git repository initialized",
-                failure: "Init repository failed",
-              },
-            )
+            void runJob(() => onInitRepository({ context: selectedContext }), {
+              pending: "Repository initialized.",
+              success: "Git repository initialized",
+              failure: "Init repository failed",
+            })
           }
         />
       ) : null}
@@ -632,8 +654,7 @@ export function GitPanel({
                   }
                   onUnstageAll={(paths) =>
                     void runJob(
-                      () =>
-                        onUnstagePaths({ context: selectedContext, paths }),
+                      () => onUnstagePaths({ context: selectedContext, paths }),
                       {
                         pending: unstagedMessage(paths.length),
                         success: "Files unstaged",
@@ -671,60 +692,73 @@ export function GitPanel({
                 }
                 actions={
                   selectedChange ? (
-                    <ChangeActionMenu
-                      change={selectedChange}
-                      busy={fileActionBusy}
-                      onStage={() =>
-                        void runJob(
-                          () =>
-                            onStagePaths({
-                              context: selectedContext,
-                              paths: gitActionPaths([selectedChange]),
-                            }),
-                          {
-                            pending: stagedMessage(1),
-                            success: "File staged",
-                            failure: "Stage failed",
-                          },
-                        )
-                      }
-                      onUnstage={() =>
-                        void runJob(
-                          () =>
-                            onUnstagePaths({
-                              context: selectedContext,
-                              paths: gitActionPaths([selectedChange]),
-                            }),
-                          {
-                            pending: unstagedMessage(1),
-                            success: "File unstaged",
-                            failure: "Unstage failed",
-                          },
-                        )
-                      }
-                      onDiscard={() => {
-                        if (
-                          window.confirm(
-                            `Discard changes in ${selectedChange.path}?`,
-                          )
-                        ) {
+                    <>
+                      {canEditSelectedDiff ? (
+                        <button
+                          className="small-button"
+                          type="button"
+                          onClick={() => onOpenFileForEdit(selectedChange.path)}
+                        >
+                          <Pencil size={14} />
+                          Edit
+                        </button>
+                      ) : null}
+                      <ChangeActionMenu
+                        change={selectedChange}
+                        busy={fileActionBusy}
+                        onStage={() =>
                           void runJob(
                             () =>
-                              onDiscardPaths({
+                              onStagePaths({
                                 context: selectedContext,
                                 paths: gitActionPaths([selectedChange]),
                               }),
                             {
-                              pending: "Changes discarded.",
-                              success: "Changes discarded",
-                              failure: "Discard failed",
+                              pending: stagedMessage(1),
+                              success: "File staged",
+                              failure: "Stage failed",
                             },
-                          );
+                          )
                         }
-                      }}
-                    />
+                        onUnstage={() =>
+                          void runJob(
+                            () =>
+                              onUnstagePaths({
+                                context: selectedContext,
+                                paths: gitActionPaths([selectedChange]),
+                              }),
+                            {
+                              pending: unstagedMessage(1),
+                              success: "File unstaged",
+                              failure: "Unstage failed",
+                            },
+                          )
+                        }
+                        onDiscard={() => {
+                          if (
+                            window.confirm(
+                              `Discard changes in ${selectedChange.path}?`,
+                            )
+                          ) {
+                            void runJob(
+                              () =>
+                                onDiscardPaths({
+                                  context: selectedContext,
+                                  paths: gitActionPaths([selectedChange]),
+                                }),
+                              {
+                                pending: "Changes discarded.",
+                                success: "Changes discarded",
+                                failure: "Discard failed",
+                              },
+                            );
+                          }
+                        }}
+                      />
+                    </>
                   ) : null
                 }
+                canFullscreen={diffTarget !== undefined}
                 diffState={diffState}
                 diffError={diffError}
                 showTextDiff={showTextDiff}
@@ -762,6 +796,7 @@ export function GitPanel({
                   <DiffPane
                     title={selectedCommitFile?.path ?? "No file selected"}
                     eyebrow="Commit diff"
+                    canFullscreen={diffTarget !== undefined}
                     diffState={diffState}
                     diffError={diffError}
                     showTextDiff={showTextDiff}
@@ -865,7 +900,9 @@ export function GitPanel({
 function GitBranchSummary({ status }: { status: GitStatus }) {
   return (
     <p className="git-branch-summary">
-      <span>{status.branch ?? (status.detached ? "Detached HEAD" : "HEAD")}</span>
+      <span>
+        {status.branch ?? (status.detached ? "Detached HEAD" : "HEAD")}
+      </span>
       {status.upstream ? <span>{status.upstream}</span> : null}
       {status.ahead || status.behind ? (
         <span>
@@ -1183,7 +1220,11 @@ function CommitBox({
           rows={3}
         />
       </label>
-      <button className="primary-action-button" type="submit" disabled={disabled}>
+      <button
+        className="primary-action-button"
+        type="submit"
+        disabled={disabled}
+      >
         <GitCommitHorizontal size={15} />
         Commit staged
       </button>
@@ -1236,6 +1277,7 @@ function DiffPane({
   title,
   eyebrow,
   actions,
+  canFullscreen,
   diffState,
   diffError,
   showTextDiff,
@@ -1250,6 +1292,7 @@ function DiffPane({
   title: string;
   eyebrow: string;
   actions?: ReactNode;
+  canFullscreen: boolean;
   diffState: AsyncState;
   diffError: string;
   showTextDiff: boolean;
@@ -1261,14 +1304,48 @@ function DiffPane({
   language: string;
   compactDiff: boolean;
 }) {
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
+
+  useEffect(() => {
+    setFullscreen(false);
+  }, [title, eyebrow]);
+
   return (
-    <section className="git-diff-pane">
+    <section className={`git-diff-pane ${fullscreen ? "is-fullscreen" : ""}`}>
       <div className="git-diff-header">
         <div className="min-w-0">
           <p className="text-xs uppercase text-ink-500">{eyebrow}</p>
           <h3>{title}</h3>
         </div>
-        {actions ? <div className="git-file-actions">{actions}</div> : null}
+        {actions || canFullscreen ? (
+          <div className="git-file-actions">
+            {actions}
+            {canFullscreen ? (
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={
+                  fullscreen ? "Exit fullscreen diff" : "Fullscreen diff"
+                }
+                title={fullscreen ? "Exit fullscreen diff" : "Fullscreen diff"}
+                onClick={() => setFullscreen((current) => !current)}
+              >
+                {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       {diffState === "loading" ? (
         <div className="empty-state compact">Loading diff...</div>
@@ -1288,7 +1365,13 @@ function DiffPane({
       {editorMounted ? (
         <DiffEditor
           className={`monaco-diff ${showTextDiff ? "" : "is-hidden"}`}
-          height={showTextDiff ? (compactDiff ? "360px" : "100%") : "0px"}
+          height={
+            showTextDiff
+              ? fullscreen || !compactDiff
+                ? "100%"
+                : "360px"
+              : "0px"
+          }
           original={oldContent}
           modified={newContent}
           originalModelPath="roam-git://diff/original"
@@ -1329,9 +1412,7 @@ function HistoryList({
     return <div className="empty-state compact">Loading history...</div>;
   }
   if (state === "error" && !page) {
-    return (
-      <GitErrorPanel title="Git history failed" message={error} compact />
-    );
+    return <GitErrorPanel title="Git history failed" message={error} compact />;
   }
   if (!page || page.commits.length === 0) {
     return <div className="empty-state compact">No commits found.</div>;
@@ -1443,7 +1524,9 @@ function BranchSyncView({
       <section className="git-branch-card">
         <div>
           <span>Current branch</span>
-          <strong>{status.branch ?? (status.detached ? "Detached HEAD" : "HEAD")}</strong>
+          <strong>
+            {status.branch ?? (status.detached ? "Detached HEAD" : "HEAD")}
+          </strong>
         </div>
         <div>
           <span>Upstream</span>
@@ -1482,12 +1565,21 @@ function BranchSyncView({
           <div className="empty-state compact">Loading refs...</div>
         ) : null}
         {branchesState === "error" ? (
-          <GitErrorPanel title="Git branches failed" message={branchesError} compact />
+          <GitErrorPanel
+            title="Git branches failed"
+            message={branchesError}
+            compact
+          />
         ) : null}
         {branches?.branches.map((branch) => (
-          <div className="git-branch-row" key={`${branch.remote}:${branch.name}`}>
+          <div
+            className="git-branch-row"
+            key={`${branch.remote}:${branch.name}`}
+          >
             <span>{branch.name}</span>
-            <small>{branch.remote ? "remote" : branch.current ? "current" : "local"}</small>
+            <small>
+              {branch.remote ? "remote" : branch.current ? "current" : "local"}
+            </small>
           </div>
         ))}
       </section>

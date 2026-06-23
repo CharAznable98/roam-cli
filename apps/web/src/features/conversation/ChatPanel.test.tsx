@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { codeToHtml } from "shiki";
 import type {
+  AgentActivity,
   MessageAttachment,
   RunnerCapability,
   Session,
@@ -148,6 +149,128 @@ describe("ChatPanel", () => {
 
     expect(screen.getByText("Session failed")).toBeInTheDocument();
     expect(screen.getByText(/Check status to refresh/)).toBeInTheDocument();
+  });
+
+  it("renders historical and latest activity groups without message bubbles", () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const assistant: UiMessage = {
+      ...user,
+      id: "message-assistant",
+      role: "assistant",
+      content: "answer",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const activities: AgentActivity[] = [
+      {
+        id: "activity-1",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading apps/web/src/app/useRoamController.ts",
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+      {
+        id: "activity-2",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+        createdAt: "2026-06-05T00:00:03.000Z",
+      },
+    ];
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[user, assistant]}
+        activities={activities}
+        onSend={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Activity (1)")).toBeInTheDocument();
+    expect(screen.getByText("Running tests")).toBeInTheDocument();
+    expect(screen.getByText("· 1 step")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Reading apps/web/src/app/useRoamController.ts"),
+    ).toBeNull();
+    expect(screen.getAllByText("Running tests")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity (1)" }));
+    expect(
+      screen.getByText("Reading apps/web/src/app/useRoamController.ts"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Running tests · 1 step" }),
+    );
+    expect(screen.getAllByText("Running tests")).toHaveLength(2);
+    expect(screen.queryByText("Claude Code task progress:")).toBeNull();
+  });
+
+  it("collapses an expanded latest activity group when it becomes historical", async () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const assistant: UiMessage = {
+      ...user,
+      id: "message-assistant",
+      role: "assistant",
+      content: "answer",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const activities: AgentActivity[] = [
+      {
+        id: "activity-1",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+    ];
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ChatPanel
+        session={{ ...baseSession, status: "running" }}
+        messages={[user]}
+        activities={activities}
+        onSend={onSend}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Running tests · 1 step" }),
+    );
+    expect(screen.getAllByText("Running tests")).toHaveLength(2);
+
+    rerender(
+      <ChatPanel
+        session={{ ...baseSession, status: "completed" }}
+        messages={[user, assistant]}
+        activities={activities}
+        onSend={onSend}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Activity (1)" }),
+      ).toHaveAttribute("aria-expanded", "false"),
+    );
+    expect(screen.queryByText("Running tests")).toBeNull();
   });
 
   it("submits the composer with Ctrl+Enter", async () => {
@@ -441,8 +564,8 @@ describe("ChatPanel", () => {
       within(menu).getByRole("menuitem", { name: /Stop/ }),
     ).not.toBeDisabled();
     expect(
-      within(menu).getByRole("menuitem", { name: /Delete/ }),
-    ).toHaveTextContent(/^Delete$/);
+      within(menu).getByRole("menuitem", { name: /Archive/ }),
+    ).toHaveTextContent(/^Archive$/);
     expect(screen.queryByText("Edit session title")).not.toBeInTheDocument();
     expect(screen.queryByText("Refresh this session")).not.toBeInTheDocument();
     expect(screen.queryByText("Continue agent work")).not.toBeInTheDocument();
