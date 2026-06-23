@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { codeToHtml } from "shiki";
 import type {
+  AgentActivity,
   MessageAttachment,
   RunnerCapability,
   Session,
@@ -148,6 +149,70 @@ describe("ChatPanel", () => {
 
     expect(screen.getByText("Session failed")).toBeInTheDocument();
     expect(screen.getByText(/Check status to refresh/)).toBeInTheDocument();
+  });
+
+  it("renders historical and latest activity groups without message bubbles", () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const assistant: UiMessage = {
+      ...user,
+      id: "message-assistant",
+      role: "assistant",
+      content: "answer",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const activities: AgentActivity[] = [
+      {
+        id: "activity-1",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading apps/web/src/app/useRoamController.ts",
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+      {
+        id: "activity-2",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+        createdAt: "2026-06-05T00:00:03.000Z",
+      },
+    ];
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[user, assistant]}
+        activities={activities}
+        onSend={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Activity (1)")).toBeInTheDocument();
+    expect(screen.getByText("Running tests")).toBeInTheDocument();
+    expect(screen.getByText("· 1 step")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Reading apps/web/src/app/useRoamController.ts"),
+    ).toBeNull();
+    expect(screen.getAllByText("Running tests")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity (1)" }));
+    expect(
+      screen.getByText("Reading apps/web/src/app/useRoamController.ts"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Running tests · 1 step" }),
+    );
+    expect(screen.getAllByText("Running tests")).toHaveLength(2);
+    expect(screen.queryByText("Claude Code task progress:")).toBeNull();
   });
 
   it("submits the composer with Ctrl+Enter", async () => {

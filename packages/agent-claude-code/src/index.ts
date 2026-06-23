@@ -25,6 +25,7 @@ import type {
 import {
   DEFAULT_MAX_IMAGE_BYTES,
   DEFAULT_MAX_IMAGES_PER_TURN,
+  type AgentActivityKind,
   type AgentSkillSummary,
   type RunnerCapability,
   type RunnerProfile,
@@ -318,9 +319,9 @@ class ClaudeCodeSession implements AgentSession {
       return;
     }
     if (message.type === "system" && message.subtype !== "init") {
-      const summary = summarizeSystemMessage(message);
-      if (summary) {
-        await this.#emit({ type: "message", content: summary });
+      const activity = summarizeSystemActivity(message);
+      if (activity) {
+        await this.#emit({ type: "activity", ...activity });
       }
     }
   }
@@ -521,23 +522,70 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function summarizeSystemMessage(message: SDKMessage): string | undefined {
+function summarizeSystemActivity(
+  message: SDKMessage,
+): { kind: AgentActivityKind; label: string } | undefined {
   if (message.type !== "system") {
     return undefined;
   }
   if (message.subtype === "status" && message.status) {
-    return `Claude Code status: ${message.status}`;
+    return { kind: "status", label: statusActivityLabel(message.status) };
   }
   if (message.subtype === "task_started") {
-    return `Claude Code task started: ${message.description}`;
+    return {
+      kind: "task_started",
+      label: productizeActivityLabel(message.description),
+    };
   }
   if (message.subtype === "task_progress") {
-    return `Claude Code task progress: ${message.description}`;
+    return {
+      kind: "task_progress",
+      label: productizeActivityLabel(message.description),
+    };
   }
   if (message.subtype === "task_notification") {
-    return `Claude Code task ${message.status}: ${message.summary}`;
+    return {
+      kind: "task_notification",
+      label: productizeActivityLabel(
+        message.summary || `Task ${message.status}`,
+      ),
+    };
   }
   return undefined;
+}
+
+function statusActivityLabel(status: string): string {
+  const cleanStatus = status.trim();
+  if (cleanStatus === "requesting") {
+    return "Requesting";
+  }
+  return productizeActivityLabel(cleanStatus);
+}
+
+function productizeActivityLabel(value: string): string {
+  const label = value.trim().replace(/\s+/g, " ");
+  if (!label) {
+    return "Working";
+  }
+  const rules: Array<[RegExp, string]> = [
+    [/^Explore\s+(.+)$/i, "Exploring $1"],
+    [/^Read\s+(.+)$/i, "Reading $1"],
+    [/^List\s+(.+)$/i, "Listing $1"],
+    [/^Search\s+(.+)$/i, "Searching $1"],
+    [/^Run\s+(.+)$/i, "Running $1"],
+    [/^Write\s+(.+)$/i, "Writing $1"],
+    [/^Edit\s+(.+)$/i, "Editing $1"],
+    [/^Check\s+(.+)$/i, "Checking $1"],
+  ];
+  const withoutRunningPrefix = label.replace(/^Running\s+(.+)$/i, "$1");
+  for (const [pattern, replacement] of rules) {
+    if (pattern.test(withoutRunningPrefix)) {
+      return withoutRunningPrefix.replace(pattern, replacement);
+    }
+  }
+  return (
+    withoutRunningPrefix.charAt(0).toUpperCase() + withoutRunningPrefix.slice(1)
+  );
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {
