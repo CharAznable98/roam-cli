@@ -188,6 +188,7 @@ const accountSecurity = {
 
 let authStatus: AuthStatus;
 let accountSecurityResponses: Array<typeof accountSecurity>;
+let queuedAccountSecurityResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -360,7 +361,7 @@ function openSessionActions() {
 function authMockResponse(
   pathname: string,
   init?: RequestInit,
-): Response | undefined {
+): Response | Promise<Response> | undefined {
   if (pathname === "/v1/auth/status") {
     return jsonResponse({ auth: authStatus });
   }
@@ -396,6 +397,10 @@ function authMockResponse(
     });
   }
   if (pathname === "/v1/auth/account") {
+    const queuedResponse = queuedAccountSecurityResponses.shift();
+    if (queuedResponse) {
+      return queuedResponse.promise;
+    }
     return jsonResponse({
       account: accountSecurityResponses.shift() ?? accountSecurity,
     });
@@ -447,6 +452,7 @@ describe("App", () => {
     deferredGitHistory = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
+    queuedAccountSecurityResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -1019,7 +1025,7 @@ describe("App", () => {
     expect(
       screen.getByRole("region", { name: "Settings" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
     expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
@@ -1028,7 +1034,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /Change Password/ }));
     expect(screen.getByLabelText("Current password")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
-    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
   });
@@ -1068,6 +1074,42 @@ describe("App", () => {
     ).toHaveLength(2);
   });
 
+  it("waits for Settings account refresh before showing account actions", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const delayedAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(delayedAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Regenerate" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Log out all" }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      delayedAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-after-refresh",
+            runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+          },
+        }),
+      );
+      await delayedAccount.promise;
+    });
+
+    expect(
+      await screen.findByText("runner-token-after-refresh"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
+  });
+
   it("keeps Settings reachable before runners connect", async () => {
     runnerOnline = false;
     defaultProjectVisible = false;
@@ -1078,7 +1120,7 @@ describe("App", () => {
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
 
-    expect(screen.getByLabelText("Runner token")).toHaveTextContent(
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
     expect(
@@ -1092,7 +1134,7 @@ describe("App", () => {
     await screen.findByText("Loaded from API");
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
 
     expect(window.confirm).toHaveBeenCalledWith(
       "Regenerate the Runner token? Current online runners stay connected, but old-token reconnects will fail.",
@@ -1109,7 +1151,7 @@ describe("App", () => {
     await screen.findByText("Loaded from API");
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
 
     expect(
       await screen.findByRole("heading", { name: "Owner Login" }),
@@ -1174,6 +1216,22 @@ describe("App", () => {
       fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
         .length,
     ).toBeGreaterThan(1);
+  });
+
+  it("keeps Settings reachable when the bootstrap API fails", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
   });
 
   it("ignores stale bootstrap failures after a later recovery succeeds", async () => {

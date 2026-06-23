@@ -62,6 +62,8 @@ export function AppShell({ controller }: AppShellProps) {
     useState(false);
   const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>("home");
+  const [settingsAccountRefreshing, setSettingsAccountRefreshing] =
+    useState(false);
   const {
     state,
     authView,
@@ -150,8 +152,8 @@ export function AppShell({ controller }: AppShellProps) {
   const hasWorkspaceData =
     activeProjects.length > 0 ||
     state.sessions.some((session) => !session.archivedAt);
-  const showApiErrorEmpty = state.loadState === "error";
-  const showWorkspace = state.loadState === "ready";
+  const showWorkspace =
+    state.loadState === "ready" || state.loadState === "error";
   const canUseStream = state.connectionState === "open";
   const canUseSelectedRunner = canUseStream && Boolean(selectedRunner);
   const compactStatus = getCompactStatusLabel(
@@ -193,18 +195,30 @@ export function AppShell({ controller }: AppShellProps) {
   );
 
   useEffect(() => {
-    if (
-      authView === "authenticated" &&
-      state.activeTab === "settings"
-    ) {
-      void refreshAccountSecurity().catch((accountError: unknown) => {
+    if (authView !== "authenticated" || state.activeTab !== "settings") {
+      setSettingsAccountRefreshing(false);
+      return;
+    }
+
+    let active = true;
+    setSettingsAccountRefreshing(true);
+    void refreshAccountSecurity()
+      .catch((accountError: unknown) => {
         notify(
           "error",
           "Account settings unavailable",
           errorMessage(accountError),
         );
+      })
+      .finally(() => {
+        if (active) {
+          setSettingsAccountRefreshing(false);
+        }
       });
-    }
+
+    return () => {
+      active = false;
+    };
   }, [
     authView,
     notify,
@@ -309,26 +323,6 @@ export function AppShell({ controller }: AppShellProps) {
         <div className="empty-state">Loading remote RoamCli state...</div>
       ) : null}
 
-      {showApiErrorEmpty ? (
-        <div className="empty-state app-error-state" role="alert">
-          <div>
-            <h2>API connection failed</h2>
-            <p>
-              Check your login session or backend route, then reconnect the
-              stream.
-            </p>
-            <button
-              className="primary-action-button"
-              type="button"
-              onClick={() => setMobileStatusModalOpen(true)}
-            >
-              <WifiOff size={16} />
-              Connection settings
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       {showWorkspace ? (
         <>
           <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
@@ -385,31 +379,51 @@ export function AppShell({ controller }: AppShellProps) {
             ) : (
               <section className="chat-column" aria-label="Conversation">
                 <div className="empty-state compact session-empty-state">
-                  <span>
-                    {state.runners.length === 0 && !hasWorkspaceData
-                      ? "No runners are online"
-                      : selectedProject
-                        ? "Create a session in the selected project."
-                        : "Create a project to start a session."}
-                  </span>
-                  <p className="session-empty-meta">
-                    {state.runners.length === 0 && !hasWorkspaceData
-                      ? "Start a runner to create or resume sessions."
-                      : selectedProject
-                        ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
-                        : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
-                  </p>
-                  {state.runners.length === 0 && !hasWorkspaceData ? (
-                    <pre>{runnerCommand}</pre>
+                  {state.loadState === "error" ? (
+                    <>
+                      <span>API connection failed</span>
+                      <p className="session-empty-meta">
+                        Check your login session or backend route, then
+                        reconnect the stream.
+                      </p>
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() => setMobileStatusModalOpen(true)}
+                      >
+                        <WifiOff size={16} />
+                        Connection settings
+                      </button>
+                    </>
                   ) : (
-                    <button
-                      className="small-button"
-                      type="button"
-                      aria-label="Choose session"
-                      onClick={() => setMobileSessionSwitcherOpen(true)}
-                    >
-                      Choose session
-                    </button>
+                    <>
+                      <span>
+                        {state.runners.length === 0 && !hasWorkspaceData
+                          ? "No runners are online"
+                          : selectedProject
+                            ? "Create a session in the selected project."
+                            : "Create a project to start a session."}
+                      </span>
+                      <p className="session-empty-meta">
+                        {state.runners.length === 0 && !hasWorkspaceData
+                          ? "Start a runner to create or resume sessions."
+                          : selectedProject
+                            ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
+                            : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
+                      </p>
+                      {state.runners.length === 0 && !hasWorkspaceData ? (
+                        <pre>{runnerCommand}</pre>
+                      ) : (
+                        <button
+                          className="small-button"
+                          type="button"
+                          aria-label="Choose session"
+                          onClick={() => setMobileSessionSwitcherOpen(true)}
+                        >
+                          Choose session
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </section>
@@ -498,6 +512,7 @@ export function AppShell({ controller }: AppShellProps) {
                 <div className="workspace-surface settings-surface">
                   <SettingsPanel
                     account={accountSecurity}
+                    accountRefreshing={settingsAccountRefreshing}
                     runnerCommand={runnerCommand}
                     view={settingsView}
                     onViewChange={setSettingsView}
@@ -716,6 +731,7 @@ function AuthGate({
 
 function SettingsPanel({
   account,
+  accountRefreshing,
   runnerCommand,
   view,
   onViewChange,
@@ -725,6 +741,7 @@ function SettingsPanel({
   onRegenerateRunnerToken,
 }: {
   account: AccountSecurityState | undefined;
+  accountRefreshing: boolean;
   runnerCommand: string;
   view: SettingsView;
   onViewChange: (view: SettingsView) => void;
@@ -764,7 +781,7 @@ function SettingsPanel({
             title="Account & Security"
             onBack={() => onViewChange("home")}
           />
-          {account ? (
+          {account && !accountRefreshing ? (
             <AccountSecurityPanel
               account={account}
               runnerCommand={runnerCommand}
