@@ -444,10 +444,9 @@ export function useRoamController() {
     if (!api) {
       throw new Error("API client is not ready.");
     }
-    const requestId = nextAccountSecurityRequestId();
     const account = await api.regenerateRunnerToken();
-    applyAccountSecurityForRequest(requestId, account);
-  }, [applyAccountSecurityForRequest, nextAccountSecurityRequestId]);
+    replaceAccountSecurity(account);
+  }, [replaceAccountSecurity]);
 
   const refreshAccountSecurity = useCallback(async () => {
     const api = apiRef.current;

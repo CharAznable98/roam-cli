@@ -211,6 +211,15 @@
     white-space: nowrap;
   }
 
+  .topbar-status-button {
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .topbar-status-button:hover {
+    box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.08);
+  }
+
   .topbar-status.success {
     border-color: rgba(8, 116, 81, 0.26);
     background: #e7f7ef;

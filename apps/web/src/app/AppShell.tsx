@@ -65,6 +65,8 @@ export function AppShell({ controller }: AppShellProps) {
   const [settingsView, setSettingsView] = useState<SettingsView>("home");
   const [settingsAccountRefreshState, setSettingsAccountRefreshState] =
     useState<AccountRefreshState>("idle");
+  const [settingsAccountRefreshKey, setSettingsAccountRefreshKey] = useState(0);
+  const settingsAccountRefreshPendingRef = useRef(false);
   const {
     state,
     authView,
@@ -125,9 +127,21 @@ export function AppShell({ controller }: AppShellProps) {
     runGitRemoteOperation,
     removeGitWorktree,
   } = controller;
+  const requestSettingsAccountRefresh = useCallback(() => {
+    if (settingsAccountRefreshPendingRef.current) {
+      return;
+    }
+    settingsAccountRefreshPendingRef.current = true;
+    setSettingsAccountRefreshKey((key) => key + 1);
+  }, []);
   const setActiveTab = useCallback(
-    (tab: WorkspaceTab) => dispatch({ type: "activeTabChanged", tab }),
-    [dispatch],
+    (tab: WorkspaceTab) => {
+      dispatch({ type: "activeTabChanged", tab });
+      if (tab === "settings" && authView === "authenticated") {
+        requestSettingsAccountRefresh();
+      }
+    },
+    [authView, dispatch, requestSettingsAccountRefresh],
   );
   const setSelectedSessionId = useCallback(
     (sessionId: string) => {
@@ -194,14 +208,32 @@ export function AppShell({ controller }: AppShellProps) {
     },
     [dispatch],
   );
+  const changeSettingsView = useCallback(
+    (view: SettingsView) => {
+      setSettingsView(view);
+      if (
+        view === "account" &&
+        authView === "authenticated" &&
+        state.activeTab === "settings"
+      ) {
+        requestSettingsAccountRefresh();
+      }
+    },
+    [authView, requestSettingsAccountRefresh, state.activeTab],
+  );
 
   useEffect(() => {
     if (authView !== "authenticated" || state.activeTab !== "settings") {
+      settingsAccountRefreshPendingRef.current = false;
       setSettingsAccountRefreshState("idle");
+      return;
+    }
+    if (settingsAccountRefreshKey === 0) {
       return;
     }
 
     let active = true;
+    settingsAccountRefreshPendingRef.current = true;
     setSettingsAccountRefreshState("loading");
     void refreshAccountSecurity()
       .then((account) => {
@@ -218,15 +250,22 @@ export function AppShell({ controller }: AppShellProps) {
         if (active) {
           setSettingsAccountRefreshState("error");
         }
+      })
+      .finally(() => {
+        if (active) {
+          settingsAccountRefreshPendingRef.current = false;
+        }
       });
 
     return () => {
       active = false;
+      settingsAccountRefreshPendingRef.current = false;
     };
   }, [
     authView,
     notify,
     refreshAccountSecurity,
+    settingsAccountRefreshKey,
     state.activeTab,
   ]);
 
@@ -294,15 +333,19 @@ export function AppShell({ controller }: AppShellProps) {
               ? "stream connected"
               : "stream disconnected"}
           </span>
-          <span
-            className={`topbar-status ${
-              state.loadState === "error" ? "error" : "success"
-            }`}
-          >
-            {state.loadState === "error"
-              ? "API error"
-              : `${state.runners.length} runners online`}
-          </span>
+          {state.loadState === "error" ? (
+            <button
+              className="topbar-status topbar-status-button error"
+              type="button"
+              onClick={() => setMobileStatusModalOpen(true)}
+            >
+              API error
+            </button>
+          ) : (
+            <span className="topbar-status success">
+              {state.runners.length} runners online
+            </span>
+          )}
         </div>
         <div className="mobile-topbar-actions">
           <button
@@ -526,7 +569,7 @@ export function AppShell({ controller }: AppShellProps) {
                     accountRefreshState={settingsAccountRefreshState}
                     runnerCommand={runnerCommand}
                     view={settingsView}
-                    onViewChange={setSettingsView}
+                    onViewChange={changeSettingsView}
                     onLogout={logoutFromAccountSecurity}
                     onLogoutAll={logoutAllFromAccountSecurity}
                     onChangePassword={changePasswordFromAccountSecurity}

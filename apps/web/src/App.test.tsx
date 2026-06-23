@@ -189,6 +189,7 @@ const accountSecurity = {
 let authStatus: AuthStatus;
 let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
+let queuedRunnerTokenResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -388,6 +389,10 @@ function authMockResponse(
     pathname === "/v1/auth/runner-token/regenerate" &&
     init?.method === "POST"
   ) {
+    const queuedResponse = queuedRunnerTokenResponses.shift();
+    if (queuedResponse) {
+      return queuedResponse.promise;
+    }
     return jsonResponse({
       account: {
         ...accountSecurity,
@@ -453,6 +458,7 @@ describe("App", () => {
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
     queuedAccountSecurityResponses = [];
+    queuedRunnerTokenResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -1074,6 +1080,47 @@ describe("App", () => {
     ).toHaveLength(2);
   });
 
+  it("refreshes account security when entering Account & Security from Settings home", async () => {
+    accountSecurityResponses = [
+      accountSecurity,
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-settings-home",
+        runnerTokenUpdatedAt: "2026-06-05T00:02:00.000Z",
+      },
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-account-entry",
+        runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+      },
+    ];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) => new URL(call.url).pathname === "/v1/auth/account",
+        ),
+      ).toHaveLength(2),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(
+      await screen.findByText("runner-token-account-entry"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("runner-token-settings-home"),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchCalls.filter(
+        (call) => new URL(call.url).pathname === "/v1/auth/account",
+      ),
+    ).toHaveLength(3);
+  });
+
   it("waits for Settings account refresh before showing account actions", async () => {
     render(<App />);
 
@@ -1222,6 +1269,42 @@ describe("App", () => {
     expect(screen.getByText("Runner token regenerated")).toBeInTheDocument();
   });
 
+  it("applies a slow runner token regeneration after a later account refresh", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    await screen.findByRole("button", { name: "Regenerate" });
+
+    const slowRegenerate = deferred<Response>();
+    queuedRunnerTokenResponses.push(slowRegenerate);
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    expect(await screen.findByText("runner-token")).toBeInTheDocument();
+
+    await act(async () => {
+      slowRegenerate.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-regenerated-slow",
+            runnerTokenUpdatedAt: "2026-06-05T00:05:00.000Z",
+          },
+        }),
+      );
+      await slowRegenerate.promise;
+    });
+
+    expect(
+      await screen.findByText("runner-token-regenerated-slow"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Runner token regenerated")).toBeInTheDocument();
+  });
+
   it("leaves Settings for login after logout and does not restore a settings child view after login", async () => {
     render(<App />);
 
@@ -1299,6 +1382,7 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByText("Loaded from API");
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
     failBootstrapRunners = true;
 
     fireEvent.click(
@@ -1314,10 +1398,10 @@ describe("App", () => {
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
 
-    const connectionButton = await screen.findByRole("button", {
-      name: "Connection settings",
+    const apiErrorButton = await screen.findByRole("button", {
+      name: "API error",
     });
-    fireEvent.click(connectionButton);
+    fireEvent.click(apiErrorButton);
 
     expect(
       await screen.findByRole("dialog", { name: "Connection" }),
