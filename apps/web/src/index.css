@@ -1882,6 +1882,7 @@
   }
 
   .collapsible-message.activity-group {
+    overflow: visible;
     border-color: rgba(14, 116, 144, 0.18);
     background: rgba(248, 250, 252, 0.86);
     color: #526173;
