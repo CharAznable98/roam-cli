@@ -879,9 +879,38 @@ export function useRoamController() {
       );
   };
 
-  const selectFile = (path: string) => {
-    if (!selectedSession || !apiRef.current) return;
-    loadFileContent(selectedSession.id, path);
+  const selectFile = (path: string, options: { edit?: boolean } = {}) => {
+    if (!selectedSession || !apiRef.current) return false;
+    if (
+      path !== state.selectedFilePath &&
+      !confirmDiscardSelectedFileChanges(state)
+    ) {
+      return false;
+    }
+    if (
+      options.edit === true &&
+      path === state.selectedFilePath &&
+      state.fileContent?.path === path
+    ) {
+      dispatch({ type: "fileEditStarted" });
+      return true;
+    }
+    loadFileContent(selectedSession.id, path, options);
+    return true;
+  };
+
+  const openFileForEdit = (path: string) => {
+    if (selectFile(path, { edit: true })) {
+      dispatch({ type: "activeTabChanged", tab: "files" });
+    }
+  };
+
+  const startSelectedFileEdit = () => {
+    dispatch({ type: "fileEditStarted" });
+  };
+
+  const cancelSelectedFileEdit = () => {
+    dispatch({ type: "fileEditCancelled" });
   };
 
   const loadSelectedDirectory = (path: string) => {
@@ -903,7 +932,7 @@ export function useRoamController() {
       .saveFileContent(sessionId, path, state.editorContent)
       .then(() => {
         dispatch({ type: "fileSaveSucceeded" });
-        loadFileContent(sessionId, path);
+        loadFileContent(sessionId, path, { edit: state.fileEditMode });
         loadFileTreePath(
           sessionId,
           nearestTreeDirectoryPath(
@@ -921,9 +950,17 @@ export function useRoamController() {
       );
   };
 
-  const loadFileContent = (sessionId: string, path: string) => {
+  const loadFileContent = (
+    sessionId: string,
+    path: string,
+    options: { edit?: boolean } = {},
+  ) => {
     if (!apiRef.current) return;
-    dispatch({ type: "fileContentLoading", path });
+    dispatch({
+      type: "fileContentLoading",
+      path,
+      ...(options.edit === undefined ? {} : { edit: options.edit }),
+    });
     void apiRef.current
       .fetchFileContent(sessionId, path)
       .then((result) => dispatch({ type: "fileContentLoaded", result }))
@@ -1243,6 +1280,9 @@ export function useRoamController() {
     sendControl,
     deleteSelectedSession,
     selectFile,
+    openFileForEdit,
+    startSelectedFileEdit,
+    cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
@@ -1265,6 +1305,27 @@ export function useRoamController() {
     runGitRemoteOperation,
     removeGitWorktree,
   };
+}
+
+function confirmDiscardSelectedFileChanges(state: AppState): boolean {
+  if (!hasDirtySelectedFileChanges(state)) {
+    return true;
+  }
+  return window.confirm(
+    `Discard unsaved changes in ${state.selectedFilePath}?`,
+  );
+}
+
+function hasDirtySelectedFileChanges(state: AppState): boolean {
+  const loadedContent =
+    state.fileContent?.kind === undefined || state.fileContent?.kind === "text"
+      ? state.fileContent?.content
+      : undefined;
+  return (
+    state.fileEditMode &&
+    loadedContent !== undefined &&
+    state.editorContent !== loadedContent
+  );
 }
 
 function errorMessage(error: unknown): string {

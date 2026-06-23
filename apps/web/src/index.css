@@ -2226,9 +2226,12 @@
 
   .file-image-preview img {
     display: block;
+    min-width: 96px;
+    min-height: 96px;
     max-width: 100%;
     max-height: 64vh;
     object-fit: contain;
+    image-rendering: pixelated;
   }
 
   .file-preview-empty {
@@ -3724,5 +3727,136 @@
   .active-chat .approvals-surface,
   .active-chat .git-surface {
     display: none;
+  }
+}
+
+.file-view-toggle {
+  display: inline-flex;
+  min-height: 32px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel-strong);
+}
+
+.file-view-toggle button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.file-view-toggle button:last-child {
+  border-right: 0;
+}
+
+.file-view-toggle button.is-active {
+  background: #e8f6fb;
+  color: var(--accent-strong);
+}
+
+.file-markdown-preview {
+  min-width: 0;
+  min-height: 360px;
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pane);
+  background: #ffffff;
+  padding: 16px;
+}
+
+.file-markdown-preview .markdown-message {
+  max-width: 78ch;
+}
+
+.file-markdown-preview ul,
+.file-markdown-preview ol {
+  padding-left: 1.5rem;
+}
+
+.file-markdown-preview ul {
+  list-style: disc;
+}
+
+.file-markdown-preview ol {
+  list-style: decimal;
+}
+
+.file-markdown-preview li {
+  display: list-item;
+}
+
+.editor-placeholder.is-fullscreen,
+.git-diff-pane.is-fullscreen {
+  position: fixed;
+  inset: max(10px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+  z-index: 80;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pane);
+  background: var(--surface-panel-strong);
+  box-shadow: 0 24px 80px rgba(24, 34, 48, 0.28);
+}
+
+.editor-placeholder.is-fullscreen {
+  padding: 14px;
+}
+
+.editor-placeholder.is-fullscreen > div,
+.git-diff-pane.is-fullscreen {
+  min-height: 0;
+  height: auto;
+}
+
+.editor-placeholder.is-fullscreen > div {
+  height: 100%;
+}
+
+.editor-placeholder.is-fullscreen .monaco-file-editor,
+.editor-placeholder.is-fullscreen .file-markdown-preview,
+.editor-placeholder.is-fullscreen .file-image-preview,
+.editor-placeholder.is-fullscreen .file-preview-empty,
+.git-diff-pane.is-fullscreen .monaco-diff {
+  min-height: 0;
+  height: auto;
+  flex: 1 1 auto;
+}
+
+.git-diff-pane.is-fullscreen {
+  padding: 14px;
+}
+
+.git-diff-pane.is-fullscreen .monaco-diff {
+  min-height: 0;
+}
+
+@media (max-width: 479px) {
+  .file-view-toggle {
+    width: 100%;
+  }
+
+  .file-view-toggle button {
+    flex: 1 1 0;
+  }
+
+  .editor-placeholder.is-fullscreen,
+  .git-diff-pane.is-fullscreen {
+    inset: 6px;
+    border-radius: 8px;
   }
 }

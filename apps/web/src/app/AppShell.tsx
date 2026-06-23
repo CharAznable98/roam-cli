@@ -92,6 +92,9 @@ export function AppShell({ controller }: AppShellProps) {
     sendControl,
     deleteSelectedSession,
     selectFile,
+    openFileForEdit,
+    startSelectedFileEdit,
+    cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
@@ -425,11 +428,14 @@ export function AppShell({ controller }: AppShellProps) {
                     selectedPath={state.selectedFilePath}
                     fileContent={state.fileContent}
                     editorContent={state.editorContent}
+                    editMode={state.fileEditMode}
                     contentState={state.fileContentState}
                     saveState={state.fileSaveState}
                     onSelectFile={selectFile}
                     onLoadDirectory={loadSelectedDirectory}
                     onRefreshTree={refreshSelectedFileTree}
+                    onStartEdit={startSelectedFileEdit}
+                    onCancelEdit={cancelSelectedFileEdit}
                     onChangeContent={(content) =>
                       dispatch({ type: "editorContentChanged", content })
                     }
@@ -455,6 +461,7 @@ export function AppShell({ controller }: AppShellProps) {
                     onCommit={commitGitChanges}
                     onRemoteOperation={runGitRemoteOperation}
                     onRemoveWorktree={removeGitWorktree}
+                    onOpenFileForEdit={openFileForEdit}
                     onNotify={(tone, title, message) =>
                       dispatch({
                         type: "notificationPushed",

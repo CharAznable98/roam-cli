@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-06-21
+- Last refreshed: 2026-06-23
 - Primary product surfaces:
   - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
   - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
@@ -21,8 +21,12 @@
   - `apps/web/src/app/AppShell.tsx`, `apps/web/src/app/navigation.ts`, and `apps/web/src/app/BottomTabs.tsx`: current workspace tab model.
   - `apps/web/src/features/sessions/NewSessionForm.tsx`: current direct / managed worktree session creation UI.
   - `apps/web/src/features/files/FilePanel.tsx`: current lightweight file tree and text editor surface.
+  - `apps/web/src/features/git/GitPanel.tsx`: current Monaco diff preview surface.
+  - `apps/web/src/features/conversation/MarkdownMessage.tsx`: current Markdown rendering implementation and safe raw-HTML boundary.
+  - `apps/web/src/App.test.tsx` and `scripts/blackbox-browser.mjs`: current file preview/edit/save and Git diff smoke coverage.
   - `apps/web/src/index.css` and `apps/web/tailwind.config.ts`: responsive shell, restrained operational palette, and component styling.
   - 2026-06-21 Web redesign pass: `apps/web/src/app/AppShell.tsx` and `apps/web/src/index.css` reviewed for shell hierarchy, panel rhythm, mobile touch targets, and operational status visibility.
+  - 2026-06-23 file preview optimization design interview: read-only default preview, explicit edit entry, app-level fullscreen, button-driven save state, Markdown read-only rendering, and Git diff edit routing.
 
 ## Brand
 
@@ -285,6 +289,54 @@
   - Keep confirmations short; no type-to-confirm requirement.
   - Do not over-explain Git errors; show copyable output for agent diagnosis.
 
+## Feature design: File preview optimization
+
+- Default mode:
+  - Opening any file starts in read-only preview mode.
+  - Editable text files show an `Edit` button in read-only mode.
+  - Unsupported files do not show edit or save controls.
+  - Editable means runner-returned text content that is not truncated. Filesystem write permission is discovered on save failure, not preflighted in Web.
+- Edit mode:
+  - Clicking `Edit` switches the current file into source edit mode.
+  - Edit mode shows `Cancel` and `Save`.
+  - `Save` is visible only in edit mode.
+  - `Save` is disabled when content is clean or a save is in progress.
+  - `Save` is enabled when the edited buffer differs from the loaded file content.
+  - Save success keeps the user in edit mode and disables `Save` until the next change.
+  - Save failure keeps the user in edit mode, reports through the existing notification path, and allows retry.
+  - `Cancel` exits edit mode. If the buffer is dirty, confirm before discarding changes.
+  - Switching files or closing edit/fullscreen while dirty must also confirm before discarding changes.
+- Status expression:
+  - Remove persistent `Editable`, `Read-only`, `Saved`, and `Unsaved` badges from the file preview header.
+  - Express state through button visibility, disabled state, and loading state rather than status copy.
+- Markdown files:
+  - In read-only mode, `.md` files default to rendered Markdown.
+  - Read-only Markdown view provides a rendered/source toggle.
+  - The Markdown rendered/source preference is page-session scoped and not persisted; first open after refresh defaults to rendered Markdown.
+  - Edit mode for Markdown is always source editing in Monaco, not WYSIWYG editing.
+  - Markdown rendering must reuse the safe message-rendering boundary: no raw HTML insertion into the DOM.
+- Fullscreen:
+  - Fullscreen is an app-level overlay, not the browser Fullscreen API.
+  - Fullscreen expands only the current preview/editor/diff surface, not the file tree.
+  - Fullscreen retains file name, mode controls, Markdown toggle, `Edit`, `Cancel`, and `Save` where applicable.
+  - `Esc` and a visible close control exit fullscreen.
+  - Monaco-based views must relayout after entering and exiting fullscreen.
+- Git diff preview:
+  - Git diff preview remains read-only.
+  - Only working tree, unstaged, text, non-binary, non-too-large, non-deleted diffs show `Edit`.
+  - Git diff `Edit` opens the same path in the Files panel directly in edit mode.
+  - Staged diffs, commit/history diffs, deleted files, binary diffs, and too-large diffs do not show `Edit`.
+  - Git diff preview also supports the same app-level fullscreen behavior for the current diff surface.
+- Acceptance criteria:
+  - Selecting a text file shows read-only preview first, with `Edit` but no `Save`.
+  - Clicking `Edit` shows `Cancel` and `Save`; clean content disables `Save`; dirty content enables `Save`.
+  - Image, binary, and truncated files never show `Edit` or `Save`.
+  - `.md` read-only preview defaults to rendered Markdown and can switch to source preview.
+  - `.md` edit mode always opens source editing.
+  - Dirty cancel/file switch/fullscreen close prompts before discarding edits.
+  - App-level fullscreen works for ordinary file preview/editing and Git diff preview.
+  - Working tree eligible diff `Edit` routes to Files edit mode; ineligible diffs have no edit control.
+
 ## Implementation constraints
 
 - Framework/styling system:
@@ -394,6 +446,7 @@ type GitContextRef =
   - Runner tests using temporary Git repos for status, diff, branch worktree, commit, stash, and error handling.
   - Server tests for context resolution, job persistence, runner routing, and minimal persistence.
   - Web reducer/component tests for context switching, status groups, commit box, dangerous confirmations, and responsive Git tab states.
+  - Web tests for default read-only file preview, edit/cancel/save button states, dirty discard confirmation, Markdown rendered/source toggle, fullscreen overlay, and Git diff edit routing.
   - Playwright or browser smoke tests for desktop/tablet/mobile Git tab layout once implemented.
 
 ## Open questions
