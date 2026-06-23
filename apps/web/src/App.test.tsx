@@ -3646,6 +3646,7 @@ describe("App", () => {
   });
 
   it("archives a managed worktree session with remove strategy", async () => {
+    remoteSessionStatus = "completed";
     remoteSessionExecutionMode = "managed_worktree";
     remoteSessionExecutionFolder =
       "/workspace/.roam-runner/worktrees/project-1/session-1";
@@ -3681,7 +3682,43 @@ describe("App", () => {
     expect(screen.queryByText("Session is not running")).not.toBeInTheDocument();
   });
 
+  it("does not offer worktree removal for active managed worktree sessions", async () => {
+    remoteSessionStatus = "running";
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Archive and remove" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive session" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
+    const deleteCall = fetchCalls.find((call) => {
+      const requestUrl = new URL(call.url);
+      return (
+        requestUrl.pathname === "/v1/sessions/session-1" &&
+        call.init?.method === "DELETE"
+      );
+    });
+    expect(deleteCall).toBeDefined();
+    expect(new URL(deleteCall!.url).searchParams.get("worktree")).toBe("keep");
+  });
+
   it("keeps the archive dialog open after remove failure and allows archive only", async () => {
+    remoteSessionStatus = "completed";
     remoteSessionExecutionMode = "managed_worktree";
     remoteSessionExecutionFolder =
       "/workspace/.roam-runner/worktrees/project-1/session-1";

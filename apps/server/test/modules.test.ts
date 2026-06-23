@@ -7,6 +7,7 @@ import type {
   RunnerRegistration,
   ServerEvent,
   Session,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionHub } from "../src/infra/connection-hub.js";
@@ -717,6 +718,46 @@ describe("SessionCommandService", () => {
     );
   });
 
+  it.each(["pending", "running", "waiting_approval"] satisfies SessionStatus[])(
+    "rejects managed worktree removal for active %s sessions",
+    async (status) => {
+      const runnerMessages: RunnerCommand[] = [];
+      const hub = new ConnectionHub(store);
+      hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+      const approvals = new ApprovalService(store, hub);
+      const service = new SessionCommandService(
+        store,
+        hub,
+        approvals,
+        new RunnerRpcClient(hub),
+        100,
+      );
+      store.createProject(projectRecord());
+      store.createSession({
+        ...sessionRecord(),
+        status,
+        executionMode: "managed_worktree",
+        executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+        cwd: "/workspace",
+        gitBranchName: "session-1",
+      });
+
+      await expect(
+        service.deleteSession("session-1", { worktree: "remove" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "worktree_remove_failed",
+        message:
+          "Stop the session before archiving and removing its worktree.",
+        code: "session_active",
+      });
+      expect(runnerMessages).toEqual([]);
+      expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
+      expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+      expect(store.listGitJobs("project-1")).toEqual([]);
+    },
+  );
+
   it("keeps managed sessions visible when archive worktree removal fails", async () => {
     const runnerMessages: RunnerCommand[] = [];
     const hub = new ConnectionHub(store);
@@ -807,6 +848,77 @@ describe("SessionCommandService", () => {
         status: "failed",
         errorCode: "runner_offline",
         errorSummary: "runner is offline",
+      }),
+    );
+  });
+
+  it("marks worktrees deleted when an archive removal succeeds after timeout", async () => {
+    const runnerMessages: RunnerCommand[] = [];
+    const streamEvents: ServerEvent[] = [];
+    const hub = new ConnectionHub(store);
+    hub.addStream(fakeSocket(streamEvents));
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(store, hub);
+    const runnerEvents = new RunnerEventService(store, hub, rpc);
+    const service = new SessionCommandService(store, hub, approvals, rpc, 5);
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+      gitBranchName: "session-1",
+    });
+
+    const pending = service.deleteSession("session-1", {
+      worktree: "remove",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const removeCommand = runnerMessages.find(
+      (
+        message,
+      ): message is Extract<RunnerCommand, { type: "gitRemoveWorktree" }> =>
+        message.type === "gitRemoveWorktree",
+    );
+    expect(removeCommand).toBeDefined();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "worktree_remove_failed",
+      message: "runner request timed out",
+      code: "runner_timeout",
+    });
+    expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+
+    const now = new Date().toISOString();
+    runnerEvents.handle({
+      type: "gitJobResult",
+      job: {
+        id: removeCommand?.requestId ?? "",
+        projectId: "project-1",
+        sessionId: "session-1",
+        contextKind: "session_worktree",
+        operation: "remove_worktree",
+        status: "succeeded",
+        createdAt: now,
+        startedAt: now,
+        finishedAt: now,
+      },
+    });
+
+    expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toEqual(now);
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({
+        type: "session:updated",
+        session: expect.objectContaining({
+          id: "session-1",
+          worktreeDeletedAt: now,
+        }),
       }),
     );
   });

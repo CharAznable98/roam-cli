@@ -316,14 +316,17 @@ export async function removeGitWorktree(
     async (cwd) => {
       await git(cwd, ["worktree", "remove", "--force", cwd]);
     },
-    { missingCwdSucceeds: true },
+    { missingCwdSucceeds: true, onMissingCwd: pruneGitWorktrees },
   );
 }
 
 async function runGitJob(
   options: GitMutatingOptions,
   run: (cwd: string) => Promise<void>,
-  config: { missingCwdSucceeds?: boolean } = {},
+  config: {
+    missingCwdSucceeds?: boolean;
+    onMissingCwd?: (workspace: string) => Promise<void>;
+  } = {},
 ): Promise<GitJob> {
   const createdAt = nowIso();
   const startedAt = nowIso();
@@ -344,6 +347,7 @@ async function runGitJob(
       ? await resolveGitCwdIfExists(options.workspace, options.cwd)
       : await resolveGitCwd(options.workspace, options.cwd);
     if (cwd === undefined) {
+      await config.onMissingCwd?.(options.workspace);
       return {
         ...baseJob,
         status: "succeeded",
@@ -369,6 +373,14 @@ async function runGitJob(
       errorSummary: gitError.message,
     };
   }
+}
+
+async function pruneGitWorktrees(workspace: string): Promise<void> {
+  const realWorkspace = await realpath(resolve(workspace));
+  if (!(await isGitWorkTree(realWorkspace))) {
+    return;
+  }
+  await git(realWorkspace, ["worktree", "prune"]);
 }
 
 async function resolveGitCwd(workspace: string, cwd: string): Promise<string> {

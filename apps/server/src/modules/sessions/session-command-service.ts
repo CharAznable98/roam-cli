@@ -165,15 +165,27 @@ export class SessionCommandService {
       return fail("session_not_found");
     }
 
+    const archivedAt = nowIso();
+    const shouldRemoveWorktree =
+      options.worktree === "remove" &&
+      session.executionMode === "managed_worktree";
+    if (
+      shouldRemoveWorktree &&
+      !session.worktreeDeletedAt &&
+      hasActiveRunnerWork(session)
+    ) {
+      return fail("worktree_remove_failed", {
+        message:
+          "Stop the session before archiving and removing its worktree.",
+        code: "session_active",
+      });
+    }
+
     this.hub.sendToRunner(session.runnerId, {
       type: "controlSignal",
       sessionId: session.id,
       signal: "stop",
     });
-    const archivedAt = nowIso();
-    const shouldRemoveWorktree =
-      options.worktree === "remove" &&
-      session.executionMode === "managed_worktree";
     if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
       const cleanup = await this.removeSessionWorktree(session);
       if (!cleanup.ok) {

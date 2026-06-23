@@ -10,6 +10,7 @@ import type {
   ApiChangePassword,
   Project,
   Session,
+  SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
   Archive,
@@ -760,6 +761,16 @@ function AuthGate({
   );
 }
 
+const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
+  "pending",
+  "running",
+  "waiting_approval",
+]);
+
+function hasActiveRunnerWork(session: Session): boolean {
+  return ACTIVE_RUNNER_STATUSES.has(session.status);
+}
+
 function SessionArchiveDialog({
   state,
   onClose,
@@ -771,7 +782,9 @@ function SessionArchiveDialog({
 }) {
   const { session, error, submitting } = state;
   const canRemoveWorktree =
-    session.executionMode === "managed_worktree" && !session.worktreeDeletedAt;
+    session.executionMode === "managed_worktree" &&
+    !session.worktreeDeletedAt &&
+    !hasActiveRunnerWork(session);
   const titleId = "session-archive-title";
 
   return (

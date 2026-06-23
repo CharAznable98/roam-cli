@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -177,6 +177,34 @@ describe("runner git workspace operations", () => {
         operation: "remove_worktree",
       }),
     ).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("prunes stale worktree metadata when the worktree path is already missing", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-prune-wt-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const worktreeRelativePath = ".roam-runner/worktrees/project-1/session-1";
+    const worktree = join(workspace, worktreeRelativePath);
+    await git(workspace, ["worktree", "add", "-b", "session-1", worktree]);
+    await rm(worktree, { recursive: true, force: true });
+
+    await expect(
+      removeGitWorktree({
+        workspace,
+        cwd: worktreeRelativePath,
+        requestId: "remove-prunable-worktree",
+        projectId: "project-1",
+        context: { kind: "session_worktree", sessionId: "session-1" },
+        operation: "remove_worktree",
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+
+    await expect(gitOutput(workspace, ["worktree", "list", "--porcelain"]))
+      .resolves.not.toContain(worktree);
   });
 
   it("does not remove existing directories that are not git worktrees", async () => {
