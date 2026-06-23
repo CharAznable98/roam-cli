@@ -370,6 +370,62 @@ describe("codex agent plugin", () => {
     }
   });
 
+  it("closes stdin for bypass sessions so codex does not wait for extra stdin", async () => {
+    const workspace = await mkdirTemp("roam-codex-bypass-stdin-");
+    const script = join(workspace, "bypass-stdin.mjs");
+    await writeFile(
+      script,
+      [
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  console.log(JSON.stringify({",
+        "    type: 'item.completed',",
+        "    item: {",
+        "      id: 'item_1',",
+        "      type: 'agent_message',",
+        "      text: 'stdin closed',",
+        "    },",
+        "  }));",
+        "  process.exit(0);",
+        "});",
+        "setTimeout(() => process.exit(2), 1000);",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([
+          script,
+          "--dangerously-bypass-approvals-and-sandbox",
+        ]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "message",
+        content: "stdin closed",
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+  });
+
   it("keeps stdin open for subprocess approval responses", async () => {
     const workspace = await mkdirTemp("roam-codex-approval-stdin-");
     const script = join(workspace, "approval-stdin.mjs");
