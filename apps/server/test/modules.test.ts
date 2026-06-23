@@ -1087,6 +1087,56 @@ describe("RunnerEventService", () => {
     );
   });
 
+  it("timestamps output events monotonically in runner arrival order", () => {
+    const hub = new ConnectionHub(store);
+    const service = new RunnerEventService(
+      store,
+      hub,
+      new RunnerRpcClient(hub),
+    );
+    store.createProject(projectRecord());
+    const session = store.createSession(sessionRecord());
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-05T00:00:00.000Z"));
+    try {
+      service.handle({
+        type: "agentActivity",
+        sessionId: session.id,
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading file.ts",
+      });
+      service.handle({
+        type: "agentActivity",
+        sessionId: session.id,
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+      });
+      service.handle({
+        type: "assistantMessage",
+        sessionId: session.id,
+        content: "done",
+        encrypted: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const activities = store.listAgentActivities(session.id);
+    const [message] = store.listMessages(session.id);
+
+    expect(activities.map((activity) => activity.createdAt)).toEqual([
+      "2026-06-05T00:00:00.000Z",
+      "2026-06-05T00:00:00.001Z",
+    ]);
+    expect(message?.createdAt).toBe("2026-06-05T00:00:00.002Z");
+    expect(Date.parse(activities[1]?.createdAt ?? "")).toBeLessThan(
+      Date.parse(message?.createdAt ?? ""),
+    );
+  });
+
   it("does not let late approval events downgrade terminal sessions", () => {
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);

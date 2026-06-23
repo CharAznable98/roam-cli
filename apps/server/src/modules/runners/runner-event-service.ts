@@ -14,6 +14,8 @@ import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";
 
 export class RunnerEventService {
+  private lastOutputTimestampMs = 0;
+
   constructor(
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
@@ -77,7 +79,7 @@ export class RunnerEventService {
         role: "assistant",
         content: event.content,
         encrypted: event.encrypted,
-        createdAt: nowIso(),
+        createdAt: this.nextOutputTimestamp(),
       };
       this.store.addMessage(message);
       this.hub.broadcast({ type: "message:created", message });
@@ -98,7 +100,7 @@ export class RunnerEventService {
       this.store.appendAssistantToken(
         event.sessionId,
         event.content,
-        nowIso(),
+        this.nextOutputTimestamp(),
         event.encrypted,
       );
       this.hub.broadcast({
@@ -241,10 +243,16 @@ export class RunnerEventService {
       agent: input.agent,
       kind: input.kind,
       label: input.label,
-      createdAt: nowIso(),
+      createdAt: this.nextOutputTimestamp(),
     });
     this.hub.broadcast({ type: "activity:created", activity });
     return activity;
+  }
+
+  private nextOutputTimestamp(): string {
+    const next = Math.max(Date.now(), this.lastOutputTimestampMs + 1);
+    this.lastOutputTimestampMs = next;
+    return new Date(next).toISOString();
   }
 
   private handleErrorEvent(

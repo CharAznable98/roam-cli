@@ -340,6 +340,41 @@ describe("conversation model", () => {
     ]);
   });
 
+  it("keeps tied activity before the final assistant after earlier activity", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+        makeActivity({
+          id: "activity-2",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Reading file.ts", "Running tests"], latest: false },
+      "final",
+    ]);
+  });
+
   it("keeps trailing activity as the latest live group", () => {
     const items = getConversationDisplayItems(
       [makeMessage({ id: "user", role: "user", content: "question" })],

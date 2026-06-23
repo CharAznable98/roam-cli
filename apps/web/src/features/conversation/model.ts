@@ -26,6 +26,20 @@ export type ConversationOutputItem = Exclude<
   { type: "intermediateGroup" }
 >;
 
+type TimelineEntry =
+  | {
+      type: "message";
+      item: UiMessage;
+      time: number;
+      order: number;
+    }
+  | {
+      type: "activity";
+      item: AgentActivity;
+      time: number;
+      order: number;
+    };
+
 export function toUiMessage(
   message: Message,
   attachments: readonly MessageAttachment[] = [],
@@ -143,7 +157,7 @@ function buildTimelineOutputItems(
   activities: AgentActivity[],
   liveTrailingActivity: boolean,
 ): ConversationOutputItem[] {
-  const timeline = [
+  const timeline: TimelineEntry[] = [
     ...messages.map((message, index) => ({
       type: "message" as const,
       item: message,
@@ -158,7 +172,9 @@ function buildTimelineOutputItems(
     })),
   ].sort(
     (left, right) =>
-      safeTime(left.time) - safeTime(right.time) || left.order - right.order,
+      safeTime(left.time) - safeTime(right.time) ||
+      timelineTieOrder(left, right) ||
+      left.order - right.order,
   );
 
   const outputItems: ConversationOutputItem[] = [];
@@ -189,6 +205,29 @@ function buildTimelineOutputItems(
 
 function safeTime(value: number): number {
   return Number.isFinite(value) ? value : 0;
+}
+
+function timelineTieOrder(left: TimelineEntry, right: TimelineEntry): number {
+  if (left.type === right.type) {
+    return 0;
+  }
+  if (left.type === "activity" && right.type === "message") {
+    return compareActivityWithMessageTie(right.item);
+  }
+  if (left.type === "message" && right.type === "activity") {
+    return -compareActivityWithMessageTie(left.item);
+  }
+  return 0;
+}
+
+function compareActivityWithMessageTie(message: UiMessage): number {
+  if (message.role === "user") {
+    return 1;
+  }
+  if (message.role === "assistant") {
+    return -1;
+  }
+  return 0;
 }
 
 function isNormalMessage(message: UiMessage): boolean {
