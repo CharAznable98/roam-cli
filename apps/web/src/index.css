@@ -1859,7 +1859,7 @@
 
   .collapsible-message summary:focus-visible,
   .activity-group-trigger:focus-visible {
-    outline: 0;
+    outline: 2px solid transparent;
     border-radius: 6px;
     box-shadow: 0 0 0 2px rgba(19, 143, 189, 0.42);
   }
@@ -1912,6 +1912,15 @@
 
   .collapsible-message.activity-group.nested .activity-list {
     padding-top: 2px;
+  }
+
+  @media (forced-colors: active) {
+    .collapsible-message summary:focus-visible,
+    .activity-group-trigger:focus-visible {
+      outline: 2px solid CanvasText;
+      outline-offset: 2px;
+      box-shadow: none;
+    }
   }
 
   .activity-group-title {
@@ -3674,6 +3683,10 @@
 
   .activity-group-trigger {
     gap: 6px;
+  }
+
+  .collapsible-message.activity-group.nested .activity-group-trigger {
+    min-height: 44px;
   }
 
   .activity-group-title {
