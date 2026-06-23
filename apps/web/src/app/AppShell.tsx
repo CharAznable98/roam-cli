@@ -195,8 +195,7 @@ export function AppShell({ controller }: AppShellProps) {
   useEffect(() => {
     if (
       authView === "authenticated" &&
-      state.activeTab === "settings" &&
-      !accountSecurity
+      state.activeTab === "settings"
     ) {
       void refreshAccountSecurity().catch((accountError: unknown) => {
         notify(
@@ -207,7 +206,6 @@ export function AppShell({ controller }: AppShellProps) {
       });
     }
   }, [
-    accountSecurity,
     authView,
     notify,
     refreshAccountSecurity,

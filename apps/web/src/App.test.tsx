@@ -187,6 +187,7 @@ const accountSecurity = {
 };
 
 let authStatus: AuthStatus;
+let accountSecurityResponses: Array<typeof accountSecurity>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -395,7 +396,9 @@ function authMockResponse(
     });
   }
   if (pathname === "/v1/auth/account") {
-    return jsonResponse({ account: accountSecurity });
+    return jsonResponse({
+      account: accountSecurityResponses.shift() ?? accountSecurity,
+    });
   }
   return undefined;
 }
@@ -458,6 +461,7 @@ describe("App", () => {
       status: "authenticated",
       session: authSession,
     };
+    accountSecurityResponses = [accountSecurity];
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
@@ -1027,6 +1031,41 @@ describe("App", () => {
     expect(screen.getByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
+  });
+
+  it("refreshes account security when Settings opens", async () => {
+    accountSecurityResponses = [
+      accountSecurity,
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-refreshed",
+        runnerTokenUpdatedAt: "2026-06-05T00:02:00.000Z",
+        sessions: [
+          {
+            ...authSession,
+            id: "auth-session-refreshed",
+            lastSeenAt: "2026-06-05T00:02:00.000Z",
+          },
+        ],
+      },
+    ];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(
+      await screen.findByText("runner-token-refreshed"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/--token 'runner-token-refreshed'/),
+    ).toBeInTheDocument();
+    expect(
+      fetchCalls.filter(
+        (call) => new URL(call.url).pathname === "/v1/auth/account",
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps Settings reachable before runners connect", async () => {
