@@ -1654,6 +1654,30 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("hides diff editing when the selected file workspace is unavailable", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    remoteSessionStatus = "pending";
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not offer direct editing for staged or history diffs", async () => {
     gitStatusClean = false;
     gitStatusChanges = [
@@ -3200,6 +3224,42 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
   });
 
+  it("does not reload or discard dirty edits when reselecting the selected file", async () => {
+    const confirm = vi.mocked(window.confirm);
+    confirm.mockClear();
+    render(<App />);
+
+    const fileButton = await findSessionFile(/App\.tsx/);
+    fireEvent.click(fileButton);
+    await findFileSourcePreview("src/App.tsx");
+    const initialContentRequests = fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files/content" &&
+        new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+        call.init?.method !== "PUT",
+    ).length;
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const dirty = true;\n" },
+    });
+
+    fireEvent.click(fileButton);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const dirty = true;\n");
+    expect(
+      fetchCalls.filter(
+        (call) =>
+          new URL(call.url).pathname ===
+            "/v1/sessions/session-1/files/content" &&
+          new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+          call.init?.method !== "PUT",
+      ).length,
+    ).toBe(initialContentRequests);
+  });
+
   it("does not allow cancelling file edits while a save is in flight", async () => {
     const confirm = vi.mocked(window.confirm);
     confirm.mockClear();
@@ -3451,6 +3511,34 @@ describe("App", () => {
         screen.getByRole("textbox", { name: "View source src/Fast.tsx" }),
       ).toHaveValue("export const fast = true;"),
     );
+  });
+
+  it("keeps current dirty edits when an older file request fails later", async () => {
+    const slowContent = deferred<Response>();
+    deferredFileContent.set("src/Slow.tsx", slowContent);
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/Slow\.tsx/));
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const stillEditing = true;\n" },
+    });
+
+    await act(async () => {
+      slowContent.reject(new Error("slow failed"));
+      await slowContent.promise.catch(() => undefined);
+    });
+    await flushAppEffects();
+
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const stillEditing = true;\n");
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+    expect(
+      screen.queryByText("File content request failed"),
+    ).not.toBeInTheDocument();
   });
 
   it("edits and saves real file content through the API", async () => {

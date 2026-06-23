@@ -891,13 +891,10 @@ export function useRoamController() {
     if (shouldReload && !confirmDiscardSelectedFileChanges(state)) {
       return false;
     }
-    if (
-      options.edit === true &&
-      !shouldReload &&
-      path === state.selectedFilePath &&
-      state.fileContent?.path === path
-    ) {
-      dispatch({ type: "fileEditStarted" });
+    if (!shouldReload && path === state.selectedFilePath) {
+      if (options.edit === true && state.fileContent?.path === path) {
+        dispatch({ type: "fileEditStarted" });
+      }
       return true;
     }
     loadFileContent(selectedSession.id, path, options);
@@ -969,6 +966,7 @@ export function useRoamController() {
     if (!apiRef.current) return;
     dispatch({
       type: "fileContentLoading",
+      sessionId,
       path,
       ...(options.edit === undefined ? {} : { edit: options.edit }),
     });
@@ -978,6 +976,8 @@ export function useRoamController() {
       .catch((fileError: unknown) =>
         dispatch({
           type: "fileContentFailed",
+          sessionId,
+          path,
           message: errorMessage(fileError),
         }),
       );

@@ -164,9 +164,19 @@ export type AppAction =
       message: string;
       requestId?: string;
     }
-  | { type: "fileContentLoading"; path: string; edit?: boolean }
+  | {
+      type: "fileContentLoading";
+      sessionId: string;
+      path: string;
+      edit?: boolean;
+    }
   | { type: "fileContentLoaded"; result: FileContentResult }
-  | { type: "fileContentFailed"; message: string }
+  | {
+      type: "fileContentFailed";
+      sessionId: string;
+      path: string;
+      message: string;
+    }
   | { type: "editorContentChanged"; content: string }
   | { type: "fileEditStarted" }
   | { type: "fileEditCancelled" }
@@ -538,6 +548,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           }
         : state;
     case "fileContentFailed":
+      if (
+        action.sessionId !== state.selectedSessionId ||
+        action.path !== state.selectedFilePath ||
+        state.fileContentState !== "loading"
+      ) {
+        return state;
+      }
       return pushNotification(
         { ...state, fileEditMode: false, fileContentState: "error" },
         "error",
