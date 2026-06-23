@@ -273,6 +273,82 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("Running tests")).toBeNull();
   });
 
+  it("renders activity groups as nested rows inside collapsed intermediate output", () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const progress: UiMessage = {
+      ...user,
+      id: "message-progress",
+      role: "assistant",
+      content: "checking files",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const final: UiMessage = {
+      ...user,
+      id: "message-final",
+      role: "assistant",
+      content: "final answer",
+      createdAt: "2026-06-05T00:00:04.000Z",
+    };
+    const activities: AgentActivity[] = [
+      {
+        id: "activity-1",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading apps/web/src/features/conversation/ChatPanel.tsx",
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+      {
+        id: "activity-2",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running conversation regression tests",
+        createdAt: "2026-06-05T00:00:03.000Z",
+      },
+    ];
+    const { container } = render(
+      <ChatPanel
+        session={{ ...baseSession, status: "completed" }}
+        messages={[user, progress, final]}
+        activities={activities}
+        onSend={vi.fn()}
+      />,
+    );
+
+    const intermediateLabel = screen.getByText("Intermediate output (3)");
+    const intermediateGroup = intermediateLabel.closest("details");
+    expect(intermediateGroup).not.toBeNull();
+    expect(intermediateGroup).toHaveClass("intermediate-group");
+    expect(
+      container.querySelectorAll(".message-list > .activity-group"),
+    ).toHaveLength(0);
+    expect(
+      intermediateGroup!.querySelectorAll(".activity-group.nested"),
+    ).toHaveLength(2);
+    expect(within(intermediateGroup!).getAllByRole("button")).toHaveLength(2);
+    expect(screen.getByText("final answer")).toBeInTheDocument();
+
+    expect(
+      within(intermediateGroup!).queryByText(
+        "Reading apps/web/src/features/conversation/ChatPanel.tsx",
+      ),
+    ).toBeNull();
+    fireEvent.click(within(intermediateGroup!).getAllByRole("button")[0]!);
+    expect(
+      within(intermediateGroup!).getByText(
+        "Reading apps/web/src/features/conversation/ChatPanel.tsx",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("submits the composer with Ctrl+Enter", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
