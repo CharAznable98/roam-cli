@@ -61,6 +61,7 @@ export interface AppState {
   selectedFilePath: string;
   fileContent: FileContentResult | undefined;
   editorContent: string;
+  fileEditMode: boolean;
   fileContentState: AsyncState;
   fileSaveState: AsyncState;
   patchApplyState: AsyncState;
@@ -93,6 +94,7 @@ export const initialAppState: AppState = {
   selectedFilePath: "",
   fileContent: undefined,
   editorContent: "",
+  fileEditMode: false,
   fileContentState: "idle",
   fileSaveState: "idle",
   patchApplyState: "idle",
@@ -169,10 +171,22 @@ export type AppAction =
       message: string;
       requestId?: string;
     }
-  | { type: "fileContentLoading"; path: string }
+  | {
+      type: "fileContentLoading";
+      sessionId: string;
+      path: string;
+      edit?: boolean;
+    }
   | { type: "fileContentLoaded"; result: FileContentResult }
-  | { type: "fileContentFailed"; message: string }
+  | {
+      type: "fileContentFailed";
+      sessionId: string;
+      path: string;
+      message: string;
+    }
   | { type: "editorContentChanged"; content: string }
+  | { type: "fileEditStarted" }
+  | { type: "fileEditCancelled" }
   | { type: "fileSaveStarted" }
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
@@ -335,6 +349,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: "",
         fileContent: undefined,
         editorContent: "",
+        fileEditMode: false,
         fileContentState: "idle",
         fileSaveState: "idle",
       };
@@ -347,6 +362,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
         fileContent: action.resetSelection ? undefined : state.fileContent,
         editorContent: action.resetSelection ? "" : state.editorContent,
+        fileEditMode: action.resetSelection ? false : state.fileEditMode,
         fileContentState: action.resetSelection
           ? "idle"
           : state.fileContentState,
@@ -423,6 +439,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.resetSelection ? "" : state.selectedFilePath,
         fileContent: action.resetSelection ? undefined : state.fileContent,
         editorContent: action.resetSelection ? "" : state.editorContent,
+        fileEditMode: action.resetSelection ? false : state.fileEditMode,
         fileContentState: action.resetSelection
           ? "idle"
           : state.fileContentState,
@@ -538,6 +555,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         selectedFilePath: action.path,
         fileContent: undefined,
         editorContent: "",
+        fileEditMode: action.edit === true,
         fileContentState: "loading",
         fileSaveState: "idle",
       };
@@ -547,22 +565,39 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ? {
             ...state,
             fileContent: action.result,
-            editorContent:
-              action.result.kind === undefined || action.result.kind === "text"
-                ? action.result.content
-                : "",
+            editorContent: textFileContent(action.result) ?? "",
+            fileEditMode:
+              state.fileEditMode && isEditableFileContent(action.result),
             fileContentState: "ready",
           }
         : state;
     case "fileContentFailed":
+      if (
+        action.sessionId !== state.selectedSessionId ||
+        action.path !== state.selectedFilePath ||
+        state.fileContentState !== "loading"
+      ) {
+        return state;
+      }
       return pushNotification(
-        { ...state, fileContentState: "error" },
+        { ...state, fileEditMode: false, fileContentState: "error" },
         "error",
         "File content request failed",
         action.message,
       );
     case "editorContentChanged":
       return { ...state, editorContent: action.content };
+    case "fileEditStarted":
+      return { ...state, fileEditMode: true };
+    case "fileEditCancelled":
+      return {
+        ...state,
+        editorContent: state.fileContent
+          ? (textFileContent(state.fileContent) ?? "")
+          : state.editorContent,
+        fileEditMode: false,
+        fileSaveState: "idle",
+      };
     case "fileSaveStarted":
       return { ...state, fileSaveState: "loading" };
     case "fileSaveSucceeded":
@@ -970,10 +1005,8 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       fileContent: event.result,
-      editorContent:
-        event.result.kind === undefined || event.result.kind === "text"
-          ? event.result.content
-          : "",
+      editorContent: textFileContent(event.result) ?? "",
+      fileEditMode: state.fileEditMode && isEditableFileContent(event.result),
       fileContentState: "ready",
     };
   }
@@ -1400,4 +1433,14 @@ function notificationKey(
   message: string,
 ): string {
   return `${tone}\n${title}\n${message}`;
+}
+
+function textFileContent(content: FileContentResult): string | undefined {
+  return content.kind === undefined || content.kind === "text"
+    ? content.content
+    : undefined;
+}
+
+function isEditableFileContent(content: FileContentResult): boolean {
+  return textFileContent(content) !== undefined && !content.truncated;
 }

@@ -326,6 +326,15 @@ async function findSessionFile(name: RegExp) {
   return screen.findByRole("treeitem", { name });
 }
 
+async function findFileSourcePreview(path: string) {
+  return screen.findByRole("textbox", { name: `View source ${path}` });
+}
+
+async function startFileEdit(path: string) {
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  return screen.findByRole("textbox", { name: `Edit ${path}` });
+}
+
 async function flushAppEffects(rounds = 6) {
   await act(async () => {
     for (let index = 0; index < rounds; index += 1) {
@@ -745,6 +754,12 @@ describe("App", () => {
                     size: 12,
                   },
                   {
+                    path: "src/README.md",
+                    name: "README.md",
+                    type: "file",
+                    size: 34,
+                  },
+                  {
                     path: "src/logo.png",
                     name: "logo.png",
                     type: "file",
@@ -802,7 +817,9 @@ describe("App", () => {
                     content:
                       requestedPath === "src/App.tsx"
                         ? "export function RealContent() { return null; }"
-                        : `export const file = ${JSON.stringify(requestedPath)};`,
+                        : requestedPath === "src/README.md"
+                          ? "# Markdown Preview\n\n- rendered item"
+                          : `export const file = ${JSON.stringify(requestedPath)};`,
                   }),
               truncated: false,
               encoding: requestedPath.endsWith(".png") ? "base64" : "utf8",
@@ -918,7 +935,10 @@ describe("App", () => {
               requestId: "git-diff-1",
               context: body.context,
               path: requestedPath,
+              ...(body.oldPath ? { oldPath: body.oldPath } : {}),
               mode: requestedMode,
+              ...(body.oldRef ? { oldRef: body.oldRef } : {}),
+              ...(body.newRef ? { newRef: body.newRef } : {}),
               oldContent: "",
               newContent: `diff for ${requestedPath}`,
               language: "typescript",
@@ -1407,7 +1427,9 @@ describe("App", () => {
       screen.getByRole("complementary", { name: "Workspace tools" }),
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
-    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
     await waitFor(() =>
@@ -1499,6 +1521,231 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it("opens editable working tree diffs in the file editor", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+
+    const gitPanel = within(screen.getByRole("region", { name: "Git" }));
+    fireEvent.click(gitPanel.getByRole("button", { name: "Edit" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export function RealContent() { return null; }");
+  });
+
+  it("reloads selected files before editing from working tree diffs", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const initialContentRequests = fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files/content" &&
+        new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+        call.init?.method !== "PUT",
+    ).length;
+    const refreshedContent = deferred<Response>();
+    deferredFileContent.set("src/App.tsx", refreshedContent);
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    const gitPanel = within(screen.getByRole("region", { name: "Git" }));
+    fireEvent.click(gitPanel.getByRole("button", { name: "Edit" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) =>
+            new URL(call.url).pathname ===
+              "/v1/sessions/session-1/files/content" &&
+            new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+            call.init?.method !== "PUT",
+        ).length,
+      ).toBe(initialContentRequests + 1),
+    );
+
+    deferredFileContent.delete("src/App.tsx");
+    await act(async () => {
+      refreshedContent.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-content-refresh",
+            sessionId: "session-1",
+            path: "src/App.tsx",
+            kind: "text",
+            content: "export const fresh = true;",
+            truncated: false,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await refreshedContent.promise;
+    });
+
+    expect(
+      await screen.findByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const fresh = true;");
+  });
+
+  it("hides diff editing when the selected Git context is not the active file session context", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(tools.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+
+    fireEvent.change(tools.getByRole("combobox"), {
+      target: { value: "project:project-1" },
+    });
+
+    expect(tools.getByRole("combobox")).toHaveValue("project:project-1");
+    await waitFor(() =>
+      expect(
+        tools.queryByRole("button", { name: "Edit" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("hides diff editing when no file session is selected", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:deleted",
+            sessionId: "session-1",
+          }),
+        }),
+      );
+    });
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides diff editing when the selected file workspace is unavailable", async () => {
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder = "/workspace/.roamcli-worktrees/session-1";
+    remoteSessionStatus = "pending";
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer direct editing for staged or history diffs", async () => {
+    gitStatusClean = false;
+    gitStatusChanges = [
+      {
+        path: "src/New.tsx",
+        oldPath: "src/Old.tsx",
+        status: "renamed",
+        staged: true,
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/New.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/New.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+    expect(
+      (await tools.findAllByText("Initial commit")).length,
+    ).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
   });
 
   it("includes old paths when unstaging staged rename groups", async () => {
@@ -2286,9 +2533,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("Loaded from API");
     fireEvent.click(await findSessionFile(/App\.tsx/));
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/App.tsx",
-    });
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
     fireEvent.change(editor, {
       target: { value: "export const unsaved = true;\n" },
     });
@@ -2947,22 +3193,139 @@ describe("App", () => {
 
     fireEvent.click(fileButton);
 
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/App.tsx",
-    });
-    expect(editor).toHaveValue(
+    const sourcePreview = await findFileSourcePreview("src/App.tsx");
+    expect(sourcePreview).toHaveValue(
       "export function RealContent() { return null; }",
     );
-    expect(editor).toHaveClass("monaco-file-editor");
-    expect(screen.getByText("Editable")).toBeInTheDocument();
-    expect(screen.getByText("Saved")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled();
+    expect(sourcePreview).toHaveClass("monaco-file-editor");
+    expect(sourcePreview).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Save file" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Editable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
     const contentUrl = fetchRequests.find((url) =>
       url.includes("/v1/sessions/session-1/files/content"),
     );
     expect(contentUrl).toBeDefined();
     expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
       "src/App.tsx",
+    );
+  });
+
+  it("confirms before cancelling dirty file edits", async () => {
+    const confirm = vi.mocked(window.confirm);
+    confirm.mockClear();
+    confirm.mockReturnValueOnce(false);
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const unsaved = true;\n" },
+    });
+
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Discard unsaved changes in src/App.tsx?",
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const unsaved = true;\n");
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+
+    confirm.mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(await findFileSourcePreview("src/App.tsx")).toHaveValue(
+      "export function RealContent() { return null; }",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Save file" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("does not reload or discard dirty edits when reselecting the selected file", async () => {
+    const confirm = vi.mocked(window.confirm);
+    confirm.mockClear();
+    render(<App />);
+
+    const fileButton = await findSessionFile(/App\.tsx/);
+    fireEvent.click(fileButton);
+    await findFileSourcePreview("src/App.tsx");
+    const initialContentRequests = fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files/content" &&
+        new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+        call.init?.method !== "PUT",
+    ).length;
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const dirty = true;\n" },
+    });
+
+    fireEvent.click(fileButton);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const dirty = true;\n");
+    expect(
+      fetchCalls.filter(
+        (call) =>
+          new URL(call.url).pathname ===
+            "/v1/sessions/session-1/files/content" &&
+          new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+          call.init?.method !== "PUT",
+      ).length,
+    ).toBe(initialContentRequests);
+  });
+
+  it("does not allow cancelling file edits while a save is in flight", async () => {
+    const confirm = vi.mocked(window.confirm);
+    confirm.mockClear();
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const saving = true;\n" },
+    });
+
+    const saveResponse = deferred<Response>();
+    deferredFileContent.set("src/App.tsx", saveResponse);
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }));
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toBeDisabled();
+    fireEvent.click(cancelButton);
+    expect(confirm).not.toHaveBeenCalled();
+
+    deferredFileContent.delete("src/App.tsx");
+    await act(async () => {
+      saveResponse.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-write-1",
+            sessionId: "session-1",
+            path: "src/App.tsx",
+            bytesWritten: 28,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await saveResponse.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled(),
     );
   });
 
@@ -3007,10 +3370,36 @@ describe("App", () => {
       "src",
       "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
     );
-    expect(screen.getByText("Read-only")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Save file" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("textbox", { name: "Edit src/logo.png" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders markdown files as preview by default and can switch to source", async () => {
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/README\.md/));
+
+    expect(
+      await screen.findByRole("heading", { name: "Markdown Preview" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("rendered item")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "View source src/README.md" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+
+    expect(await findFileSourcePreview("src/README.md")).toHaveValue(
+      "# Markdown Preview\n\n- rendered item",
+    );
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
   });
 
   it("opens runner-local markdown file links in the file panel", async () => {
@@ -3040,10 +3429,8 @@ describe("App", () => {
       await within(conversation).findByRole("button", { name: "App" }),
     );
 
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/App.tsx",
-    });
-    expect(editor).toHaveValue(
+    const sourcePreview = await findFileSourcePreview("src/App.tsx");
+    expect(sourcePreview).toHaveValue(
       "export function RealContent() { return null; }",
     );
     const contentUrl = fetchRequests.find((url) =>
@@ -3081,9 +3468,8 @@ describe("App", () => {
     fireEvent.click(
       await within(conversation).findByRole("button", { name: "Button" }),
     );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/components/Button.tsx",
-    });
+    await findFileSourcePreview("src/components/Button.tsx");
+    const editor = await startFileEdit("src/components/Button.tsx");
     fireEvent.change(editor, {
       target: { value: "export const button = true;\n" },
     });
@@ -3091,7 +3477,9 @@ describe("App", () => {
     const requestCountBeforeSave = fetchRequests.length;
     fireEvent.click(screen.getByRole("button", { name: "Save file" }));
 
-    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled(),
+    );
     const refreshedFileTreePaths = fetchRequests
       .slice(requestCountBeforeSave)
       .filter((url) => new URL(url).pathname === "/v1/sessions/session-1/files")
@@ -3123,10 +3511,8 @@ describe("App", () => {
         },
       }),
     );
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/Fast.tsx",
-    });
-    expect(editor).toHaveValue("export const fast = true;");
+    const sourcePreview = await findFileSourcePreview("src/Fast.tsx");
+    expect(sourcePreview).toHaveValue("export const fast = true;");
 
     slowContent.resolve(
       jsonResponse({
@@ -3144,26 +3530,60 @@ describe("App", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("textbox", { name: "Edit src/Fast.tsx" }),
+        screen.queryByRole("textbox", { name: "Edit src/Fast.tsx" }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "View source src/Fast.tsx" }),
       ).toHaveValue("export const fast = true;"),
     );
+  });
+
+  it("keeps current dirty edits when an older file request fails later", async () => {
+    const slowContent = deferred<Response>();
+    deferredFileContent.set("src/Slow.tsx", slowContent);
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/Slow\.tsx/));
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const stillEditing = true;\n" },
+    });
+
+    await act(async () => {
+      slowContent.reject(new Error("slow failed"));
+      await slowContent.promise.catch(() => undefined);
+    });
+    await flushAppEffects();
+
+    expect(
+      screen.getByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const stillEditing = true;\n");
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+    expect(
+      screen.queryByText("File content request failed"),
+    ).not.toBeInTheDocument();
   });
 
   it("edits and saves real file content through the API", async () => {
     render(<App />);
 
     fireEvent.click(await findSessionFile(/App\.tsx/));
-    const editor = await screen.findByRole("textbox", {
-      name: "Edit src/App.tsx",
-    });
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
     fireEvent.change(editor, {
       target: { value: "export const saved = true;\n" },
     });
 
-    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Save file" }));
 
-    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled(),
+    );
     const saveCall = fetchCalls.find(
       (call) =>
         call.url.includes("/v1/sessions/session-1/files/content") &&

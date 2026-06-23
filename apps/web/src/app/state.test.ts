@@ -875,6 +875,67 @@ describe("app reducer", () => {
     expect(next.fileContentState).toBe("loading");
   });
 
+  it("ignores stale file content failures for a different selected file", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/Fast.tsx",
+        fileContent: {
+          requestId: "fast-content",
+          sessionId: "session-1",
+          path: "src/Fast.tsx",
+          kind: "text",
+          content: "export const fast = true;",
+          truncated: false,
+          encoding: "utf8",
+        },
+        editorContent: "export const dirty = true;",
+        fileEditMode: true,
+        fileContentState: "ready",
+        fileSaveState: "idle",
+      },
+      {
+        type: "fileContentFailed",
+        sessionId: "session-1",
+        path: "src/Slow.tsx",
+        message: "Slow load failed",
+      },
+    );
+
+    expect(next.fileEditMode).toBe(true);
+    expect(next.fileContentState).toBe("ready");
+    expect(next.editorContent).toBe("export const dirty = true;");
+    expect(next.notifications).toEqual([]);
+  });
+
+  it("marks current file content load failures as errors", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        selectedSessionId: "session-1",
+        selectedFilePath: "src/App.tsx",
+        fileEditMode: true,
+        fileContentState: "loading",
+      },
+      {
+        type: "fileContentFailed",
+        sessionId: "session-1",
+        path: "src/App.tsx",
+        message: "Load failed",
+      },
+    );
+
+    expect(next.fileEditMode).toBe(false);
+    expect(next.fileContentState).toBe("error");
+    expect(next.notifications).toHaveLength(1);
+    expect(next.notifications[0]).toMatchObject({
+      tone: "error",
+      title: "File content request failed",
+      message: "Load failed",
+    });
+  });
+
   it("ignores stale file tree path loads after a root reset", () => {
     const files: FileNode[] = [
       {
