@@ -84,6 +84,7 @@ type GitPanelProps = {
   onCommit: (input: ApiGitCommit) => Promise<GitJob>;
   onRemoteOperation: (input: ApiGitRemoteOperation) => Promise<GitJob>;
   onRemoveWorktree: (input: ApiGitRemoveWorktree) => Promise<GitJob>;
+  canOpenFileForEdit: boolean;
   onOpenFileForEdit: (path: string) => void;
   onNotify: Notify;
 };
@@ -105,6 +106,7 @@ export function GitPanel({
   onCommit,
   onRemoteOperation,
   onRemoveWorktree,
+  canOpenFileForEdit,
   onOpenFileForEdit,
   onNotify,
 }: GitPanelProps) {
@@ -246,6 +248,7 @@ export function GitPanel({
     selectedChange !== undefined &&
     !selectedChange.staged &&
     selectedChange.status !== "deleted" &&
+    canOpenFileForEdit &&
     selectedContextMatchesDefault &&
     showTextDiff;
 

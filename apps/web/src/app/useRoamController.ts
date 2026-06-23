@@ -879,16 +879,21 @@ export function useRoamController() {
       );
   };
 
-  const selectFile = (path: string, options: { edit?: boolean } = {}) => {
+  const selectFile = (
+    path: string,
+    options: { edit?: boolean; forceReload?: boolean } = {},
+  ) => {
     if (!selectedSession || !apiRef.current) return false;
-    if (
-      path !== state.selectedFilePath &&
-      !confirmDiscardSelectedFileChanges(state)
-    ) {
+    const shouldReload =
+      options.forceReload === true ||
+      path !== state.selectedFilePath ||
+      state.fileContent?.path !== path;
+    if (shouldReload && !confirmDiscardSelectedFileChanges(state)) {
       return false;
     }
     if (
       options.edit === true &&
+      !shouldReload &&
       path === state.selectedFilePath &&
       state.fileContent?.path === path
     ) {
@@ -900,7 +905,7 @@ export function useRoamController() {
   };
 
   const openFileForEdit = (path: string) => {
-    if (selectFile(path, { edit: true })) {
+    if (selectFile(path, { edit: true, forceReload: true })) {
       dispatch({ type: "activeTabChanged", tab: "files" });
     }
   };
@@ -910,6 +915,9 @@ export function useRoamController() {
   };
 
   const cancelSelectedFileEdit = () => {
+    if (state.fileSaveState === "loading") {
+      return;
+    }
     if (!confirmDiscardSelectedFileChanges(state)) {
       return;
     }

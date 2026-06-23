@@ -461,6 +461,7 @@ export function AppShell({ controller }: AppShellProps) {
                     onCommit={commitGitChanges}
                     onRemoteOperation={runGitRemoteOperation}
                     onRemoveWorktree={removeGitWorktree}
+                    canOpenFileForEdit={selectedSession !== undefined}
                     onOpenFileForEdit={openFileForEdit}
                     onNotify={(tone, title, message) =>
                       dispatch({

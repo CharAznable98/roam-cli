@@ -3290,6 +3290,12 @@
     min-height: 44px;
   }
 
+  .file-tree .tree-row {
+    min-height: 44px;
+    padding-bottom: 9px;
+    padding-top: 9px;
+  }
+
   .session-title-button {
     min-height: 44px;
     align-content: center;

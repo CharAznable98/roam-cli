@@ -1400,7 +1400,9 @@ describe("App", () => {
       screen.getByRole("complementary", { name: "Workspace tools" }),
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
-    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
     fireEvent.click(tools.getByRole("tab", { name: "History" }));
 
     await waitFor(() =>
@@ -1503,7 +1505,9 @@ describe("App", () => {
       screen.getByRole("complementary", { name: "Workspace tools" }),
     );
     fireEvent.click(tools.getByRole("button", { name: "Git" }));
-    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
     await waitFor(() =>
       expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
         "data-modified",
@@ -1511,11 +1515,79 @@ describe("App", () => {
       ),
     );
 
-    fireEvent.click(tools.getByRole("button", { name: "Edit" }));
+    const gitPanel = within(screen.getByRole("region", { name: "Git" }));
+    fireEvent.click(gitPanel.getByRole("button", { name: "Edit" }));
 
     expect(
       await screen.findByRole("textbox", { name: "Edit src/App.tsx" }),
     ).toHaveValue("export function RealContent() { return null; }");
+  });
+
+  it("reloads selected files before editing from working tree diffs", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const initialContentRequests = fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files/content" &&
+        new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+        call.init?.method !== "PUT",
+    ).length;
+    const refreshedContent = deferred<Response>();
+    deferredFileContent.set("src/App.tsx", refreshedContent);
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    const gitPanel = within(screen.getByRole("region", { name: "Git" }));
+    fireEvent.click(gitPanel.getByRole("button", { name: "Edit" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) =>
+            new URL(call.url).pathname ===
+              "/v1/sessions/session-1/files/content" &&
+            new URL(call.url).searchParams.get("path") === "src/App.tsx" &&
+            call.init?.method !== "PUT",
+        ).length,
+      ).toBe(initialContentRequests + 1),
+    );
+
+    deferredFileContent.delete("src/App.tsx");
+    await act(async () => {
+      refreshedContent.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-content-refresh",
+            sessionId: "session-1",
+            path: "src/App.tsx",
+            kind: "text",
+            content: "export const fresh = true;",
+            truncated: false,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await refreshedContent.promise;
+    });
+
+    expect(
+      await screen.findByRole("textbox", { name: "Edit src/App.tsx" }),
+    ).toHaveValue("export const fresh = true;");
   });
 
   it("hides diff editing when the selected Git context is not the active file session context", async () => {
@@ -1548,6 +1620,38 @@ describe("App", () => {
         tools.queryByRole("button", { name: "Edit" }),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("hides diff editing when no file session is selected", async () => {
+    gitStatusClean = false;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:deleted",
+            sessionId: "session-1",
+          }),
+        }),
+      );
+    });
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await tools.findByText("src/App.tsx");
+    await waitFor(() =>
+      expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+        "data-modified",
+        "diff for src/App.tsx",
+      ),
+    );
+    expect(
+      tools.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not offer direct editing for staged or history diffs", async () => {
@@ -3094,6 +3198,48 @@ describe("App", () => {
       screen.queryByRole("button", { name: "Save file" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("does not allow cancelling file edits while a save is in flight", async () => {
+    const confirm = vi.mocked(window.confirm);
+    confirm.mockClear();
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    const editor = await startFileEdit("src/App.tsx");
+    fireEvent.change(editor, {
+      target: { value: "export const saving = true;\n" },
+    });
+
+    const saveResponse = deferred<Response>();
+    deferredFileContent.set("src/App.tsx", saveResponse);
+    fireEvent.click(screen.getByRole("button", { name: "Save file" }));
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toBeDisabled();
+    fireEvent.click(cancelButton);
+    expect(confirm).not.toHaveBeenCalled();
+
+    deferredFileContent.delete("src/App.tsx");
+    await act(async () => {
+      saveResponse.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-write-1",
+            sessionId: "session-1",
+            path: "src/App.tsx",
+            bytesWritten: 28,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await saveResponse.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save file" })).toBeDisabled(),
+    );
   });
 
   it("resets expanded directories after refreshing the root file tree", async () => {

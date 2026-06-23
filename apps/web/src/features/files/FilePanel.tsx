@@ -223,6 +223,7 @@ export function FilePanel({
                   <button
                     className="small-button"
                     type="button"
+                    disabled={saveState === "loading"}
                     onClick={onCancelEdit}
                   >
                     <X size={14} />
