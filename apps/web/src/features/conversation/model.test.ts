@@ -311,6 +311,35 @@ describe("conversation model", () => {
     ]);
   });
 
+  it("keeps tied activity before the following normal message", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "final",
+          role: "assistant",
+          content: "answer",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Running tests",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Running tests"], latest: false },
+      "final",
+    ]);
+  });
+
   it("keeps trailing activity as the latest live group", () => {
     const items = getConversationDisplayItems(
       [makeMessage({ id: "user", role: "user", content: "question" })],
@@ -329,6 +358,28 @@ describe("conversation model", () => {
       "user",
       { activity: ["Reading file.ts"], latest: true },
     ]);
+  });
+
+  it("does not mark trailing activity as live after terminal sessions", () => {
+    for (const status of ["completed", "failed", "stopped"] as const) {
+      const items = getConversationDisplayItems(
+        [makeMessage({ id: "user", role: "user", content: "question" })],
+        [
+          makeActivity({
+            id: `activity-${status}`,
+            kind: "task_progress",
+            label: "Cleaning up",
+            createdAt: "2026-06-05T00:00:01.000Z",
+          }),
+        ],
+        status,
+      );
+
+      expect(displayShape(items)).toEqual([
+        "user",
+        { activity: ["Cleaning up"], latest: false },
+      ]);
+    }
   });
 
   it("folds activity groups into intermediate output when message output is collapsed", () => {

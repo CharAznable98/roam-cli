@@ -215,6 +215,64 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("Claude Code task progress:")).toBeNull();
   });
 
+  it("collapses an expanded latest activity group when it becomes historical", async () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const assistant: UiMessage = {
+      ...user,
+      id: "message-assistant",
+      role: "assistant",
+      content: "answer",
+      createdAt: "2026-06-05T00:00:02.000Z",
+    };
+    const activities: AgentActivity[] = [
+      {
+        id: "activity-1",
+        sessionId: "session-1",
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Running tests",
+        createdAt: "2026-06-05T00:00:01.000Z",
+      },
+    ];
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ChatPanel
+        session={{ ...baseSession, status: "running" }}
+        messages={[user]}
+        activities={activities}
+        onSend={onSend}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Running tests · 1 step" }),
+    );
+    expect(screen.getAllByText("Running tests")).toHaveLength(2);
+
+    rerender(
+      <ChatPanel
+        session={{ ...baseSession, status: "completed" }}
+        messages={[user, assistant]}
+        activities={activities}
+        onSend={onSend}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Activity (1)" }),
+      ).toHaveAttribute("aria-expanded", "false"),
+    );
+    expect(screen.queryByText("Running tests")).toBeNull();
+  });
+
   it("submits the composer with Ctrl+Enter", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);

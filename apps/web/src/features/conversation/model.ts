@@ -101,7 +101,11 @@ export function getConversationDisplayItems(
   activities: AgentActivity[],
   sessionStatus: SessionStatus,
 ): ConversationDisplayItem[] {
-  const outputItems = buildTimelineOutputItems(messages, activities);
+  const outputItems = buildTimelineOutputItems(
+    messages,
+    activities,
+    isActiveSessionStatus(sessionStatus),
+  );
   const displayItems: ConversationDisplayItem[] = [];
   let activeUser: UiMessage | undefined;
   let turnItems: ConversationOutputItem[] = [];
@@ -137,6 +141,7 @@ export function getConversationDisplayItems(
 function buildTimelineOutputItems(
   messages: UiMessage[],
   activities: AgentActivity[],
+  liveTrailingActivity: boolean,
 ): ConversationOutputItem[] {
   const timeline = [
     ...messages.map((message, index) => ({
@@ -149,7 +154,7 @@ function buildTimelineOutputItems(
       type: "activity" as const,
       item: activity,
       time: Date.parse(activity.createdAt),
-      order: messages.length * 2 + index * 2 + 1,
+      order: index * 2 + 1,
     })),
   ].sort(
     (left, right) =>
@@ -178,7 +183,7 @@ function buildTimelineOutputItems(
     outputItems.push(toDisplayMessage(entry.item));
   }
 
-  flushActivities(true);
+  flushActivities(liveTrailingActivity);
   return outputItems;
 }
 
@@ -188,6 +193,14 @@ function safeTime(value: number): number {
 
 function isNormalMessage(message: UiMessage): boolean {
   return message.role === "user" || message.role === "assistant";
+}
+
+function isActiveSessionStatus(status: SessionStatus): boolean {
+  return (
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_approval"
+  );
 }
 
 function toActivityGroup(

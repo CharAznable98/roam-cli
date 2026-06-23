@@ -854,6 +854,12 @@ function AgentActivityGroup({
   const buttonLabel =
     group.latest && latest ? `${title} · ${stepCountLabel}` : title;
 
+  useEffect(() => {
+    if (!group.latest) {
+      setOpen(false);
+    }
+  }, [group.latest]);
+
   return (
     <div
       className={`collapsible-message activity-group${nested ? " nested" : ""}${group.latest ? " latest" : ""}${open ? " is-open" : ""}`}
