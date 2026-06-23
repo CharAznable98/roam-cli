@@ -96,6 +96,36 @@ export function useRoamController() {
   const streamRef = useRef<WebSocket | undefined>(undefined);
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
+  const accountSecurityRequestIdRef = useRef(0);
+
+  const nextAccountSecurityRequestId = useCallback(() => {
+    accountSecurityRequestIdRef.current += 1;
+    return accountSecurityRequestIdRef.current;
+  }, []);
+
+  const applyAccountSecurityForRequest = useCallback(
+    (requestId: number, account: AccountSecurityState) => {
+      if (requestId !== accountSecurityRequestIdRef.current) {
+        return undefined;
+      }
+      setAccountSecurity(account);
+      return account;
+    },
+    [],
+  );
+
+  const replaceAccountSecurity = useCallback(
+    (account: AccountSecurityState) => {
+      accountSecurityRequestIdRef.current += 1;
+      setAccountSecurity(account);
+    },
+    [],
+  );
+
+  const clearAccountSecurity = useCallback(() => {
+    accountSecurityRequestIdRef.current += 1;
+    setAccountSecurity(undefined);
+  }, []);
 
   useEffect(() => {
     const api = createRoamApiClient();
@@ -119,7 +149,7 @@ export function useRoamController() {
       bootstrapReady = false;
       pendingBootstrapRequestId = undefined;
       streamRef.current?.close();
-      setAccountSecurity(undefined);
+      clearAccountSecurity();
       setAuthView(nextView);
       dispatch({ type: "connectionChanged", status: "closed" });
       if (message) {
@@ -295,20 +325,24 @@ export function useRoamController() {
           return;
         }
         if (auth.status === "setup_required") {
-          setAccountSecurity(undefined);
+          clearAccountSecurity();
           setAuthView("setup_required");
           dispatch({ type: "connectionChanged", status: "closed" });
           return;
         }
         if (auth.status === "unauthenticated") {
-          setAccountSecurity(undefined);
+          clearAccountSecurity();
           setAuthView("login");
           dispatch({ type: "connectionChanged", status: "closed" });
           return;
         }
         setAuthView("authenticated");
+        const accountRequestId = nextAccountSecurityRequestId();
         try {
-          setAccountSecurity(await api.fetchAccountSecurity());
+          const account = await api.fetchAccountSecurity();
+          if (!cancelled) {
+            applyAccountSecurityForRequest(accountRequestId, account);
+          }
         } catch {
           // The main bootstrap below will surface auth/API failures.
         }
@@ -339,7 +373,12 @@ export function useRoamController() {
         streamRef.current = undefined;
       }
     };
-  }, [authEpoch]);
+  }, [
+    applyAccountSecurityForRequest,
+    authEpoch,
+    clearAccountSecurity,
+    nextAccountSecurityRequestId,
+  ]);
 
   const refreshAuth = useCallback(() => {
     setAuthView("checking");
@@ -351,10 +390,10 @@ export function useRoamController() {
       const api = apiRef.current ?? createRoamApiClient();
       apiRef.current = api;
       const result = await api.setupOwner(input);
-      setAccountSecurity(result.account);
+      replaceAccountSecurity(result.account);
       refreshAuth();
     },
-    [refreshAuth],
+    [refreshAuth, replaceAccountSecurity],
   );
 
   const loginOwner = useCallback(
@@ -362,10 +401,10 @@ export function useRoamController() {
       const api = apiRef.current ?? createRoamApiClient();
       apiRef.current = api;
       const result = await api.login({ password });
-      setAccountSecurity(result.account);
+      replaceAccountSecurity(result.account);
       refreshAuth();
     },
-    [refreshAuth],
+    [refreshAuth, replaceAccountSecurity],
   );
 
   const logoutOwner = useCallback(async () => {
@@ -374,20 +413,20 @@ export function useRoamController() {
       await api.logout();
     }
     streamRef.current?.close();
-    setAccountSecurity(undefined);
+    clearAccountSecurity();
     setAuthView("login");
     refreshAuth();
-  }, [refreshAuth]);
+  }, [clearAccountSecurity, refreshAuth]);
 
   const logoutAllOwnerSessions = useCallback(async () => {
     const api = apiRef.current;
     if (!api) return;
     await api.logoutAll();
     streamRef.current?.close();
-    setAccountSecurity(undefined);
+    clearAccountSecurity();
     setAuthView("login");
     refreshAuth();
-  }, [refreshAuth]);
+  }, [clearAccountSecurity, refreshAuth]);
 
   const changeOwnerPassword = useCallback(
     async (input: ApiChangePassword) => {
@@ -397,11 +436,11 @@ export function useRoamController() {
       }
       await api.changePassword(input);
       streamRef.current?.close();
-      setAccountSecurity(undefined);
+      clearAccountSecurity();
       setAuthView("login");
       refreshAuth();
     },
-    [refreshAuth],
+    [clearAccountSecurity, refreshAuth],
   );
 
   const regenerateRunnerToken = useCallback(async () => {
@@ -409,16 +448,19 @@ export function useRoamController() {
     if (!api) {
       throw new Error("API client is not ready.");
     }
-    setAccountSecurity(await api.regenerateRunnerToken());
-  }, []);
+    const account = await api.regenerateRunnerToken();
+    replaceAccountSecurity(account);
+  }, [replaceAccountSecurity]);
 
   const refreshAccountSecurity = useCallback(async () => {
     const api = apiRef.current;
     if (!api) {
       throw new Error("API client is not ready.");
     }
-    setAccountSecurity(await api.fetchAccountSecurity());
-  }, []);
+    const requestId = nextAccountSecurityRequestId();
+    const account = await api.fetchAccountSecurity();
+    return applyAccountSecurityForRequest(requestId, account);
+  }, [applyAccountSecurityForRequest, nextAccountSecurityRequestId]);
 
   const reconnectStream = () => reconnectStreamRef.current?.();
 

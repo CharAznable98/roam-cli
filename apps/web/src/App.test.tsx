@@ -187,6 +187,9 @@ const accountSecurity = {
 };
 
 let authStatus: AuthStatus;
+let accountSecurityResponses: Array<typeof accountSecurity>;
+let queuedAccountSecurityResponses: Array<Deferred<Response>>;
+let queuedRunnerTokenResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -318,6 +321,10 @@ function openSessionSwitcher(name: RegExp = /Real session|Created session/) {
   return within(screen.getByRole("dialog", { name: "Switch Session" }));
 }
 
+function openSettingsTab() {
+  fireEvent.click(screen.getAllByRole("button", { name: "Settings" })[0]!);
+}
+
 async function findSessionFile(name: RegExp) {
   const src = await screen.findByRole("treeitem", { name: /src/ });
   if (src.getAttribute("aria-expanded") !== "true") {
@@ -364,7 +371,7 @@ function openSessionActions() {
 function authMockResponse(
   pathname: string,
   init?: RequestInit,
-): Response | undefined {
+): Response | Promise<Response> | undefined {
   if (pathname === "/v1/auth/status") {
     return jsonResponse({ auth: authStatus });
   }
@@ -379,8 +386,38 @@ function authMockResponse(
     authStatus = { status: "unauthenticated" };
     return new Response(null, { status: 204 });
   }
+  if (pathname === "/v1/auth/logout-all" && init?.method === "POST") {
+    authStatus = { status: "unauthenticated" };
+    return new Response(null, { status: 204 });
+  }
+  if (pathname === "/v1/auth/password" && init?.method === "POST") {
+    authStatus = { status: "unauthenticated" };
+    return new Response(null, { status: 204 });
+  }
+  if (
+    pathname === "/v1/auth/runner-token/regenerate" &&
+    init?.method === "POST"
+  ) {
+    const queuedResponse = queuedRunnerTokenResponses.shift();
+    if (queuedResponse) {
+      return queuedResponse.promise;
+    }
+    return jsonResponse({
+      account: {
+        ...accountSecurity,
+        runnerToken: "runner-token-regenerated",
+        runnerTokenUpdatedAt: "2026-06-05T00:01:00.000Z",
+      },
+    });
+  }
   if (pathname === "/v1/auth/account") {
-    return jsonResponse({ account: accountSecurity });
+    const queuedResponse = queuedAccountSecurityResponses.shift();
+    if (queuedResponse) {
+      return queuedResponse.promise;
+    }
+    return jsonResponse({
+      account: accountSecurityResponses.shift() ?? accountSecurity,
+    });
   }
   return undefined;
 }
@@ -401,6 +438,8 @@ describe("App", () => {
   let failNextSessionArchive: boolean;
   let emitSessionNotRunningOnArchive: boolean;
   let runnerOnline: boolean;
+  let defaultProjectVisible: boolean;
+  let defaultSessionVisible: boolean;
   let remoteSessionTitle: string;
   let remoteSessionStatus: string;
   let statusCheckResultStatus: string;
@@ -429,6 +468,8 @@ describe("App", () => {
     deferredGitHistory = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
+    queuedAccountSecurityResponses = [];
+    queuedRunnerTokenResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -436,6 +477,8 @@ describe("App", () => {
     failNextSessionArchive = false;
     emitSessionNotRunningOnArchive = false;
     runnerOnline = true;
+    defaultProjectVisible = true;
+    defaultSessionVisible = true;
     remoteSessionTitle = session.title;
     remoteSessionStatus = session.status;
     statusCheckResultStatus = "stopped";
@@ -443,6 +486,7 @@ describe("App", () => {
       status: "authenticated",
       session: authSession,
     };
+    accountSecurityResponses = [accountSecurity];
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
     remoteSessionWorktreeDeletedAt = undefined;
@@ -581,7 +625,9 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/projects") {
-          return jsonResponse({ projects: [project] });
+          return jsonResponse({
+            projects: defaultProjectVisible ? [project] : [],
+          });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/archive") {
           return jsonResponse({
@@ -608,18 +654,20 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({
-            sessions: [
-              {
-                ...session,
-                title: remoteSessionTitle,
-                status: remoteSessionStatus,
-                executionMode: remoteSessionExecutionMode,
-                executionFolder: remoteSessionExecutionFolder,
-                ...(remoteSessionWorktreeDeletedAt === undefined
-                  ? {}
-                  : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
-              },
-            ],
+            sessions: defaultSessionVisible
+              ? [
+                  {
+                    ...session,
+                    title: remoteSessionTitle,
+                    status: remoteSessionStatus,
+                    executionMode: remoteSessionExecutionMode,
+                    executionFolder: remoteSessionExecutionFolder,
+                    ...(remoteSessionWorktreeDeletedAt === undefined
+                      ? {}
+                      : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
+                  },
+                ]
+              : [],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
@@ -1017,40 +1065,306 @@ describe("App", () => {
     });
   });
 
-  it("exposes account security from the mobile topbar", async () => {
+  it("exposes account security from the Settings tab", async () => {
     render(<App />);
 
     await screen.findByText("Loaded from API");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Account & Security" }),
+    expect(
+      screen.queryByRole("button", { name: "Open Account & Security" }),
+    ).not.toBeInTheDocument();
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Change Password/ }));
+    expect(screen.getByLabelText("Current password")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+  });
+
+  it("refreshes account security when Settings opens", async () => {
+    accountSecurityResponses = [
+      accountSecurity,
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-refreshed",
+        runnerTokenUpdatedAt: "2026-06-05T00:02:00.000Z",
+        sessions: [
+          {
+            ...authSession,
+            id: "auth-session-refreshed",
+            lastSeenAt: "2026-06-05T00:02:00.000Z",
+          },
+        ],
+      },
+    ];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(
+      await screen.findByText("runner-token-refreshed"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/--token 'runner-token-refreshed'/),
+    ).toBeInTheDocument();
+    expect(
+      fetchCalls.filter(
+        (call) => new URL(call.url).pathname === "/v1/auth/account",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("refreshes account security when entering Account & Security from Settings home", async () => {
+    accountSecurityResponses = [
+      accountSecurity,
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-settings-home",
+        runnerTokenUpdatedAt: "2026-06-05T00:02:00.000Z",
+      },
+      {
+        ...accountSecurity,
+        runnerToken: "runner-token-account-entry",
+        runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+      },
+    ];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) => new URL(call.url).pathname === "/v1/auth/account",
+        ),
+      ).toHaveLength(2),
     );
 
-    const dialog = await screen.findByRole("dialog", {
-      name: "Account & Security",
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(
+      await screen.findByText("runner-token-account-entry"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("runner-token-settings-home"),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchCalls.filter(
+        (call) => new URL(call.url).pathname === "/v1/auth/account",
+      ),
+    ).toHaveLength(3);
+  });
+
+  it("waits for Settings account refresh before showing account actions", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const delayedAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(delayedAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Regenerate" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Log out all" }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      delayedAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-after-refresh",
+            runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+          },
+        }),
+      );
+      await delayedAccount.promise;
     });
-    expect(within(dialog).getByLabelText("Runner token")).toHaveTextContent(
+
+    expect(
+      await screen.findByText("runner-token-after-refresh"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
+  });
+
+  it("discards superseded Settings account refresh responses", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const staleAccount = deferred<Response>();
+    const freshAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(staleAccount);
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    queuedAccountSecurityResponses.push(freshAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    await act(async () => {
+      freshAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-fresh",
+            runnerTokenUpdatedAt: "2026-06-05T00:04:00.000Z",
+          },
+        }),
+      );
+      await freshAccount.promise;
+    });
+    expect(await screen.findByText("runner-token-fresh")).toBeInTheDocument();
+
+    await act(async () => {
+      staleAccount.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-stale",
+            runnerTokenUpdatedAt: "2026-06-05T00:03:00.000Z",
+          },
+        }),
+      );
+      await staleAccount.promise;
+    });
+    await flushAppEffects();
+
+    expect(screen.getByText("runner-token-fresh")).toBeInTheDocument();
+    expect(screen.queryByText("runner-token-stale")).not.toBeInTheDocument();
+  });
+
+  it("keeps cached account hidden when Settings account refresh fails", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    const failedAccount = deferred<Response>();
+    queuedAccountSecurityResponses.push(failedAccount);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
+
+    await act(async () => {
+      failedAccount.reject(new Error("account API unavailable"));
+      await expect(failedAccount.promise).rejects.toThrow(
+        "account API unavailable",
+      );
+    });
+
+    expect(
+      await screen.findByText("Account settings could not be loaded."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Account settings unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Runner token")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Regenerate" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Settings reachable before runners connect", async () => {
+    runnerOnline = false;
+    defaultProjectVisible = false;
+    defaultSessionVisible = false;
+    render(<App />);
+
+    await screen.findByText("No runners are online");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
     expect(
-      within(dialog).getByText(/--token 'runner-token'/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/--token 'runner-token'/).length,
+    ).toBeGreaterThan(0);
   });
 
-  it("closes account security after logout and does not reopen after login", async () => {
+  it("uses native confirmation and global notification for runner token regeneration", async () => {
     render(<App />);
 
     await screen.findByText("Loaded from API");
-    fireEvent.click(screen.getByRole("button", { name: "Account & Security" }));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Account & Security",
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Regenerate the Runner token? Current online runners stay connected, but old-token reconnects will fail.",
+    );
+    expect(
+      await screen.findByText("runner-token-regenerated"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Runner token regenerated")).toBeInTheDocument();
+  });
+
+  it("applies a slow runner token regeneration after a later account refresh", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    await screen.findByRole("button", { name: "Regenerate" });
+
+    const slowRegenerate = deferred<Response>();
+    queuedRunnerTokenResponses.push(slowRegenerate);
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    expect(await screen.findByText("runner-token")).toBeInTheDocument();
+
+    await act(async () => {
+      slowRegenerate.resolve(
+        jsonResponse({
+          account: {
+            ...accountSecurity,
+            runnerToken: "runner-token-regenerated-slow",
+            runnerTokenUpdatedAt: "2026-06-05T00:05:00.000Z",
+          },
+        }),
+      );
+      await slowRegenerate.promise;
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Log out" }));
+
+    expect(
+      await screen.findByText("runner-token-regenerated-slow"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Runner token regenerated")).toBeInTheDocument();
+  });
+
+  it("leaves Settings for login after logout and does not restore a settings child view after login", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Log out" }));
 
     expect(
       await screen.findByRole("heading", { name: "Owner Login" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("dialog", { name: "Account & Security" }),
+      screen.queryByRole("region", { name: "Settings" }),
     ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Password"), {
@@ -1059,9 +1373,11 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+    openSettingsTab();
     expect(
-      screen.queryByRole("dialog", { name: "Account & Security" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /Account & Security/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
   });
 
   it("shows setup after an authenticated browser loses owner configuration", async () => {
@@ -1107,6 +1423,52 @@ describe("App", () => {
       fetchCalls.filter((call) => new URL(call.url).pathname === "/v1/runners")
         .length,
     ).toBeGreaterThan(1);
+  });
+
+  it("keeps connection settings reachable when an API error leaves a selected session visible", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    failBootstrapRunners = true;
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open connection status" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Connection" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reconnect now" }),
+    );
+
+    expect(
+      await screen.findByText("RoamCli API request failed"),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+
+    const apiErrorButton = await screen.findByRole("button", {
+      name: "API error",
+    });
+    fireEvent.click(apiErrorButton);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Connection" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Settings reachable when the bootstrap API fails", async () => {
+    failBootstrapRunners = true;
+    render(<App />);
+
+    expect(
+      await screen.findByText("API connection failed"),
+    ).toBeInTheDocument();
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
   });
 
   it("ignores stale bootstrap failures after a later recovery succeeds", async () => {

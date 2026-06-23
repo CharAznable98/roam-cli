@@ -1124,34 +1124,59 @@ async function runAccountSecurityJourney(browser, scenario) {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     if (scenario.mobile) {
       await expectText(page, "Online");
-      await page
-        .getByRole("button", { name: "Open Account & Security" })
-        .click();
     } else {
       await expectText(page, "stream connected");
-      await page.getByRole("button", { name: "Account & Security" }).click();
     }
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settings = page.getByRole("region", { name: "Settings" });
+    await settings.waitFor();
+    await settings.getByRole("button", { name: /Account & Security/ }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Account & Security" });
-    await dialog.waitFor();
-    await expectTextIn(dialog, "Runner Token");
-    await expectTextIn(dialog, runnerToken);
-    await expectTextIn(dialog, "--token");
-    await expectTextIn(dialog, "Copy command");
+    await expectTextIn(settings, "Runner Token");
+    await expectTextIn(settings, runnerToken);
+    await expectTextIn(settings, "--token");
+    await expectTextIn(settings, "Copy command");
+    if ((await settings.getByLabel("Current password").count()) !== 0) {
+      throw new Error("change password form is visible before opening it");
+    }
+    await settings.getByRole("button", { name: /Change Password/ }).click();
+    await settings.getByLabel("Current password").waitFor();
+    await settings.getByRole("button", { name: "Account & Security" }).click();
+    const regenerateDialog = new Promise((resolve, reject) => {
+      page.once("dialog", async (dialog) => {
+        try {
+          if (!dialog.message().includes("Regenerate the Runner token?")) {
+            throw new Error(
+              `unexpected regenerate confirmation: ${dialog.message()}`,
+            );
+          }
+          await dialog.accept();
+          resolve(undefined);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    await settings.getByRole("button", { name: "Regenerate" }).click();
+    await regenerateDialog;
+    await expectText(page, "Runner token regenerated");
+    const accountPayload = await requestJson("/v1/auth/account");
+    runnerToken = accountPayload.account?.runnerToken ?? runnerToken;
+    await expectTextIn(settings, runnerToken);
     await captureScreenshot(
       page,
       { name: `account-${scenario.name}` },
       "account-security-open",
     );
 
-    await dialog.getByRole("button", { name: "Log out", exact: true }).click();
+    await settings
+      .getByRole("button", { name: "Log out", exact: true })
+      .click();
     await expectText(page, "Owner Login");
     await waitFor(
       async () =>
-        (await page
-          .getByRole("dialog", { name: "Account & Security" })
-          .count()) === 0,
-      `${scenario.name} account security modal to close after logout`,
+        (await page.getByRole("region", { name: "Settings" }).count()) === 0,
+      `${scenario.name} settings panel to close after logout`,
     );
 
     await page.getByLabel("Password").fill(ownerPassword);
@@ -1161,12 +1186,12 @@ async function runAccountSecurityJourney(browser, scenario) {
     } else {
       await expectText(page, "stream connected");
     }
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await settings.waitFor();
+    await expectTextIn(settings, "Account & Security");
     await waitFor(
-      async () =>
-        (await page
-          .getByRole("dialog", { name: "Account & Security" })
-          .count()) === 0,
-      `${scenario.name} account security modal to stay closed after login`,
+      async () => (await settings.getByLabel("Current password").count()) === 0,
+      `${scenario.name} settings child view to reset after login`,
     );
     await captureScreenshot(
       page,
@@ -1490,7 +1515,7 @@ async function waitForNewSessionFormReady(dialog) {
 }
 
 async function assertMobileConnectionSheet(page) {
-  await page.getByRole("button", { name: "Open connection settings" }).click();
+  await page.getByRole("button", { name: "Open connection status" }).click();
   const dialog = page.getByRole("dialog", { name: "Connection" });
   await dialog.waitFor();
   await expectTextIn(dialog, "Stream");
