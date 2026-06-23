@@ -808,6 +808,22 @@ describe("server", () => {
     );
     runner.send(
       JSON.stringify({
+        type: "agentActivity",
+        sessionId,
+        agent: "claude-code",
+        kind: "task_progress",
+        label: "Reading apps/web/src/app/useRoamController.ts",
+      }),
+    );
+    await expectEventually(
+      stream,
+      (event) =>
+        event.type === "activity:created" &&
+        event.activity.label ===
+          "Reading apps/web/src/app/useRoamController.ts",
+    );
+    runner.send(
+      JSON.stringify({
         type: "token",
         sessionId,
         content: " streamed",
@@ -830,6 +846,11 @@ describe("server", () => {
         .json()
         .messages.map((message: { content: string }) => message.content),
     ).toEqual(["implement server", "done", " streamed"]);
+    expect(
+      detail
+        .json()
+        .activities.map((activity: { label: string }) => activity.label),
+    ).toEqual(["Reading apps/web/src/app/useRoamController.ts"]);
 
     stream.close();
     runner.close();

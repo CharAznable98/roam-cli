@@ -1670,19 +1670,35 @@
     padding: 10px 12px;
   }
 
-  .collapsible-message summary {
+  .collapsible-message summary,
+  .activity-group-trigger {
     display: flex;
     min-width: 0;
     min-height: 22px;
     cursor: pointer;
     align-items: center;
-    flex-wrap: wrap;
     gap: 8px;
     color: #465568;
     font-size: 13px;
     font-weight: 700;
     line-height: 1.35;
     list-style: none;
+  }
+
+  .activity-group-trigger {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+  }
+
+  .collapsible-message summary {
+    flex-wrap: wrap;
+  }
+
+  .activity-group-trigger svg {
+    flex: 0 0 auto;
   }
 
   .collapsible-message summary::-webkit-details-marker {
@@ -1694,7 +1710,68 @@
     scroll-margin: 12px;
   }
 
-  .collapsible-message[open] summary {
+  .collapsible-message.activity-group {
+    border-color: rgba(14, 116, 144, 0.18);
+    background: rgba(248, 250, 252, 0.86);
+    color: #526173;
+  }
+
+  .collapsible-message.activity-group.latest {
+    border-color: rgba(14, 116, 144, 0.28);
+    background: #f0fbff;
+  }
+
+  .collapsible-message.activity-group.nested {
+    width: 100%;
+    max-width: none;
+  }
+
+  .activity-group-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .activity-group-count {
+    flex: 0 0 auto;
+    color: #71869d;
+    font-size: 12px;
+  }
+
+  .activity-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .activity-list li {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    color: #526173;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .activity-dot {
+    height: 5px;
+    width: 5px;
+    border-radius: 999px;
+    background: var(--signal-cyan);
+    opacity: 0.68;
+  }
+
+  .activity-label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .collapsible-message[open] summary,
+  .collapsible-message.activity-group.is-open .activity-group-trigger {
     margin-bottom: 8px;
   }
 
@@ -3370,8 +3447,25 @@
     align-content: center;
   }
 
-  .collapsible-message summary {
+  .collapsible-message summary,
+  .activity-group-trigger {
     min-height: 44px;
+  }
+
+  .activity-group-trigger {
+    gap: 6px;
+  }
+
+  .activity-group-title {
+    font-size: 12px;
+  }
+
+  .activity-group-count {
+    display: none;
+  }
+
+  .collapsible-message.activity-group:not(.is-open) {
+    min-height: 66px;
   }
 
   .modal-sheet .new-session-form .draft-image-strip {
@@ -3569,6 +3663,10 @@
   .message-body,
   .collapsible-message {
     padding: 9px 10px;
+  }
+
+  .collapsible-message.activity-group:not(.is-open) {
+    min-height: 64px;
   }
 
   .composer {

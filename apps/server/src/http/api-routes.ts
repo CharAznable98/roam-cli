@@ -344,6 +344,7 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      activities: context.store.listAgentActivities(session.id),
       attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
       artifacts: context.store.listArtifacts(session.id),

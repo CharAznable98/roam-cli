@@ -373,6 +373,7 @@ export function createRoamApiClient(
         messages: details.flatMap((detail) =>
           detail.messages.map((message) => toUiMessage(message)),
         ),
+        activities: details.flatMap((detail) => detail.activities ?? []),
         messageAttachments: details.flatMap(
           (detail) => detail.attachments ?? [],
         ),

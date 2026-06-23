@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   Approval,
   Artifact,
   Message,
@@ -12,6 +13,7 @@ import type { UiMessage } from "../features/conversation/model";
 export interface SessionDetailPayload {
   session: Session;
   messages: Message[];
+  activities?: AgentActivity[];
   attachments: MessageAttachment[];
   approvals: Approval[];
   artifacts: Artifact[];
@@ -22,6 +24,7 @@ export interface InitialRemoteState {
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];
+  activities?: AgentActivity[];
   messageAttachments: MessageAttachment[];
   approvals: Approval[];
   artifacts: Artifact[];

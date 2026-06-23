@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   Approval,
   Artifact,
   FileContentResult,
@@ -47,6 +48,7 @@ export interface AppState {
   runners: RunnerRegistration[];
   sessions: Session[];
   messages: UiMessage[];
+  activities: AgentActivity[];
   approvals: Approval[];
   artifacts: Artifact[];
   messageAttachments: MessageAttachment[];
@@ -78,6 +80,7 @@ export const initialAppState: AppState = {
   runners: [],
   sessions: [],
   messages: [],
+  activities: [],
   approvals: [],
   artifacts: [],
   messageAttachments: [],
@@ -246,6 +249,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         runners: action.remote.runners,
         sessions: action.remote.sessions,
         messages: action.remote.messages,
+        activities: action.remote.activities ?? [],
         messageAttachments: action.remote.messageAttachments ?? [],
         approvals: action.remote.approvals,
         artifacts: action.remote.artifacts,
@@ -615,6 +619,10 @@ function mergeSessionDetailState(
     ...state,
     sessions: upsertFreshSession(state.sessions, detail.session),
     messages: mergeDetailMessages(state.messages, detail.messages),
+    activities: mergeDetailActivities(
+      state.activities,
+      detail.activities ?? [],
+    ),
     messageAttachments: attachments.reduce(
       (items, attachment) => upsertBy(items, attachment, (item) => item.id),
       state.messageAttachments,
@@ -693,6 +701,29 @@ function mergeDetailMessages(
       preserveLongerStreamContent(reconciledMessages, reconciledMessage),
     );
   }, currentMessages);
+}
+
+function mergeDetailActivities(
+  currentActivities: AgentActivity[],
+  detailActivities: AgentActivity[],
+): AgentActivity[] {
+  return detailActivities.reduce(
+    (activities, activity) => upsertAgentActivity(activities, activity),
+    currentActivities,
+  );
+}
+
+function upsertAgentActivity(
+  activities: AgentActivity[],
+  next: AgentActivity,
+): AgentActivity[] {
+  const exists = activities.some((activity) => activity.id === next.id);
+  const merged = exists
+    ? activities.map((activity) => (activity.id === next.id ? next : activity))
+    : [...activities, next];
+  return merged.sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  );
 }
 
 function reconcileStreamMessage(
@@ -871,6 +902,12 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       messages: upsertMessage(state.messages, event.message),
     };
   }
+  if (event.type === "activity:created") {
+    return {
+      ...state,
+      activities: upsertAgentActivity(state.activities, event.activity),
+    };
+  }
   if (event.type === "message_attachment:created") {
     return {
       ...state,
@@ -1029,6 +1066,9 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
       state.selectedSessionId === sessionId ? "" : state.selectedSessionId,
     messages: state.messages.filter(
       (message) => message.sessionId !== sessionId,
+    ),
+    activities: state.activities.filter(
+      (activity) => activity.sessionId !== sessionId,
     ),
     messageAttachments: state.messageAttachments.filter(
       (attachment) => attachment.sessionId !== sessionId,

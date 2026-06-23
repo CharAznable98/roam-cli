@@ -1183,6 +1183,11 @@ export function useRoamController() {
           ),
         )
     : [];
+  const sessionActivities = selectedSession
+    ? state.activities.filter(
+        (activity) => activity.sessionId === selectedSession.id,
+      )
+    : [];
   const sessionApprovals = selectedSession
     ? state.approvals.filter(
         (approval) => approval.sessionId === selectedSession.id,
@@ -1225,6 +1230,7 @@ export function useRoamController() {
     runnerSessions: projectSessions,
     selectedSession,
     sessionMessages,
+    sessionActivities,
     sessionApprovals,
     sessionHunks,
     sessionFiles,

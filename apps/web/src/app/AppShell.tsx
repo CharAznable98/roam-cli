@@ -85,6 +85,7 @@ export function AppShell({ controller }: AppShellProps) {
     runnerSessions,
     selectedSession,
     sessionMessages,
+    sessionActivities,
     sessionApprovals,
     sessionHunks,
     sessionFiles,
@@ -407,6 +408,7 @@ export function AppShell({ controller }: AppShellProps) {
               <ChatPanel
                 session={selectedSession}
                 messages={sessionMessages}
+                activities={sessionActivities}
                 onSend={sendMessage}
                 onControl={sendControl}
                 onRename={renameSelectedSession}
