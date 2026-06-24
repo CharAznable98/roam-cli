@@ -395,6 +395,35 @@ describe("conversation model", () => {
     ]);
   });
 
+  it("ends activity once a streamed assistant preview starts", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "question" }),
+        makeMessage({
+          id: "stream-session-1-existing",
+          role: "assistant",
+          content: "draft",
+          createdAt: "2026-06-05T00:00:02.000Z",
+        }),
+      ],
+      [
+        makeActivity({
+          id: "activity-1",
+          kind: "task_progress",
+          label: "Reading file.ts",
+          createdAt: "2026-06-05T00:00:01.000Z",
+        }),
+      ],
+      "running",
+    );
+
+    expect(displayShape(items)).toEqual([
+      "user",
+      { activity: ["Reading file.ts"], latest: false },
+      "stream-session-1-existing",
+    ]);
+  });
+
   it("does not mark trailing activity as live after terminal sessions", () => {
     for (const status of ["completed", "failed", "stopped"] as const) {
       const items = getConversationDisplayItems(
@@ -417,7 +446,7 @@ describe("conversation model", () => {
     }
   });
 
-  it("folds activity groups into intermediate output when message output is collapsed", () => {
+  it("keeps final segment activity outside intermediate output when message output is collapsed", () => {
     const items = getConversationDisplayItems(
       [
         makeMessage({ id: "user", role: "user", content: "question" }),
@@ -457,9 +486,9 @@ describe("conversation model", () => {
         intermediate: [
           { activity: ["Reading file.ts"], latest: false },
           "progress",
-          { activity: ["Running tests"], latest: false },
         ],
       },
+      { activity: ["Running tests"], latest: false },
       "final",
     ]);
   });

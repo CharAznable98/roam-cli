@@ -7,6 +7,7 @@ import type {
 } from "@roamcli/shared/protocol";
 import {
   Bot,
+  CheckCircle2,
   ChevronDown,
   CircleStop,
   ImagePlus,
@@ -876,10 +877,11 @@ function AgentActivityGroup({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <LoaderCircle
-          size={15}
-          className={group.latest ? "animate-spin" : undefined}
-        />
+        {group.latest ? (
+          <LoaderCircle size={15} className="animate-spin" />
+        ) : (
+          <CheckCircle2 size={15} />
+        )}
         <span className="activity-group-title">{title}</span>
         {group.latest && latest ? (
           <span className="activity-group-count" aria-hidden="true">
