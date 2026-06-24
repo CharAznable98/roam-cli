@@ -148,6 +148,7 @@ export function AppShell({ controller }: AppShellProps) {
     applyAcceptedPatch,
     sendControl,
     archiveSession,
+    refreshSessionDetail,
     selectFile,
     openFileForEdit,
     startSelectedFileEdit,
@@ -222,6 +223,11 @@ export function AppShell({ controller }: AppShellProps) {
             if (job.status !== "succeeded") {
               throw new Error(job.errorSummary ?? "Worktree cleanup failed.");
             }
+            try {
+              await refreshSessionDetail(session.id);
+            } catch {
+              dispatch({ type: "sessionDeleted", sessionId: session.id });
+            }
           } finally {
             dispatch({
               type: "sessionArchiveFinished",
@@ -237,7 +243,7 @@ export function AppShell({ controller }: AppShellProps) {
         });
       }
     },
-    [archiveDialog, archiveSession, fetchGitJobs],
+    [archiveDialog, archiveSession, fetchGitJobs, refreshSessionDetail],
   );
 
   const setActiveTab = useCallback(

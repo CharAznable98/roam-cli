@@ -10,6 +10,8 @@ import { newId } from "../../infra/ids.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { ok, type ServiceResult } from "../result.js";
 
+export const DEFAULT_GIT_JOB_TIMEOUT_MS = 30_000;
+
 export type GitResolvedContext = {
   projectId: string;
   runnerId: string;
@@ -50,7 +52,7 @@ export class GitJobRunner {
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
     private readonly rpc: RunnerRpcClient,
-    private readonly runnerRpcTimeoutMs: number,
+    private readonly gitJobTimeoutMs = DEFAULT_GIT_JOB_TIMEOUT_MS,
     private readonly queue = new GitMutationQueue(),
   ) {}
 
@@ -169,7 +171,7 @@ export class GitJobRunner {
           }
         }
         finish();
-      }, this.runnerRpcTimeoutMs);
+      }, this.gitJobTimeoutMs);
       this.pendingJobs.set(jobId, {
         ...pending,
         job: running,

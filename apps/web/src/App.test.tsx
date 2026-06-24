@@ -16,6 +16,7 @@ import type {
   Artifact,
   AuthStatus,
   GitCommitSummary,
+  GitJob,
   Message,
   MessageAttachment,
 } from "@roamcli/shared/protocol";
@@ -462,7 +463,9 @@ describe("App", () => {
   let statusCheckResultStatus: string;
   let remoteSessionExecutionMode: "direct" | "managed_worktree";
   let remoteSessionExecutionFolder: string;
+  let remoteSessionArchivedAt: string | undefined;
   let remoteSessionWorktreeDeletedAt: string | undefined;
+  let polledGitJobs: GitJob[];
   let gitStatusClean: boolean;
   let gitStatusUnborn: boolean;
   let gitStatusChanges: MockGitChange[];
@@ -508,7 +511,9 @@ describe("App", () => {
     accountSecurityResponses = [accountSecurity];
     remoteSessionExecutionMode = "direct";
     remoteSessionExecutionFolder = session.executionFolder;
+    remoteSessionArchivedAt = undefined;
     remoteSessionWorktreeDeletedAt = undefined;
+    polledGitJobs = [];
     gitStatusClean = true;
     gitStatusUnborn = false;
     gitStatusChanges = [
@@ -693,6 +698,9 @@ describe("App", () => {
                     status: remoteSessionStatus,
                     executionMode: remoteSessionExecutionMode,
                     executionFolder: remoteSessionExecutionFolder,
+                    ...(remoteSessionArchivedAt === undefined
+                      ? {}
+                      : { archivedAt: remoteSessionArchivedAt }),
                     ...(remoteSessionWorktreeDeletedAt === undefined
                       ? {}
                       : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
@@ -718,6 +726,9 @@ describe("App", () => {
                 status: remoteSessionStatus,
                 executionMode: remoteSessionExecutionMode,
                 executionFolder: remoteSessionExecutionFolder,
+                ...(remoteSessionArchivedAt === undefined
+                  ? {}
+                  : { archivedAt: remoteSessionArchivedAt }),
                 ...(remoteSessionWorktreeDeletedAt === undefined
                   ? {}
                   : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
@@ -774,6 +785,9 @@ describe("App", () => {
               status: remoteSessionStatus,
               executionMode: remoteSessionExecutionMode,
               executionFolder: remoteSessionExecutionFolder,
+              ...(remoteSessionArchivedAt === undefined
+                ? {}
+                : { archivedAt: remoteSessionArchivedAt }),
               ...(remoteSessionWorktreeDeletedAt === undefined
                 ? {}
                 : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
@@ -796,6 +810,9 @@ describe("App", () => {
               status: remoteSessionStatus,
               executionMode: remoteSessionExecutionMode,
               executionFolder: remoteSessionExecutionFolder,
+              ...(remoteSessionArchivedAt === undefined
+                ? {}
+                : { archivedAt: remoteSessionArchivedAt }),
               ...(remoteSessionWorktreeDeletedAt === undefined
                 ? {}
                 : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
@@ -1062,7 +1079,7 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/git/jobs") {
-          return jsonResponse({ jobs: [] });
+          return jsonResponse({ jobs: polledGitJobs });
         }
         if (requestUrl.pathname.startsWith("/v1/git/")) {
           const body = JSON.parse(String(init?.body ?? "{}"));
@@ -4722,6 +4739,70 @@ describe("App", () => {
     expect(
       screen.queryByText("Session is not running"),
     ).not.toBeInTheDocument();
+  });
+
+  it("refreshes session state after polled archive worktree cleanup succeeds", async () => {
+    remoteSessionStatus = "completed";
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    remoteSessionArchivedAt = "2026-06-05T00:00:01.000Z";
+    remoteSessionWorktreeDeletedAt = "2026-06-05T00:00:01.000Z";
+    polledGitJobs = [
+      {
+        id: "archive-remove-job-1",
+        projectId: "project-1",
+        sessionId: "session-1",
+        contextKind: "session_worktree",
+        operation: "archive_remove_worktree",
+        status: "succeeded",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        startedAt: "2026-06-05T00:00:00.000Z",
+        finishedAt: "2026-06-05T00:00:01.000Z",
+      },
+    ];
+    const detailFetchesBefore = fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1" &&
+        call.init?.method === undefined,
+    ).length;
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive and remove" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          const requestUrl = new URL(call.url);
+          return (
+            requestUrl.pathname === "/v1/projects/project-1/git/jobs" &&
+            call.init?.method === undefined
+          );
+        }),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        fetchCalls.filter(
+          (call) =>
+            new URL(call.url).pathname === "/v1/sessions/session-1" &&
+            call.init?.method === undefined,
+        ).length,
+      ).toBeGreaterThan(detailFetchesBefore),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
   });
 
   it("does not reload removed worktree Git status from the Git panel", async () => {

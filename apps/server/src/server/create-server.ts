@@ -72,7 +72,7 @@ export async function createServer(
     store,
     hub,
     rpc,
-    config.runnerRpcTimeoutMs,
+    config.gitJobTimeoutMs,
     gitMutationQueue,
   );
   const sessionService = new SessionCommandService(

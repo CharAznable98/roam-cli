@@ -10,6 +10,7 @@ export interface ServerConfig {
   resetOwner: boolean;
   webDistDir?: string;
   runnerRpcTimeoutMs: number;
+  gitJobTimeoutMs: number;
 }
 
 export interface ServerConfigInput {
@@ -21,7 +22,11 @@ export interface ServerConfigInput {
   resetOwner?: boolean;
   webDistDir?: string | false;
   runnerRpcTimeoutMs?: number;
+  gitJobTimeoutMs?: number;
 }
+
+const DEFAULT_RUNNER_RPC_TIMEOUT_MS = 30_000;
+const DEFAULT_GIT_JOB_TIMEOUT_MS = 30_000;
 
 export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
   const dataDir =
@@ -39,8 +44,7 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
       : (configuredWebDist ?? defaultWebDist);
   const publicOrigin = input.publicOrigin ?? process.env.ROAMCLI_PUBLIC_ORIGIN;
   const trustedProxyIps =
-    input.trustedProxyIps ??
-    parseCsv(process.env.ROAMCLI_TRUSTED_PROXY_IPS);
+    input.trustedProxyIps ?? parseCsv(process.env.ROAMCLI_TRUSTED_PROXY_IPS);
   return {
     host: input.host ?? process.env.HOST ?? "127.0.0.1",
     port: input.port ?? Number(process.env.PORT ?? 3000),
@@ -54,7 +58,15 @@ export function loadConfig(input: ServerConfigInput = {}): ServerConfig {
     trustedProxyIps,
     runnerRpcTimeoutMs:
       input.runnerRpcTimeoutMs ??
-      Number(process.env.ROAMCLI_RUNNER_RPC_TIMEOUT_MS ?? 5000),
+      Number(
+        process.env.ROAMCLI_RUNNER_RPC_TIMEOUT_MS ??
+          DEFAULT_RUNNER_RPC_TIMEOUT_MS,
+      ),
+    gitJobTimeoutMs:
+      input.gitJobTimeoutMs ??
+      Number(
+        process.env.ROAMCLI_GIT_JOB_TIMEOUT_MS ?? DEFAULT_GIT_JOB_TIMEOUT_MS,
+      ),
     ...(webDistDir ? { webDistDir } : {}),
   };
 }

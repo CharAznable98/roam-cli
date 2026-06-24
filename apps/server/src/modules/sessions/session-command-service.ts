@@ -53,8 +53,7 @@ export class SessionCommandService {
     private readonly runnerRpcTimeoutMs: number,
     gitJobs?: GitJobRunner,
   ) {
-    this.gitJobs =
-      gitJobs ?? new GitJobRunner(store, hub, rpc, runnerRpcTimeoutMs);
+    this.gitJobs = gitJobs ?? new GitJobRunner(store, hub, rpc);
   }
 
   async createSession(

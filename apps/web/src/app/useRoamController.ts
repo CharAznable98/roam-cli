@@ -1098,6 +1098,15 @@ export function useRoamController() {
     return apiRef.current;
   }, []);
 
+  const refreshSessionDetail = useCallback(
+    async (sessionId: string) => {
+      const detail = await requireApiClient().fetchSessionDetail(sessionId);
+      dispatch({ type: "sessionDetailMerged", detail });
+      return detail;
+    },
+    [requireApiClient],
+  );
+
   const checkSelectedSessionStatus = useCallback(async () => {
     const sessionId = selectedSession?.id;
     if (!sessionId) {
@@ -1373,6 +1382,7 @@ export function useRoamController() {
     applyAcceptedPatch,
     sendControl,
     archiveSession,
+    refreshSessionDetail,
     selectFile,
     openFileForEdit,
     startSelectedFileEdit,

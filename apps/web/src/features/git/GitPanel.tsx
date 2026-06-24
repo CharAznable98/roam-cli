@@ -351,27 +351,6 @@ export function GitPanel({
   }, [defaultContextKey, selectedContextAvailable]);
 
   useEffect(() => {
-    if (
-      !project ||
-      !defaultContextKey ||
-      selectedContext?.kind !== "session_worktree"
-    ) {
-      return;
-    }
-    const hasCompletedRemoval = gitJobs.some(
-      (job) =>
-        job.projectId === project.id &&
-        job.sessionId === selectedContext.sessionId &&
-        job.status === "succeeded" &&
-        (job.operation === "remove_worktree" ||
-          job.operation === "archive_remove_worktree"),
-    );
-    if (hasCompletedRemoval) {
-      setSelectedContextKey(defaultContextKey);
-    }
-  }, [defaultContextKey, gitJobs, project, selectedContextIdentity]);
-
-  useEffect(() => {
     if (!active) {
       return;
     }
