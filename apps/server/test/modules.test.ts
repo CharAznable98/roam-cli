@@ -707,7 +707,7 @@ describe("SessionCommandService", () => {
     });
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
 
-    const now = new Date().toISOString();
+    const now = "2000-01-01T00:00:00.000Z";
     runnerEvents.handle({
       type: "gitJobResult",
       job: {
@@ -723,10 +723,13 @@ describe("SessionCommandService", () => {
       },
     });
 
-    expect(store.getSession("session-1")).toMatchObject({
+    const archived = store.getSession("session-1");
+    expect(archived).toMatchObject({
       archivedAt: expect.any(String),
       worktreeDeletedAt: expect.any(String),
     });
+    expect(archived?.archivedAt).not.toBe(now);
+    expect(archived?.worktreeDeletedAt).not.toBe(now);
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
         id: removeCommand?.requestId,
@@ -813,6 +816,7 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const gitJobs = new GitJobRunner(store, hub, rpc, 5);
+    const runnerEvents = new RunnerEventService(store, hub, rpc, gitJobs);
     const gitService = new GitService(store, hub, rpc, 5, gitJobs);
     const context = { kind: "project" as const, projectId: "project-1" };
     store.createProject(projectRecord());
@@ -829,10 +833,36 @@ describe("SessionCommandService", () => {
       type: "gitStagePaths",
       paths: ["README.md"],
     });
+    const stageCommand = runnerMessages.at(-1);
+    if (stageCommand?.type !== "gitStagePaths") {
+      throw new Error("stage command was not sent");
+    }
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
+        operation: "stage",
+        status: "failed",
+        errorCode: "runner_timeout",
+      }),
+    );
+    const lateFinishedAt = new Date().toISOString();
+    runnerEvents.handle({
+      type: "gitJobResult",
+      job: {
+        id: stageCommand.requestId,
+        projectId: "project-1",
+        contextKind: "project",
+        operation: "stage",
+        status: "succeeded",
+        createdAt: lateFinishedAt,
+        startedAt: lateFinishedAt,
+        finishedAt: lateFinishedAt,
+      },
+    });
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: stageCommand.requestId,
         operation: "stage",
         status: "failed",
         errorCode: "runner_timeout",
@@ -1073,7 +1103,7 @@ describe("SessionCommandService", () => {
     expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
 
-    const now = new Date().toISOString();
+    const now = "2000-01-01T00:00:00.000Z";
     runnerEvents.handle({
       type: "gitJobResult",
       job: {
@@ -1089,17 +1119,20 @@ describe("SessionCommandService", () => {
       },
     });
 
-    expect(store.getSession("session-1")).toMatchObject({
+    const archived = store.getSession("session-1");
+    expect(archived).toMatchObject({
       archivedAt: expect.any(String),
-      worktreeDeletedAt: now,
+      worktreeDeletedAt: expect.any(String),
     });
+    expect(archived?.archivedAt).not.toBe(now);
+    expect(archived?.worktreeDeletedAt).not.toBe(now);
     expect(streamEvents).toContainEqual(
       expect.objectContaining({
         type: "session:updated",
         session: expect.objectContaining({
           id: "session-1",
           archivedAt: expect.any(String),
-          worktreeDeletedAt: now,
+          worktreeDeletedAt: expect.any(String),
         }),
       }),
     );

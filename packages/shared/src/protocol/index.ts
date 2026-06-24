@@ -164,7 +164,15 @@ export const GitChangeSchema = z.object({
 export type GitChange = z.infer<typeof GitChangeSchema>;
 
 const GitChangeGroupIdSchema = z
-  .enum(["staged", "unstaged", "changes", "untracked"])
+  .enum([
+    "staged",
+    "unstaged",
+    "changes",
+    "untracked",
+    "conflicts",
+    "ignored",
+    "submodules",
+  ])
   .transform((id): "staged" | "unstaged" =>
     id === "staged" ? "staged" : "unstaged",
   );

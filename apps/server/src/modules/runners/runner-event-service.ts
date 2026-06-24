@@ -199,9 +199,11 @@ export class RunnerEventService {
     if (event.type === "gitJobResult") {
       const job =
         this.gitJobs?.normalizeRunnerJobResult(event.job) ?? event.job;
+      if (this.gitJobs && !this.gitJobs.handleRunnerJobResult(job)) {
+        return;
+      }
       this.store.upsertGitJob(job);
       this.applyGitJobSessionEffects(job);
-      this.gitJobs?.handleRunnerJobResult(job);
       this.rpc.resolveRunnerResponse(job);
       this.hub.broadcast({ type: "git:job", job });
       return;

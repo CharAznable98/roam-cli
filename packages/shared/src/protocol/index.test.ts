@@ -198,6 +198,36 @@ describe("protocol schemas", () => {
               },
             ],
           },
+          {
+            id: "conflicts",
+            changes: [
+              {
+                path: "conflicted.txt",
+                status: "conflicted",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "ignored",
+            changes: [
+              {
+                path: "cache.tmp",
+                status: "ignored",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "submodules",
+            changes: [
+              {
+                path: "vendor/lib",
+                status: "submodule",
+                staged: false,
+              },
+            ],
+          },
         ],
       },
     });
@@ -211,6 +241,9 @@ describe("protocol schemas", () => {
         groups: [
           { id: "unstaged", changes: [{ path: "src/App.tsx" }] },
           { id: "unstaged", changes: [{ path: "scratch.txt" }] },
+          { id: "unstaged", changes: [{ path: "conflicted.txt" }] },
+          { id: "unstaged", changes: [{ path: "cache.tmp" }] },
+          { id: "unstaged", changes: [{ path: "vendor/lib" }] },
         ],
       },
     });

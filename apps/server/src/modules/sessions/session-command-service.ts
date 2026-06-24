@@ -208,7 +208,7 @@ export class SessionCommandService {
     if (!session || session.archivedAt) {
       return;
     }
-    const archivedAt = job.finishedAt ?? nowIso();
+    const archivedAt = nowIso();
     if (!session.worktreeDeletedAt) {
       this.store.markSessionWorktreeDeleted(session.id, archivedAt);
     }
