@@ -93,6 +93,9 @@ export class RunnerEventService {
         this.nextOutputTimestamp(event.sessionId),
         event.encrypted,
       );
+      if (result === undefined) {
+        return;
+      }
       this.hub.broadcast({
         type: result.created ? "message:created" : "message:updated",
         message: result.message,

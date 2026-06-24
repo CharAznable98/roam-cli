@@ -175,7 +175,9 @@ describe("claude code agent plugin", () => {
       });
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: "claude-output-1",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -301,7 +303,9 @@ describe("claude code agent plugin", () => {
         content: "Follow-up response",
         mode: "replace",
         done: true,
-        outputId: "claude-output-2",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-2$/,
+        ),
       });
       expect(
         events.filter(
@@ -413,6 +417,7 @@ describe("claude code agent plugin", () => {
         {
           type: "assistant",
           message: {
+            id: "msg_final",
             content: [{ type: "text", text: "Claude response" }],
           },
         },
@@ -432,7 +437,9 @@ describe("claude code agent plugin", () => {
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: "claude-output-1",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
         mode: "append",
         done: false,
@@ -447,14 +454,18 @@ describe("claude code agent plugin", () => {
     ).toEqual([
       {
         type: "assistantOutput",
-        outputId: "claude-output-1",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
         mode: "append",
         done: false,
       },
       {
         type: "assistantOutput",
-        outputId: "claude-output-1",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -501,7 +512,9 @@ describe("claude code agent plugin", () => {
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: "claude-output-1",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -517,6 +530,51 @@ describe("claude code agent plugin", () => {
       mode: "append",
       done: false,
     });
+  });
+
+  it("scopes fallback output ids across session instances", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const assistantMessage = (text: string) => ({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text }],
+      },
+    });
+    sdk.query
+      .mockReturnValueOnce(fakeQuery([assistantMessage("First")]))
+      .mockReturnValueOnce(fakeQuery([assistantMessage("Second")]));
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter((event) => event.type === "assistantOutput"),
+      ).toHaveLength(2);
+    });
+
+    const outputIds = events
+      .filter((event) => event.type === "assistantOutput")
+      .map((event) => event.outputId);
+    expect(outputIds[0]).toMatch(/^claude-run-[^:]+:claude-output-1$/);
+    expect(outputIds[1]).toMatch(/^claude-run-[^:]+:claude-output-1$/);
+    expect(outputIds[0]).not.toBe(outputIds[1]);
   });
 
   it("passes image attachments through SDK user-message content blocks", async () => {

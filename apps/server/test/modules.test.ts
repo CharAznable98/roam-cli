@@ -1262,7 +1262,12 @@ describe("RunnerEventService", () => {
       encrypted: false,
     });
     expect(store.listMessages(session.id)).toMatchObject([
-      { role: "assistant", content: "partial", encrypted: false },
+      {
+        role: "assistant",
+        content: "partial",
+        encrypted: false,
+        streaming: true,
+      },
     ]);
     expect(streamEvents).toContainEqual(
       expect.objectContaining({
@@ -1295,6 +1300,20 @@ describe("RunnerEventService", () => {
       sessionId: session.id,
       outputId: "output-2",
       content: "secret",
+      mode: "replace",
+      done: true,
+      encrypted: true,
+    });
+    expect(store.listMessages(session.id).at(-1)).toMatchObject({
+      role: "assistant",
+      content: "secret",
+      encrypted: true,
+    });
+
+    service.handle({
+      type: "assistantOutput",
+      sessionId: session.id,
+      outputId: "output-2",
       mode: "replace",
       done: true,
       encrypted: true,

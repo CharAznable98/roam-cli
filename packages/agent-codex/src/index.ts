@@ -3,6 +3,7 @@ import {
   spawn as spawnChild,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -296,6 +297,7 @@ function statusForExit(
 export class CodexJsonParser implements AgentOutputParser {
   #buffer = "";
   #outputSequence = 0;
+  readonly #outputPrefix = `codex-run-${randomUUID()}`;
 
   feed(chunk: string | Buffer): AgentParseResult {
     this.#buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
@@ -329,8 +331,8 @@ export class CodexJsonParser implements AgentOutputParser {
         type: "assistantOutput",
         outputId:
           typeof event.item.id === "string"
-            ? event.item.id
-            : `codex-output-${++this.#outputSequence}`,
+            ? this.#scopedOutputId(event.item.id)
+            : this.#nextOutputId(),
         content: event.item.text,
         mode: "replace",
         done: true,
@@ -348,6 +350,15 @@ export class CodexJsonParser implements AgentOutputParser {
     const parts = this.#buffer.split(/\r?\n/);
     this.#buffer = parts.pop() ?? "";
     return parts.filter((line) => line.length > 0);
+  }
+
+  #nextOutputId(): string {
+    this.#outputSequence += 1;
+    return this.#scopedOutputId(`codex-output-${this.#outputSequence}`);
+  }
+
+  #scopedOutputId(outputId: string): string {
+    return `${this.#outputPrefix}:${outputId}`;
   }
 }
 

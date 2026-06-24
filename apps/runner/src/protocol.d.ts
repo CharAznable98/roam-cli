@@ -116,6 +116,7 @@ declare module "@roamcli/shared/protocol" {
     role: ChatRole;
     content: string;
     encrypted: boolean;
+    streaming?: boolean;
     createdAt: string;
   }
 

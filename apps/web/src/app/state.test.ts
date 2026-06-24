@@ -326,6 +326,7 @@ describe("app reducer", () => {
               role: "assistant",
               content: "partial answer",
               encrypted: false,
+              streaming: true,
               createdAt: "2026-06-05T00:00:01.000Z",
             },
           ],
@@ -378,6 +379,7 @@ describe("app reducer", () => {
               role: "assistant",
               content: "answer",
               encrypted: false,
+              streaming: true,
               createdAt: "2026-06-05T00:00:11.000Z",
             },
           ],
@@ -448,6 +450,7 @@ describe("app reducer", () => {
               role: "assistant",
               content: "second answer",
               encrypted: false,
+              streaming: true,
               createdAt: "2026-06-05T00:00:03.000Z",
             },
           ],
@@ -503,6 +506,7 @@ describe("app reducer", () => {
               role: "assistant",
               content: "partial answer",
               encrypted: false,
+              streaming: true,
               createdAt: "2026-06-05T00:00:01.000Z",
             },
           ],
@@ -515,6 +519,51 @@ describe("app reducer", () => {
 
     expect(next.messages).toHaveLength(1);
     expect(next.messages[0]?.content).toBe("partial answer with newer token");
+  });
+
+  it("lets finalized stream details replace longer local partial content", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        messages: [
+          {
+            id: "stream_session-1_100",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "partial answer with stale extra token",
+            encrypted: false,
+            streaming: true,
+            createdAt: "2026-06-05T00:00:01.000Z",
+          },
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: {
+            ...makeSession("session-1", "project-1"),
+            status: "completed",
+          },
+          messages: [
+            {
+              id: "stream_session-1_100",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "final answer",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:01.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.content).toBe("final answer");
+    expect(next.messages[0]?.streaming).toBeUndefined();
   });
 
   it("does not let stale session details regress fresher session or approval state", () => {

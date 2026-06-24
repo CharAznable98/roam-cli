@@ -48,7 +48,7 @@ describe("SessionManager", () => {
         events.some(
           (event) =>
             event.type === "assistantOutput" &&
-            event.outputId === "item_1" &&
+            /^codex-run-[^:]+:item_1$/.test(event.outputId) &&
             (event.content ?? "").includes("codex answer: hello"),
         ),
       ).toBe(true);

@@ -364,6 +364,7 @@ export const MessageSchema = z.object({
   role: ChatRoleSchema,
   content: z.string(),
   encrypted: z.boolean().default(false),
+  streaming: z.boolean().optional(),
   createdAt: z.string().datetime(),
 });
 export type Message = z.infer<typeof MessageSchema>;

@@ -777,6 +777,7 @@ function reconcileStreamMessage(
   return {
     messages: messages.filter((_, index) => index !== placeholderIndex),
     message:
+      message.streaming === true &&
       placeholder.content.length > message.content.length
         ? { ...message, content: placeholder.content }
         : message,
@@ -856,6 +857,9 @@ function preserveLongerStreamContent(
   message: Message,
 ): Message {
   if (!isPersistedStreamMessage(message)) {
+    return message;
+  }
+  if (message.streaming !== true) {
     return message;
   }
 

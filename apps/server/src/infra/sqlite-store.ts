@@ -60,6 +60,7 @@ interface MessageRow {
   role: ChatRole;
   content: string;
   encrypted: number;
+  streaming: number;
   created_at: string;
 }
 
@@ -534,8 +535,8 @@ export class ServerStore {
   addMessage(message: Message): Message {
     this.db
       .prepare(
-        `INSERT INTO messages (id, session_id, role, content, encrypted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, role, content, encrypted, streaming, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.id,
@@ -543,6 +544,7 @@ export class ServerStore {
         message.role,
         message.content,
         message.encrypted ? 1 : 0,
+        message.streaming ? 1 : 0,
         message.createdAt,
       );
     return message;
@@ -553,24 +555,31 @@ export class ServerStore {
     outputId: string,
     content: string | undefined,
     mode: "append" | "replace",
-    _done: boolean,
+    done: boolean,
     createdAt: string,
     encrypted: boolean,
-  ): { message: Message; created: boolean } {
+  ): { message: Message; created: boolean } | undefined {
     const id = streamMessageId(sessionId, outputId);
     const existing = this.db
       .prepare("SELECT * FROM messages WHERE id = ? AND session_id = ?")
       .get(id, sessionId) as MessageRow | undefined;
-    const nextContent = content ?? "";
     if (existing) {
-      if (mode === "replace") {
+      if (mode === "replace" && content !== undefined) {
         this.db
-          .prepare("UPDATE messages SET content = ? WHERE id = ?")
-          .run(nextContent, id);
+          .prepare(
+            "UPDATE messages SET content = ?, streaming = ? WHERE id = ?",
+          )
+          .run(content, done ? 0 : 1, id);
       } else if (content !== undefined && content.length > 0) {
         this.db
-          .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
-          .run(content, id);
+          .prepare(
+            "UPDATE messages SET content = content || ?, streaming = ? WHERE id = ?",
+          )
+          .run(content, done ? 0 : 1, id);
+      } else {
+        this.db
+          .prepare("UPDATE messages SET streaming = ? WHERE id = ?")
+          .run(done ? 0 : 1, id);
       }
       return {
         message:
@@ -579,12 +588,16 @@ export class ServerStore {
         created: false,
       };
     }
+    if (content === undefined) {
+      return undefined;
+    }
     const message: Message = {
       id,
       sessionId,
       role: "assistant",
-      content: nextContent,
+      content,
       encrypted,
+      ...(done ? {} : { streaming: true }),
       createdAt,
     };
     return { message: this.addMessage(message), created: true };
@@ -897,6 +910,7 @@ export class ServerStore {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         encrypted INTEGER NOT NULL DEFAULT 0,
+        streaming INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
@@ -1017,6 +1031,11 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
+    this.addColumnIfMissing(
+      "messages",
+      "streaming",
+      "INTEGER NOT NULL DEFAULT 0",
+    );
     this.addColumnIfMissing("approvals", "resolved_by", "TEXT");
     this.addColumnIfMissing("approvals", "resolver_session_id", "TEXT");
   }
@@ -1079,6 +1098,7 @@ function toMessage(row: MessageRow): Message {
     role: row.role,
     content: row.content,
     encrypted: Boolean(row.encrypted),
+    ...(row.streaming ? { streaming: true } : {}),
     createdAt: row.created_at,
   };
 }

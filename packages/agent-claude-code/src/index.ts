@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -95,6 +96,8 @@ class ClaudeCodeSession implements AgentSession {
   #activeOutputId: string | undefined;
   #lastOutputId: string | undefined;
   #outputSequence = 0;
+  #runSequence = 0;
+  #runOutputPrefix = `claude-run-${randomUUID()}-0`;
   readonly #streamedOutputIds = new Set<string>();
 
   public constructor(context: AgentSessionContext) {
@@ -187,6 +190,7 @@ class ClaudeCodeSession implements AgentSession {
     this.#needsFinalOutputFallback = false;
     this.#activeOutputId = undefined;
     this.#lastOutputId = undefined;
+    this.#runOutputPrefix = `claude-run-${randomUUID()}-${++this.#runSequence}`;
     this.#streamedOutputIds.clear();
     const sdkQuery = query({
       prompt: promptForInput(input),
@@ -275,7 +279,8 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "stream_event") {
       if (streamEventType(message.event) === "message_start") {
         const outputId =
-          messageStartOutputId(message.event) ?? this.#nextOutputId();
+          this.#scopedOutputId(messageStartOutputId(message.event)) ??
+          this.#nextOutputId();
         this.#activeOutputId = outputId;
         this.#lastOutputId = outputId;
         return;
@@ -319,8 +324,14 @@ class ClaudeCodeSession implements AgentSession {
     if (message.type === "assistant") {
       const text = textFromContent(message.message.content);
       if (text.length > 0) {
+        const streamedOutputId =
+          this.#lastOutputId !== undefined &&
+          this.#streamedOutputIds.has(this.#lastOutputId)
+            ? this.#lastOutputId
+            : undefined;
         const outputId =
-          message.message.id ??
+          streamedOutputId ??
+          this.#scopedOutputId(message.message.id) ??
           this.#activeOutputId ??
           this.#lastOutputId ??
           this.#nextOutputId();
@@ -400,7 +411,13 @@ class ClaudeCodeSession implements AgentSession {
 
   #nextOutputId(): string {
     this.#outputSequence += 1;
-    return `claude-output-${this.#outputSequence}`;
+    return `${this.#runOutputPrefix}:claude-output-${this.#outputSequence}`;
+  }
+
+  #scopedOutputId(outputId: string | undefined): string | undefined {
+    return outputId === undefined
+      ? undefined
+      : `${this.#runOutputPrefix}:${outputId}`;
   }
 }
 
