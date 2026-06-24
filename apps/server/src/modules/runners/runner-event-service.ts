@@ -13,6 +13,7 @@ import {
 } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";
+import type { GitJobRunner } from "../git/git-job-runner.js";
 
 export class RunnerEventService {
   private lastOutputTimestampMs = 0;
@@ -21,6 +22,10 @@ export class RunnerEventService {
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
     private readonly rpc: RunnerRpcClient,
+    private readonly gitJobs?: GitJobRunner,
+    private readonly onArchiveRemoveWorktreeJobSucceeded?: (
+      job: GitJob,
+    ) => void,
   ) {}
 
   handle(event: RunnerEvent): void {
@@ -179,6 +184,12 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "gitCommitFilesResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      this.hub.broadcast({ type: "git:commitFiles", result: event.result });
+      return;
+    }
+
     if (event.type === "gitBranchListResult") {
       this.rpc.resolveRunnerResponse(event.result);
       this.hub.broadcast({ type: "git:branches", result: event.result });
@@ -188,6 +199,7 @@ export class RunnerEventService {
     if (event.type === "gitJobResult") {
       this.store.upsertGitJob(event.job);
       this.applyGitJobSessionEffects(event.job);
+      this.gitJobs?.handleRunnerJobResult(event.job);
       this.rpc.resolveRunnerResponse(event.job);
       this.hub.broadcast({ type: "git:job", job: event.job });
       return;
@@ -233,6 +245,13 @@ export class RunnerEventService {
 
   private applyGitJobSessionEffects(job: GitJob): void {
     if (
+      job.status === "succeeded" &&
+      job.operation === "archive_remove_worktree"
+    ) {
+      this.onArchiveRemoveWorktreeJobSucceeded?.(job);
+      return;
+    }
+    if (
       job.status !== "succeeded" ||
       job.operation !== "remove_worktree" ||
       job.contextKind !== "session_worktree" ||
@@ -272,7 +291,9 @@ export class RunnerEventService {
     const latestSessionMessageTime =
       sessionId === undefined
         ? Number.NaN
-        : Date.parse(this.store.listMessages(sessionId).at(-1)?.createdAt ?? "");
+        : Date.parse(
+            this.store.listMessages(sessionId).at(-1)?.createdAt ?? "",
+          );
     const lowerBounds = [Date.now(), this.lastOutputTimestampMs + 1];
     if (Number.isFinite(latestSessionMessageTime)) {
       lowerBounds.push(latestSessionMessageTime + 1);

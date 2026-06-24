@@ -2995,6 +2995,10 @@
     flex: 0 0 auto;
   }
 
+  .git-action-menu[open] {
+    z-index: 90;
+  }
+
   .git-action-menu > summary {
     display: inline-flex;
     height: 28px;
@@ -3023,7 +3027,7 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    z-index: 8;
+    z-index: 90;
     display: grid;
     min-width: 168px;
     gap: 2px;
@@ -3809,6 +3813,14 @@
     background: var(--surface-panel-strong);
   }
 
+  .git-action-menu-content {
+    max-width: min(240px, calc(100vw - 32px));
+  }
+
+  .git-action-menu-content button {
+    white-space: normal;
+  }
+
   .monaco-diff {
     height: 360px;
     flex: 0 0 auto;
@@ -3819,7 +3831,7 @@
   }
 
   .git-branch-card .git-action-menu {
-    justify-self: start;
+    justify-self: end;
   }
 
   .danger-text-button {

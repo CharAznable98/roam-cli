@@ -5,6 +5,7 @@ import type {
   ApiAgentSkillList,
   ApiGitBlameQuery,
   ApiGitCommit,
+  ApiGitCommitFilesQuery,
   ApiGitContext,
   ApiGitFileDiffQuery,
   ApiGitHistoryQuery,
@@ -15,6 +16,7 @@ import type {
   ApiPathSearch,
   ExecutionMode,
   ImageAttachmentUpload,
+  Session,
   SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
@@ -558,7 +560,8 @@ export function useRoamController() {
     if (
       selectedSession?.executionMode === "managed_worktree" &&
       selectedSession.status !== "pending" &&
-      !selectedSession.worktreeDeletedAt
+      !selectedSession.worktreeDeletedAt &&
+      !state.archivingSessionIds[selectedSession.id]
     ) {
       return { kind: "session_worktree", sessionId: selectedSession.id };
     }
@@ -567,6 +570,7 @@ export function useRoamController() {
       : undefined;
   }, [
     selectedProject,
+    state.archivingSessionIds,
     selectedSession?.executionMode,
     selectedSession?.id,
     selectedSession?.status,
@@ -584,6 +588,7 @@ export function useRoamController() {
     if (
       selectedSession.executionMode === "managed_worktree" &&
       (selectedSession.status === "pending" ||
+        state.archivingSessionIds[sessionId] ||
         selectedSession.worktreeDeletedAt)
     ) {
       workspaceSessionIdRef.current = undefined;
@@ -647,6 +652,7 @@ export function useRoamController() {
     selectedSession?.status,
     selectedSession?.worktreeDeletedAt,
     selectedRunner?.runnerId,
+    state.archivingSessionIds,
   ]);
 
   const selectRunner = (runnerId: string) => {
@@ -914,11 +920,19 @@ export function useRoamController() {
   ) => {
     const api = requireApiClient();
     dispatch({ type: "sessionArchiveStarted", sessionId });
+    let shouldFinishArchiveState = true;
     try {
-      await api.deleteSession(sessionId, options);
-      dispatch({ type: "sessionDeleted", sessionId });
+      const result = await api.deleteSession(sessionId, options);
+      if (!result.job) {
+        dispatch({ type: "sessionDeleted", sessionId });
+      } else {
+        shouldFinishArchiveState = false;
+      }
+      return result;
     } finally {
-      dispatch({ type: "sessionArchiveFinished", sessionId });
+      if (shouldFinishArchiveState) {
+        dispatch({ type: "sessionArchiveFinished", sessionId });
+      }
     }
   };
 
@@ -1032,6 +1046,13 @@ export function useRoamController() {
     options: { force?: boolean; resetTree?: boolean } = {},
   ) => {
     if (!apiRef.current) return;
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (
+      !session ||
+      isWorkspaceUnavailable(session, state.archivingSessionIds)
+    ) {
+      return;
+    }
     if (
       !options.force &&
       state.fileTreePathState[sessionId]?.[path] === "ready"
@@ -1182,6 +1203,19 @@ export function useRoamController() {
       const api = requireApiClient();
       try {
         return await api.fetchGitHistory(query);
+      } catch (gitError: unknown) {
+        const message = errorMessage(gitError);
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
+
+  const fetchGitCommitFiles = useCallback(
+    async (query: ApiGitCommitFilesQuery) => {
+      const api = requireApiClient();
+      try {
+        return await api.fetchGitCommitFiles(query);
       } catch (gitError: unknown) {
         const message = errorMessage(gitError);
         throw new Error(message);
@@ -1355,6 +1389,7 @@ export function useRoamController() {
     fetchGitDiff,
     fetchGitBlame,
     fetchGitHistory,
+    fetchGitCommitFiles,
     fetchGitBranches,
     fetchGitJobs,
     initGitRepository,
@@ -1420,6 +1455,19 @@ function hydrateInitialSelection(state: AppState): AppState {
 function nextFileTreeRequestId(): string {
   fileTreeRequestSequence += 1;
   return `file-tree-${Date.now()}-${fileTreeRequestSequence}`;
+}
+
+function isWorkspaceUnavailable(
+  session: Session,
+  archivingSessionIds: Record<string, true>,
+): boolean {
+  return (
+    session.archivedAt !== undefined ||
+    (session.executionMode === "managed_worktree" &&
+      (session.status === "pending" ||
+        archivingSessionIds[session.id] ||
+        session.worktreeDeletedAt !== undefined))
+  );
 }
 
 function isActiveSessionStatus(status: SessionStatus): boolean {

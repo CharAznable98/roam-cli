@@ -177,7 +177,7 @@ describe("protocol schemas", () => {
         behind: 0,
         clean: true,
         unborn: false,
-        groups: [{ id: "changes", changes: [] }],
+        groups: [{ id: "unstaged", changes: [] }],
       },
     });
 

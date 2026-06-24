@@ -250,14 +250,30 @@ function gitStatusPayload(
         changes: visibleChanges.filter((change) => change.staged),
       },
       {
-        id: "changes",
+        id: "unstaged",
         changes: visibleChanges.filter((change) => !change.staged),
       },
-      { id: "conflicts", changes: [] },
-      { id: "untracked", changes: [] },
-      { id: "ignored", changes: [] },
-      { id: "submodules", changes: [] },
     ],
+  };
+}
+
+function lightweightGitCommit(commit: GitCommitSummary): GitCommitSummary {
+  return {
+    sha: commit.sha,
+    parents: commit.parents,
+    authorName: commit.authorName,
+    ...(commit.authoredAt ? { authoredAt: commit.authoredAt } : {}),
+    committerName: commit.committerName,
+    ...(commit.committedAt ? { committedAt: commit.committedAt } : {}),
+    summary: commit.summary,
+    refs: commit.refs,
+    ...(commit.changedFiles !== undefined
+      ? { changedFiles: commit.changedFiles }
+      : {}),
+    ...(commit.insertions !== undefined
+      ? { insertions: commit.insertions }
+      : {}),
+    ...(commit.deletions !== undefined ? { deletions: commit.deletions } : {}),
   };
 }
 
@@ -451,6 +467,7 @@ describe("App", () => {
   let gitStatusChanges: MockGitChange[];
   let gitHistoryCommits: GitCommitSummary[];
   let gitHistoryNextCursor: string | undefined;
+  let gitCommitFilesBySha: Map<string, MockGitChange[]>;
   let failNextGitStatus: boolean;
   let failNonGitStatus: boolean;
   let failGitBlame: boolean;
@@ -517,6 +534,18 @@ describe("App", () => {
       },
     ];
     gitHistoryNextCursor = undefined;
+    gitCommitFilesBySha = new Map([
+      [
+        "abc123",
+        [
+          {
+            path: "src/App.tsx",
+            status: "modified",
+            staged: false,
+          },
+        ],
+      ],
+    ]);
     failNextGitStatus = false;
     failNonGitStatus = false;
     failGitBlame = false;
@@ -716,6 +745,22 @@ describe("App", () => {
                     code: "SESSION_NOT_RUNNING",
                   }),
                 }),
+              );
+            }
+            if (requestUrl.searchParams.get("worktree") === "remove") {
+              return jsonResponse(
+                {
+                  job: {
+                    id: "archive-remove-job-1",
+                    projectId: "project-1",
+                    sessionId: "session-1",
+                    contextKind: "session_worktree",
+                    operation: "archive_remove_worktree",
+                    status: "queued",
+                    createdAt: "2026-06-05T00:00:00.000Z",
+                  },
+                },
+                202,
               );
             }
             return new Response(null, { status: 204 });
@@ -943,10 +988,25 @@ describe("App", () => {
             result: {
               requestId: "git-history-1",
               context: body.context,
-              commits: gitHistoryCommits,
+              commits: gitHistoryCommits.map(lightweightGitCommit),
               ...(gitHistoryNextCursor
                 ? { nextCursor: gitHistoryNextCursor }
                 : {}),
+            },
+          });
+        }
+        if (requestUrl.pathname === "/v1/git/commit-files") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return jsonResponse({
+            result: {
+              requestId: "git-commit-files-1",
+              context: body.context,
+              sha: body.sha,
+              files:
+                gitCommitFilesBySha.get(body.sha) ??
+                gitHistoryCommits.find((commit) => commit.sha === body.sha)
+                  ?.files ??
+                [],
             },
           });
         }
@@ -1274,7 +1334,9 @@ describe("App", () => {
     expect(
       await screen.findByText("Account settings could not be loaded."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Account settings unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Account settings unavailable"),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Runner token")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Regenerate" }),
@@ -1443,7 +1505,9 @@ describe("App", () => {
     expect(
       await screen.findByText("RoamCli API request failed"),
     ).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close modal" }),
+    );
 
     const apiErrorButton = await screen.findByRole("button", {
       name: "API error",
@@ -1804,7 +1868,27 @@ describe("App", () => {
     expect(
       (await tools.findAllByText("Initial commit")).length,
     ).toBeGreaterThan(0);
+    expect(
+      fetchCalls.some(
+        (call) => new URL(call.url).pathname === "/v1/git/commit-files",
+      ),
+    ).toBe(false);
+    fireEvent.click(tools.getByRole("button", { name: /Initial commit/ }));
     expect(await tools.findByText("Changed files")).toBeInTheDocument();
+    expect((await tools.findAllByText("src/App.tsx")).length).toBeGreaterThan(
+      0,
+    );
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/commit-files") {
+            return false;
+          }
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return body.sha === "abc123";
+        }),
+      ).toBe(true),
+    );
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -2099,6 +2183,7 @@ describe("App", () => {
     expect(
       (await tools.findAllByText("Initial commit")).length,
     ).toBeGreaterThan(0);
+    fireEvent.click(tools.getByRole("button", { name: /Initial commit/ }));
     await waitFor(() =>
       expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
         "data-modified",
@@ -2200,6 +2285,7 @@ describe("App", () => {
     expect((await tools.findAllByText("Root commit")).length).toBeGreaterThan(
       0,
     );
+    fireEvent.click(tools.getByRole("button", { name: /Root commit/ }));
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -2249,6 +2335,7 @@ describe("App", () => {
     expect((await tools.findAllByText("Rename file")).length).toBeGreaterThan(
       0,
     );
+    fireEvent.click(tools.getByRole("button", { name: /Rename file/ }));
     await waitFor(() =>
       expect(
         fetchCalls.some((call) => {
@@ -4478,19 +4565,233 @@ describe("App", () => {
       within(dialog).getByRole("button", { name: "Archive and remove" }),
     );
 
+    let deleteCall: (typeof fetchCalls)[number] | undefined;
+    await waitFor(() => {
+      deleteCall = fetchCalls.find((call) => {
+        const requestUrl = new URL(call.url);
+        return (
+          requestUrl.pathname === "/v1/sessions/session-1" &&
+          requestUrl.searchParams.get("worktree") === "remove" &&
+          call.init?.method === "DELETE"
+        );
+      });
+      expect(deleteCall).toBeDefined();
+    });
+    expect(deleteCall).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Real session" }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "git:job",
+            job: {
+              id: "archive-remove-job-1",
+              projectId: "project-1",
+              sessionId: "session-1",
+              contextKind: "session_worktree",
+              operation: "archive_remove_worktree",
+              status: "succeeded",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              startedAt: "2026-06-05T00:00:00.000Z",
+              finishedAt: "2026-06-05T00:00:01.000Z",
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:updated",
+            session: {
+              ...session,
+              status: "completed",
+              executionMode: "managed_worktree",
+              executionFolder: remoteSessionExecutionFolder,
+              archivedAt: "2026-06-05T00:00:01.000Z",
+              worktreeDeletedAt: "2026-06-05T00:00:01.000Z",
+              updatedAt: "2026-06-05T00:00:01.000Z",
+            },
+          }),
+        }),
+      );
+    });
+
     await waitFor(() =>
       expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
     );
-    const deleteCall = fetchCalls.find((call) => {
+    expect(
+      screen.queryByText("Session is not running"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not reload removed worktree Git status from the Git panel", async () => {
+    remoteSessionStatus = "completed";
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          const requestUrl = new URL(call.url);
+          if (requestUrl.pathname !== "/v1/git/status") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.kind === "session_worktree" && body.sessionId === "session-1"
+          );
+        }),
+      ).toBe(true),
+    );
+    fireEvent.click(tools.getByRole("tab", { name: "Branch & Sync" }));
+    await tools.findByLabelText("Branch actions");
+
+    fetchCalls = [];
+
+    fireEvent.click(tools.getByLabelText("Branch actions"));
+    fireEvent.click(tools.getByRole("button", { name: "Remove worktree" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some(
+          (call) =>
+            new URL(call.url).pathname === "/v1/git/worktree/remove" &&
+            call.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          const requestUrl = new URL(call.url);
+          if (requestUrl.pathname !== "/v1/git/status") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return body.kind === "project" && body.projectId === "project-1";
+        }),
+      ).toBe(true),
+    );
+
+    const staleStatusCalls = fetchCalls.filter((call) => {
       const requestUrl = new URL(call.url);
-      return (
-        requestUrl.pathname === "/v1/sessions/session-1" &&
-        requestUrl.searchParams.get("worktree") === "remove" &&
-        call.init?.method === "DELETE"
+      if (requestUrl.pathname !== "/v1/git/status") return false;
+      const body = JSON.parse(String(call.init?.body ?? "{}"));
+      return body.kind === "session_worktree" && body.sessionId === "session-1";
+    });
+    expect(staleStatusCalls).toEqual([]);
+  });
+
+  it("does not reload archived worktree Git status while remove is pending", async () => {
+    remoteSessionStatus = "completed";
+    remoteSessionExecutionMode = "managed_worktree";
+    remoteSessionExecutionFolder =
+      "/workspace/.roam-runner/worktrees/project-1/session-1";
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          const requestUrl = new URL(call.url);
+          if (requestUrl.pathname !== "/v1/git/status") return false;
+          const body = JSON.parse(String(call.init?.body ?? "{}"));
+          return (
+            body.kind === "session_worktree" && body.sessionId === "session-1"
+          );
+        }),
+      ).toBe(true),
+    );
+
+    fetchCalls = [];
+
+    fireEvent.click(
+      openSessionActions().getByRole("menuitem", { name: /Archive/ }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive session",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Archive and remove" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          const requestUrl = new URL(call.url);
+          return (
+            requestUrl.pathname === "/v1/sessions/session-1" &&
+            requestUrl.searchParams.get("worktree") === "remove" &&
+            call.init?.method === "DELETE"
+          );
+        }),
+      ).toBe(true),
+    );
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "git:job",
+            job: {
+              id: "archive-remove-job-1",
+              projectId: "project-1",
+              sessionId: "session-1",
+              contextKind: "session_worktree",
+              operation: "archive_remove_worktree",
+              status: "succeeded",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              startedAt: "2026-06-05T00:00:00.000Z",
+              finishedAt: "2026-06-05T00:00:01.000Z",
+            },
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:updated",
+            session: {
+              ...session,
+              status: "completed",
+              executionMode: "managed_worktree",
+              executionFolder: remoteSessionExecutionFolder,
+              archivedAt: "2026-06-05T00:00:01.000Z",
+              worktreeDeletedAt: "2026-06-05T00:00:01.000Z",
+              updatedAt: "2026-06-05T00:00:01.000Z",
+            },
+          }),
+        }),
       );
     });
-    expect(deleteCall).toBeDefined();
-    expect(screen.queryByText("Session is not running")).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(screen.queryByText("Real session")).not.toBeInTheDocument(),
+    );
+
+    const staleStatusCalls = fetchCalls.filter((call) => {
+      const requestUrl = new URL(call.url);
+      if (requestUrl.pathname !== "/v1/git/status") return false;
+      const body = JSON.parse(String(call.init?.body ?? "{}"));
+      return body.kind === "session_worktree" && body.sessionId === "session-1";
+    });
+    expect(staleStatusCalls).toEqual([]);
+
+    const staleFileTreeCalls = fetchCalls.filter(
+      (call) => new URL(call.url).pathname === "/v1/sessions/session-1/files",
+    );
+    expect(staleFileTreeCalls).toEqual([]);
   });
 
   it("does not offer worktree removal for active managed worktree sessions", async () => {

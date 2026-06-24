@@ -11,6 +11,7 @@ import type {
   GitChange,
   GitChangeGroup,
   GitChangeStatus,
+  GitCommitFiles,
   GitCommitPage,
   GitCommitSummary,
   GitContextRef,
@@ -22,12 +23,6 @@ import type {
 } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
 import {
-  type BranchSummary,
-  type FileStatusResult,
-  type SimpleGit,
-  simpleGit,
-} from "simple-git";
-import {
   isInside,
   resolveSessionChild,
   resolveWorkspaceChild,
@@ -35,7 +30,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 const MAX_DIFF_CONTENT_BYTES = 1024 * 1024;
+const GIT_COMMAND_TIMEOUT_MS = 30_000;
 const ZERO_SHA = "0000000000000000000000000000000000000000";
+const gitCommandQueues = new Map<string, Promise<void>>();
 
 export interface GitWorkspaceScope {
   workspace: string;
@@ -54,6 +51,10 @@ export interface GitHistoryOptions extends GitWorkspaceScope {
   path?: string;
   cursor?: string;
   limit: number;
+}
+
+export interface GitCommitFilesOptions extends GitWorkspaceScope {
+  sha: string;
 }
 
 export interface GitFileDiffOptions extends GitPathScope {
@@ -91,9 +92,14 @@ export async function readGitStatus(
       message: "This directory is not a Git repository.",
     };
   }
-  const git = simpleGit(cwd);
   const [status, headSha, unborn] = await Promise.all([
-    git.status(["--ignored=matching"]),
+    git(cwd, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--branch",
+      "--untracked-files=all",
+    ]).then(({ stdout }) => parseStatus(stdout)),
     revParse(cwd, "HEAD").catch(() => undefined),
     isUnborn(cwd),
   ]);
@@ -107,7 +113,7 @@ export async function readGitStatus(
     ...(status.tracking ? { upstream: status.tracking } : {}),
     ahead: status.ahead,
     behind: status.behind,
-    clean: status.isClean(),
+    clean: status.files.length === 0,
     unborn,
     groups: groupStatusChanges(status.files),
   };
@@ -202,17 +208,35 @@ export async function readGitCommitPage(
   const { stdout } = await git(cwd, args);
   const commits = parseLog(stdout);
   const visible = commits.slice(0, limit);
-  const commitsWithFiles = await Promise.all(
-    visible.map(async (commit) => ({
-      ...commit,
-      files: await readCommitFiles(cwd, commit),
-    })),
-  );
   return {
     requestId: options.requestId,
     context: options.context,
-    commits: commitsWithFiles,
+    commits: visible,
     ...(commits.length > limit ? { nextCursor: String(skip + limit) } : {}),
+  };
+}
+
+export async function readGitCommitFiles(
+  options: GitCommitFilesOptions,
+): Promise<GitCommitFiles> {
+  const cwd = await resolveGitCwd(options.workspace, options.cwd);
+  await assertGitWorkTree(cwd);
+  const { stdout } = await git(cwd, [
+    "rev-list",
+    "--parents",
+    "-n",
+    "1",
+    options.sha,
+  ]);
+  const [sha, ...parents] = stdout.trim().split(/\s+/).filter(Boolean);
+  if (!sha) {
+    throw new Error(`Unable to resolve commit: ${options.sha}`);
+  }
+  return {
+    requestId: options.requestId,
+    context: options.context,
+    sha,
+    files: await readCommitFiles(cwd, { sha, parents }),
   };
 }
 
@@ -221,18 +245,23 @@ export async function readGitBranches(
 ): Promise<GitBranchList> {
   const cwd = await resolveGitCwd(options.workspace, options.cwd);
   await assertGitWorkTree(cwd);
-  const summary = await simpleGit(cwd).branch(["--all", "--verbose"]);
+  const { stdout } = await git(cwd, [
+    "for-each-ref",
+    "--format=%(refname)%00%(refname:short)%00%(HEAD)%00%(upstream:short)",
+    "refs/heads",
+    "refs/remotes",
+  ]);
   return {
     requestId: options.requestId,
     context: options.context,
-    branches: branchSummaryToList(summary),
+    branches: parseBranchList(stdout),
   };
 }
 
 export async function stageGitPaths(options: GitPathsOptions): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
     const paths = normalizeGitPaths(options.paths);
-    await simpleGit(cwd).add(paths);
+    await git(cwd, ["add", "--", ...paths]);
   });
 }
 
@@ -240,7 +269,7 @@ export async function initGitRepository(
   options: GitMutatingOptions,
 ): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
-    await simpleGit(cwd).init();
+    await git(cwd, ["init"]);
   });
 }
 
@@ -287,7 +316,7 @@ export async function commitGitChanges(
   options: GitCommitOptions,
 ): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
-    await simpleGit(cwd).commit(options.message);
+    await git(cwd, ["commit", "-m", options.message]);
   });
 }
 
@@ -295,16 +324,15 @@ export async function runGitRemoteOperation(
   options: GitRemoteOperationOptions,
 ): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
-    const gitClient = simpleGit(cwd);
     if (options.remoteOperation === "fetch") {
-      await gitClient.fetch();
+      await git(cwd, ["fetch"]);
       return;
     }
     if (options.remoteOperation === "pull") {
-      await gitClient.pull();
+      await git(cwd, ["pull"]);
       return;
     }
-    await gitClient.push();
+    await git(cwd, ["push"]);
   });
 }
 
@@ -444,10 +472,45 @@ async function git(
   cwd: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync("git", ["-C", cwd, ...args], {
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const { stdout, stderr } = await runQueuedGitCommand(cwd, () =>
+    execFileAsync("git", ["-C", cwd, ...args], {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+    }),
+  );
   return { stdout: String(stdout), stderr: String(stderr) };
+}
+
+async function gitBuffer(cwd: string, args: string[]): Promise<Buffer> {
+  const { stdout } = await runQueuedGitCommand(cwd, () =>
+    execFileAsync("git", ["-C", cwd, ...args], {
+      maxBuffer: MAX_DIFF_CONTENT_BYTES + 1,
+      encoding: "buffer",
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+    }),
+  );
+  return Buffer.from(stdout as Buffer);
+}
+
+async function runQueuedGitCommand<T>(
+  cwd: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = gitCommandQueues.get(cwd) ?? Promise.resolve();
+  const runPromise = previous.then(run);
+  let cleanupPromise: Promise<void>;
+  cleanupPromise = runPromise
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .finally(() => {
+      if (gitCommandQueues.get(cwd) === cleanupPromise) {
+        gitCommandQueues.delete(cwd);
+      }
+    });
+  gitCommandQueues.set(cwd, cleanupPromise);
+  return runPromise;
 }
 
 function isNodeErrorCode(error: unknown, code: string): boolean {
@@ -459,14 +522,104 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
   );
 }
 
-function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
-  const groups: Record<GitChangeGroup["id"], GitChange[]> = {
+type GitStatusFile = {
+  path: string;
+  from?: string;
+  index: string;
+  working_dir: string;
+};
+
+type ParsedGitStatus = {
+  current?: string;
+  detached: boolean;
+  tracking?: string;
+  ahead: number;
+  behind: number;
+  files: GitStatusFile[];
+};
+
+function parseStatus(stdout: string): ParsedGitStatus {
+  const records = stdout.split("\0").filter(Boolean);
+  const status: ParsedGitStatus = {
+    detached: false,
+    ahead: 0,
+    behind: 0,
+    files: [],
+  };
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    if (record.startsWith("## ")) {
+      Object.assign(status, parseStatusBranchHeader(record));
+      continue;
+    }
+    const indexStatus = record[0] ?? " ";
+    const workingStatus = record[1] ?? " ";
+    const path = record.slice(3);
+    if (!path) {
+      continue;
+    }
+    const file: GitStatusFile = {
+      path,
+      index: indexStatus,
+      working_dir: workingStatus,
+    };
+    if (indexStatus === "R" || indexStatus === "C") {
+      const from = records[index + 1];
+      if (from) {
+        file.from = from;
+        index += 1;
+      }
+    }
+    status.files.push(file);
+  }
+  return status;
+}
+
+function parseStatusBranchHeader(
+  record: string,
+): Pick<
+  ParsedGitStatus,
+  "current" | "detached" | "tracking" | "ahead" | "behind"
+> {
+  const value = record.slice(3);
+  if (value.startsWith("No commits yet on ")) {
+    return {
+      current: value.slice("No commits yet on ".length),
+      detached: false,
+      ahead: 0,
+      behind: 0,
+    };
+  }
+  if (value.startsWith("HEAD ")) {
+    return { detached: true, ahead: 0, behind: 0 };
+  }
+  const bracketIndex = value.indexOf(" [");
+  const refPart = bracketIndex === -1 ? value : value.slice(0, bracketIndex);
+  const trackingPart =
+    bracketIndex === -1 ? "" : value.slice(bracketIndex + 2, -1);
+  const separatorIndex = refPart.indexOf("...");
+  const current =
+    separatorIndex === -1 ? refPart : refPart.slice(0, separatorIndex);
+  const tracking =
+    separatorIndex === -1 ? undefined : refPart.slice(separatorIndex + 3);
+  return {
+    ...(current ? { current } : {}),
+    detached: false,
+    ...(tracking ? { tracking } : {}),
+    ahead: parseTrackingCount(trackingPart, "ahead"),
+    behind: parseTrackingCount(trackingPart, "behind"),
+  };
+}
+
+function parseTrackingCount(value: string, key: "ahead" | "behind"): number {
+  const match = new RegExp(`${key} (\\d+)`).exec(value);
+  return match ? Number(match[1]) : 0;
+}
+
+function groupStatusChanges(files: GitStatusFile[]): GitChangeGroup[] {
+  const groups: Record<"staged" | "unstaged", GitChange[]> = {
     staged: [],
-    changes: [],
-    conflicts: [],
-    untracked: [],
-    ignored: [],
-    submodules: [],
+    unstaged: [],
   };
 
   for (const file of files) {
@@ -476,7 +629,7 @@ function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
     const oldPath = file.from === undefined ? {} : { oldPath: file.from };
 
     if (isConflict) {
-      groups.conflicts.push({
+      groups.unstaged.push({
         path: file.path,
         ...oldPath,
         status: "conflicted",
@@ -486,7 +639,7 @@ function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
     }
 
     if (file.working_dir === "?") {
-      groups.untracked.push({
+      groups.unstaged.push({
         path: file.path,
         ...oldPath,
         status: "untracked",
@@ -496,12 +649,6 @@ function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
     }
 
     if (file.working_dir === "!") {
-      groups.ignored.push({
-        path: file.path,
-        ...oldPath,
-        status: "ignored",
-        staged: false,
-      });
       continue;
     }
 
@@ -515,7 +662,7 @@ function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
     }
 
     if (worktreeStatus !== undefined) {
-      groups.changes.push({
+      groups.unstaged.push({
         path: file.path,
         ...oldPath,
         status: worktreeStatus,
@@ -524,7 +671,7 @@ function groupStatusChanges(files: FileStatusResult[]): GitChangeGroup[] {
     }
   }
 
-  return (Object.keys(groups) as Array<GitChangeGroup["id"]>).map((id) => ({
+  return (Object.keys(groups) as Array<"staged" | "unstaged">).map((id) => ({
     id,
     changes: groups[id],
   }));
@@ -581,15 +728,7 @@ async function readDiffSide(
   }
   const objectRef = ref === "INDEX" ? `:${path}` : `${ref}:${path}`;
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", cwd, "show", objectRef],
-      {
-        maxBuffer: MAX_DIFF_CONTENT_BYTES + 1,
-        encoding: "buffer",
-      },
-    );
-    return decodeContent(Buffer.from(stdout));
+    return decodeContent(await gitBuffer(cwd, ["show", objectRef]));
   } catch (error: unknown) {
     if (isGitObjectMissing(error)) {
       return { content: "", binary: false, tooLarge: false };
@@ -711,22 +850,37 @@ function parseLog(stdout: string): GitCommitSummary[] {
         committedAt = "",
         summary = "",
       ] = entry.split("\x1f");
+      const normalizedAuthoredAt = normalizeGitDate(authoredAt);
+      const normalizedCommittedAt = normalizeGitDate(committedAt);
       return {
         sha,
         parents: parents ? parents.split(" ").filter(Boolean) : [],
         authorName,
-        ...(authoredAt ? { authoredAt } : {}),
+        ...(normalizedAuthoredAt ? { authoredAt: normalizedAuthoredAt } : {}),
         committerName,
-        ...(committedAt ? { committedAt } : {}),
+        ...(normalizedCommittedAt
+          ? { committedAt: normalizedCommittedAt }
+          : {}),
         summary,
         refs: [],
       };
     });
 }
 
+function normalizeGitDate(value: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return undefined;
+  }
+  return new Date(timestamp).toISOString();
+}
+
 async function readCommitFiles(
   cwd: string,
-  commit: GitCommitSummary,
+  commit: Pick<GitCommitSummary, "sha" | "parents">,
 ): Promise<GitChange[]> {
   const firstParent = commit.parents[0];
   const args = firstParent
@@ -784,15 +938,25 @@ function commitStatusFromCode(code: string): GitChangeStatus | undefined {
   return undefined;
 }
 
-function branchSummaryToList(summary: BranchSummary): GitBranch[] {
-  return Object.values(summary.branches).map((branch) => {
-    const remote = branch.name.startsWith("remotes/");
-    return {
-      name: remote ? branch.name.slice("remotes/".length) : branch.name,
-      current: branch.current,
-      remote,
-    };
-  });
+function parseBranchList(stdout: string): GitBranch[] {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line): GitBranch[] => {
+      const [ref = "", name = "", head = "", upstream = ""] = line.split("\0");
+      if (!ref || !name) {
+        return [];
+      }
+      return [
+        {
+          name,
+          current: head === "*",
+          remote: ref.startsWith("refs/remotes/"),
+          ...(upstream ? { upstream } : {}),
+        },
+      ];
+    });
 }
 
 function parseCursor(cursor: string | undefined): number {
@@ -846,7 +1010,20 @@ function normalizeGitError(error: unknown): { code: string; message: string } {
       stderr?: unknown;
       code?: unknown;
       exitCode?: unknown;
+      killed?: unknown;
+      signal?: unknown;
     };
+    if (
+      maybe.code === "GIT_TIMEOUT" ||
+      maybe.code === "ETIMEDOUT" ||
+      maybe.killed === true ||
+      maybe.signal === "SIGTERM"
+    ) {
+      return {
+        code: "GIT_TIMEOUT",
+        message: `Git operation timed out after ${GIT_COMMAND_TIMEOUT_MS / 1000}s.`,
+      };
+    }
     const rawMessage =
       typeof maybe.stderr === "string" && maybe.stderr.trim()
         ? maybe.stderr.trim()

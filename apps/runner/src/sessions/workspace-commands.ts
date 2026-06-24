@@ -13,6 +13,7 @@ import {
   initGitRepository,
   readGitBlame,
   readGitBranches,
+  readGitCommitFiles,
   readGitCommitPage,
   readGitFileDiff,
   readGitStatus,
@@ -303,6 +304,22 @@ export class WorkspaceCommandHandler {
     });
   }
 
+  public async readGitCommitFiles(
+    command: Extract<RunnerCommand, { type: "gitCommitFiles" }>,
+  ): Promise<void> {
+    await this.#runGitRead(command, "GIT_COMMIT_FILES_ERROR", async () => {
+      const result = await readGitCommitFiles({
+        workspace: this.#workspace,
+        cwd: command.cwd,
+        requestId: command.requestId,
+        projectId: command.projectId,
+        context: command.context,
+        sha: command.sha,
+      });
+      await this.#emit({ type: "gitCommitFilesResult", result });
+    });
+  }
+
   public async readGitBranches(
     command: Extract<RunnerCommand, { type: "gitBranchList" }>,
   ): Promise<void> {
@@ -423,7 +440,7 @@ export class WorkspaceCommandHandler {
         requestId: command.requestId,
         projectId: command.projectId,
         context: command.context,
-        operation: "remove_worktree",
+        operation: command.jobOperation ?? "remove_worktree",
       }),
     );
   }

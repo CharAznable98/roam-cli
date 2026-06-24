@@ -1,12 +1,22 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { GitContextRef } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  commitGitChanges,
   discardGitPaths,
+  readGitCommitFiles,
+  readGitCommitPage,
   readGitFileDiff,
   readGitStatus,
   removeGitWorktree,
@@ -43,14 +53,14 @@ describe("runner git workspace operations", () => {
     }
     expect(status.clean).toBe(false);
     expect(
-      status.groups.find((group) => group.id === "changes")?.changes,
+      status.groups.find((group) => group.id === "unstaged")?.changes,
     ).toContainEqual({
       path: "README.md",
       status: "modified",
       staged: false,
     });
     expect(
-      status.groups.find((group) => group.id === "untracked")?.changes,
+      status.groups.find((group) => group.id === "unstaged")?.changes,
     ).toContainEqual({
       path: "scratch.txt",
       status: "untracked",
@@ -203,8 +213,9 @@ describe("runner git workspace operations", () => {
       }),
     ).resolves.toMatchObject({ status: "succeeded" });
 
-    await expect(gitOutput(workspace, ["worktree", "list", "--porcelain"]))
-      .resolves.not.toContain(worktree);
+    await expect(
+      gitOutput(workspace, ["worktree", "list", "--porcelain"]),
+    ).resolves.not.toContain(worktree);
   });
 
   it("does not remove existing directories that are not git worktrees", async () => {
@@ -257,6 +268,61 @@ describe("runner git workspace operations", () => {
     expect(diff.newContent).toBe("root\n");
   });
 
+  it("returns lightweight history and loads commit files on demand", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-history-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const root = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+    await writeFile(join(workspace, "README.md"), "next\n", "utf8");
+    await writeFile(
+      join(workspace, "src.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    await git(workspace, ["add", "README.md", "src.ts"]);
+    await git(workspace, ["commit", "-m", "next"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    const history = await readGitCommitPage({
+      workspace,
+      cwd: ".",
+      requestId: "history-1",
+      projectId: "project-1",
+      context,
+      limit: 20,
+    });
+
+    expect(history.commits[0]).toMatchObject({
+      sha: head,
+      parents: [root],
+      summary: "next",
+    });
+    expect(history.commits[0]?.authoredAt).toMatch(/Z$/);
+    expect(history.commits[0]?.committedAt).toMatch(/Z$/);
+    expect(history.commits[0]?.files).toBeUndefined();
+
+    await expect(
+      readGitCommitFiles({
+        workspace,
+        cwd: ".",
+        requestId: "commit-files-1",
+        projectId: "project-1",
+        context,
+        sha: head,
+      }),
+    ).resolves.toMatchObject({
+      sha: head,
+      files: expect.arrayContaining([
+        { path: "README.md", status: "modified", staged: false },
+        { path: "src.ts", status: "added", staged: false },
+      ]),
+    });
+  });
+
   it("uses oldPath for the old side of renamed commit file diffs", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-rename-diff-"));
     await git(workspace, ["init"]);
@@ -288,6 +354,80 @@ describe("runner git workspace operations", () => {
     expect(diff.oldPath).toBe("old.ts");
     expect(diff.oldContent).toBe("old\n");
     expect(diff.newContent).toBe("new\n");
+  });
+
+  it("serializes concurrent git reads and mutating jobs for one worktree", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-queue-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "old\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "init"]);
+
+    await writeFile(join(workspace, "README.md"), "queued\n", "utf8");
+    await expect(
+      stageGitPaths({
+        workspace,
+        cwd: ".",
+        requestId: "queue-stage",
+        projectId: "project-1",
+        context,
+        operation: "stage",
+        paths: ["README.md"],
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+
+    const [commit, concurrentStatus, concurrentHistory] = await Promise.all([
+      commitGitChanges({
+        workspace,
+        cwd: ".",
+        requestId: "queue-commit",
+        projectId: "project-1",
+        context,
+        operation: "commit",
+        message: "queued commit",
+      }),
+      readGitStatus({
+        workspace,
+        cwd: ".",
+        requestId: "queue-status",
+        projectId: "project-1",
+        context,
+      }),
+      readGitCommitPage({
+        workspace,
+        cwd: ".",
+        requestId: "queue-history",
+        projectId: "project-1",
+        context,
+        limit: 10,
+      }),
+    ]);
+
+    expect(commit).toMatchObject({ status: "succeeded" });
+    expect(concurrentStatus.kind).toBe("repository");
+    expect(concurrentHistory.requestId).toBe("queue-history");
+    const finalStatus = await readGitStatus({
+      workspace,
+      cwd: ".",
+      requestId: "queue-final-status",
+      projectId: "project-1",
+      context,
+    });
+    expect(finalStatus).toMatchObject({
+      kind: "repository",
+      clean: true,
+    });
+    const finalHistory = await readGitCommitPage({
+      workspace,
+      cwd: ".",
+      requestId: "queue-final-history",
+      projectId: "project-1",
+      context,
+      limit: 10,
+    });
+    expect(finalHistory.commits[0]?.summary).toBe("queued commit");
   });
 });
 

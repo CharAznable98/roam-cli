@@ -335,13 +335,7 @@ declare module "@roamcli/shared/protocol" {
   }
 
   export interface GitChangeGroup {
-    id:
-      | "staged"
-      | "changes"
-      | "conflicts"
-      | "untracked"
-      | "ignored"
-      | "submodules";
+    id: "staged" | "unstaged";
     changes: GitChange[];
   }
 
@@ -427,6 +421,13 @@ declare module "@roamcli/shared/protocol" {
     context: GitContextRef;
     commits: GitCommitSummary[];
     nextCursor?: string;
+  }
+
+  export interface GitCommitFiles {
+    requestId: string;
+    context: GitContextRef;
+    sha: string;
+    files: GitChange[];
   }
 
   export interface GitBranch {
@@ -568,6 +569,7 @@ declare module "@roamcli/shared/protocol" {
         cursor?: string;
         limit?: number;
       } & GitCommandBase)
+    | ({ type: "gitCommitFiles"; sha: string } & GitCommandBase)
     | ({ type: "gitBranchList" } & GitCommandBase)
     | ({ type: "gitInit" } & GitCommandBase)
     | ({ type: "gitStagePaths"; paths: string[] } & GitCommandBase)
@@ -578,7 +580,7 @@ declare module "@roamcli/shared/protocol" {
         type: "gitRemoteOperation";
         operation: "fetch" | "pull" | "push";
       } & GitCommandBase)
-    | ({ type: "gitRemoveWorktree" } & GitCommandBase)
+    | ({ type: "gitRemoveWorktree"; jobOperation?: string } & GitCommandBase)
     | {
         type: "resolveApproval";
         approvalId: string;
@@ -625,6 +627,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "gitFileDiffResult"; result: GitFileDiff }
     | { type: "gitBlameResult"; result: GitBlame }
     | { type: "gitCommitPageResult"; result: GitCommitPage }
+    | { type: "gitCommitFilesResult"; result: GitCommitFiles }
     | { type: "gitBranchListResult"; result: GitBranchList }
     | { type: "gitJobResult"; job: GitJob }
     | { type: "approvalRequested"; approval: Approval }

@@ -159,7 +159,7 @@ export class SessionCommandService {
   async deleteSession(
     sessionId: string,
     options: DeleteSessionOptions = {},
-  ): Promise<ServiceResult<void>> {
+  ): Promise<ServiceResult<{ job?: GitJob }>> {
     const session = this.store.getSession(sessionId);
     if (!session) {
       return fail("session_not_found");
@@ -175,8 +175,7 @@ export class SessionCommandService {
       hasActiveRunnerWork(session)
     ) {
       return fail("worktree_remove_failed", {
-        message:
-          "Stop the session before archiving and removing its worktree.",
+        message: "Stop the session before archiving and removing its worktree.",
         code: "session_active",
       });
     }
@@ -187,27 +186,42 @@ export class SessionCommandService {
       signal: "stop",
     });
     if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
-      const cleanup = await this.removeSessionWorktree(session);
-      if (!cleanup.ok) {
-        return cleanup;
-      }
+      return this.startArchiveRemoveWorktreeJob(session);
     }
     this.deleteRunnerAttachments(session, archivedAt);
-    let archived = this.store.archiveSession(session.id, archivedAt);
-    if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
-      archived =
-        this.store.markSessionWorktreeDeleted(session.id, archivedAt) ??
-        archived;
-    }
+    const archived = this.store.archiveSession(session.id, archivedAt);
     if (archived) {
       this.hub.broadcast({ type: "session:updated", session: archived });
     }
-    return ok(undefined);
+    return ok({});
   }
 
-  private async removeSessionWorktree(
+  public archiveSessionAfterWorktreeRemoval(job: GitJob): void {
+    if (
+      job.status !== "succeeded" ||
+      job.operation !== "archive_remove_worktree" ||
+      !job.sessionId
+    ) {
+      return;
+    }
+    const session = this.store.getSession(job.sessionId);
+    if (!session || session.archivedAt) {
+      return;
+    }
+    const archivedAt = job.finishedAt ?? nowIso();
+    if (!session.worktreeDeletedAt) {
+      this.store.markSessionWorktreeDeleted(session.id, archivedAt);
+    }
+    this.deleteRunnerAttachments(session, archivedAt);
+    const archived = this.store.archiveSession(session.id, archivedAt);
+    if (archived) {
+      this.hub.broadcast({ type: "session:updated", session: archived });
+    }
+  }
+
+  private async startArchiveRemoveWorktreeJob(
     session: Session,
-  ): Promise<ServiceResult<void>> {
+  ): Promise<ServiceResult<{ job: GitJob }>> {
     const project = this.store.getProject(session.projectId);
     if (!project || project.archivedAt) {
       return fail("project_not_found");
@@ -226,13 +240,14 @@ export class SessionCommandService {
           context,
           session,
         },
-        "remove_worktree",
+        "archive_remove_worktree",
         (resolved, requestId) => ({
           type: "gitRemoveWorktree",
           requestId,
           projectId: resolved.projectId,
           context: resolved.context,
           cwd: resolved.cwd,
+          jobOperation: "archive_remove_worktree",
         }),
       );
     } catch (error) {
@@ -247,7 +262,7 @@ export class SessionCommandService {
     if (!result.ok) {
       return result;
     }
-    if (result.value.job.status !== "succeeded") {
+    if (result.value.job.status === "failed") {
       return fail("worktree_remove_failed", {
         message: result.value.job.errorSummary ?? "Remove worktree failed",
         ...(result.value.job.errorCode
@@ -255,7 +270,7 @@ export class SessionCommandService {
           : {}),
       });
     }
-    return ok(undefined);
+    return result;
   }
 
   handleProjectArchived(projectId: string, archivedAt: string): void {

@@ -545,7 +545,7 @@ async function assertManagedWorktreeGitUi(
   await openTab(page, scenario, "git");
   await expectGitContextLabel(page, `Worktree - ${session.title}`);
   await expectText(page, values.fileName);
-  await expectText(page, "Working tree diff");
+  await expectText(page, "Unstaged diff");
   await waitForGitStatus(gitContext, (status) => !status.clean);
   await waitForGitDiffReady(page);
   await assertGitDiffFullscreen(page);
@@ -631,7 +631,7 @@ async function assertProjectGitUi(page, scenario, project, fileName) {
   await openTab(page, scenario, "git");
   await expectText(page, "Git");
   await expectText(page, fileName);
-  await expectText(page, "Working tree diff");
+  await expectText(page, "Unstaged diff");
   await waitForGitStatus(gitContext, (status) => !status.clean);
   await waitForGitDiffReady(page);
   await assertGitDiffFullscreen(page);
