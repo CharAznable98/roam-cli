@@ -177,7 +177,28 @@ describe("protocol schemas", () => {
         behind: 0,
         clean: true,
         unborn: false,
-        groups: [{ id: "unstaged", changes: [] }],
+        groups: [
+          {
+            id: "changes",
+            changes: [
+              {
+                path: "src/App.tsx",
+                status: "modified",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "untracked",
+            changes: [
+              {
+                path: "scratch.txt",
+                status: "untracked",
+                staged: false,
+              },
+            ],
+          },
+        ],
       },
     });
 
@@ -187,6 +208,10 @@ describe("protocol schemas", () => {
         kind: "repository",
         requestId: "git-status-1",
         clean: true,
+        groups: [
+          { id: "unstaged", changes: [{ path: "src/App.tsx" }] },
+          { id: "unstaged", changes: [{ path: "scratch.txt" }] },
+        ],
       },
     });
   });

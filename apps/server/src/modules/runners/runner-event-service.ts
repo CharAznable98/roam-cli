@@ -197,11 +197,13 @@ export class RunnerEventService {
     }
 
     if (event.type === "gitJobResult") {
-      this.store.upsertGitJob(event.job);
-      this.applyGitJobSessionEffects(event.job);
-      this.gitJobs?.handleRunnerJobResult(event.job);
-      this.rpc.resolveRunnerResponse(event.job);
-      this.hub.broadcast({ type: "git:job", job: event.job });
+      const job =
+        this.gitJobs?.normalizeRunnerJobResult(event.job) ?? event.job;
+      this.store.upsertGitJob(job);
+      this.applyGitJobSessionEffects(job);
+      this.gitJobs?.handleRunnerJobResult(job);
+      this.rpc.resolveRunnerResponse(job);
+      this.hub.broadcast({ type: "git:job", job });
       return;
     }
 

@@ -807,6 +807,52 @@ describe("SessionCommandService", () => {
     ).toEqual([]);
   });
 
+  it("times out unanswered queued Git jobs and releases the mutation queue", async () => {
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 5);
+    const gitService = new GitService(store, hub, rpc, 5, gitJobs);
+    const context = { kind: "project" as const, projectId: "project-1" };
+    store.createProject(projectRecord());
+
+    await expect(
+      gitService.stage({ context, paths: ["README.md"] }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { job: expect.objectContaining({ status: "queued" }) },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "gitStagePaths",
+      paths: ["README.md"],
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        operation: "stage",
+        status: "failed",
+        errorCode: "runner_timeout",
+      }),
+    );
+
+    await expect(
+      gitService.discard({ context, paths: ["README.md"] }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { job: expect.objectContaining({ status: "queued" }) },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "gitDiscardPaths",
+      paths: ["README.md"],
+    });
+  });
+
   it.each(["pending", "running", "waiting_approval"] satisfies SessionStatus[])(
     "rejects managed worktree removal for active %s sessions",
     async (status) => {
@@ -967,7 +1013,7 @@ describe("SessionCommandService", () => {
     );
   });
 
-  it("archives worktree sessions only after async archive removal succeeds", async () => {
+  it("archives worktree sessions when a legacy runner reports remove worktree success", async () => {
     const runnerMessages: RunnerCommand[] = [];
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
@@ -1035,7 +1081,7 @@ describe("SessionCommandService", () => {
         projectId: "project-1",
         sessionId: "session-1",
         contextKind: "session_worktree",
-        operation: "archive_remove_worktree",
+        operation: "remove_worktree",
         status: "succeeded",
         createdAt: now,
         startedAt: now,
@@ -1055,6 +1101,13 @@ describe("SessionCommandService", () => {
           archivedAt: expect.any(String),
           worktreeDeletedAt: now,
         }),
+      }),
+    );
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: removeCommand?.requestId,
+        operation: "archive_remove_worktree",
+        status: "succeeded",
       }),
     );
   });

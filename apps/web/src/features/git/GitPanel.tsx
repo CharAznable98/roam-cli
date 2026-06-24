@@ -167,6 +167,7 @@ export function GitPanel({
   const statusContextKeyRef = useRef("");
   const historyScopeRef = useRef("");
   const statusRequestSequenceRef = useRef(0);
+  const commitFilesRequestSequenceRef = useRef(0);
   const gitJobsRef = useRef(gitJobs);
   const [unavailableWorktreeContextKeys, setUnavailableWorktreeContextKeys] =
     useState<Record<string, true>>({});
@@ -542,6 +543,9 @@ export function GitPanel({
     if (!selectedContext || !selectedContextAvailable) {
       return;
     }
+    const requestSequence = ++commitFilesRequestSequenceRef.current;
+    const requestContextKey = contextKey(selectedContext);
+    const requestSha = commit.sha;
     const cached = commitFilesBySha[commit.sha];
     if (cached) {
       setCommitFilesState("ready");
@@ -553,16 +557,19 @@ export function GitPanel({
       );
       return;
     }
-    const requestContextKey = contextKey(selectedContext);
     setCommitFilesState("loading");
     setCommitFilesError("");
     setSelectedCommitPath("");
     try {
       const result = await onFetchCommitFiles({
         context: selectedContext,
-        sha: commit.sha,
+        sha: requestSha,
       });
-      if (statusContextKeyRef.current !== requestContextKey) {
+      if (
+        statusContextKeyRef.current !== requestContextKey ||
+        commitFilesRequestSequenceRef.current !== requestSequence ||
+        result.sha !== requestSha
+      ) {
         return;
       }
       setCommitFilesBySha((current) => ({
@@ -572,7 +579,10 @@ export function GitPanel({
       setCommitFilesState("ready");
       setSelectedCommitPath(result.files[0]?.path ?? "");
     } catch (error: unknown) {
-      if (statusContextKeyRef.current !== requestContextKey) {
+      if (
+        statusContextKeyRef.current !== requestContextKey ||
+        commitFilesRequestSequenceRef.current !== requestSequence
+      ) {
         return;
       }
       setCommitFilesState("error");

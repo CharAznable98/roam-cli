@@ -90,6 +90,19 @@ export class GitJobRunner {
     return true;
   }
 
+  normalizeRunnerJobResult(job: GitJob): GitJob {
+    const pending = this.pendingJobs.get(job.id);
+    if (!pending) {
+      return job;
+    }
+    return {
+      ...job,
+      operation: pending.job.operation,
+      contextKind: pending.job.contextKind,
+      ...(pending.job.sessionId ? { sessionId: pending.job.sessionId } : {}),
+    };
+  }
+
   hasActiveWorktreeRemovalJob(sessionId: string): boolean {
     for (const pending of this.pendingJobs.values()) {
       if (
@@ -133,10 +146,34 @@ export class GitJobRunner {
 
     const running = this.markJobRunning(pending.job);
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        const latest = this.pendingJobs.get(jobId);
+        if (latest) {
+          this.pendingJobs.delete(jobId);
+          try {
+            this.failJob(
+              latest.job,
+              new RunnerRpcError("runner request timed out", "runner_timeout"),
+            );
+          } catch {
+            // The server may be shutting down while a queued runner job is still pending.
+          }
+        }
+        finish();
+      }, this.runnerRpcTimeoutMs);
       this.pendingJobs.set(jobId, {
         ...pending,
         job: running,
-        resolve,
+        resolve: finish,
       });
       try {
         if (
@@ -156,7 +193,7 @@ export class GitJobRunner {
             ? error
             : new RunnerRpcError("runner is offline", "runner_offline"),
         );
-        resolve();
+        finish();
       }
     });
   }

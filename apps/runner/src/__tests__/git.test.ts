@@ -356,6 +356,38 @@ describe("runner git workspace operations", () => {
     expect(diff.newContent).toBe("new\n");
   });
 
+  it("truncates oversized committed file diffs without failing", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-large-diff-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(
+      join(workspace, "large.txt"),
+      "a".repeat(1024 * 1024 + 4096),
+      "utf8",
+    );
+    await git(workspace, ["add", "large.txt"]);
+    await git(workspace, ["commit", "-m", "large"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    const diff = await readGitFileDiff({
+      workspace,
+      cwd: ".",
+      requestId: "large-diff",
+      projectId: "project-1",
+      context,
+      path: "large.txt",
+      mode: "commit",
+      oldRef: GIT_EMPTY_TREE_SHA,
+      newRef: head,
+    });
+
+    expect(diff.tooLarge).toBe(true);
+    expect(diff.binary).toBe(false);
+    expect(diff.oldContent).toBe("");
+    expect(diff.newContent).toHaveLength(1024 * 1024);
+  });
+
   it("serializes concurrent git reads and mutating jobs for one worktree", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-queue-"));
     await git(workspace, ["init"]);

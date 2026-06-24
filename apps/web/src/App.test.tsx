@@ -445,6 +445,7 @@ describe("App", () => {
   let deferredGitStatus: Map<string, Deferred<Response>>;
   let deferredGitDiff: Map<string, Deferred<Response>>;
   let deferredGitHistory: Map<string, Deferred<Response>>;
+  let deferredGitCommitFiles: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let queuedRunnerResponses: Array<Deferred<Response>>;
   let failBootstrapRunners: boolean;
@@ -483,6 +484,7 @@ describe("App", () => {
     deferredGitStatus = new Map();
     deferredGitDiff = new Map();
     deferredGitHistory = new Map();
+    deferredGitCommitFiles = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
     queuedAccountSecurityResponses = [];
@@ -997,6 +999,10 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/git/commit-files") {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          const deferredResponse = deferredGitCommitFiles.get(body.sha);
+          if (deferredResponse) {
+            return deferredResponse.promise;
+          }
           return jsonResponse({
             result: {
               requestId: "git-commit-files-1",
@@ -1903,6 +1909,97 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it("ignores stale commit file responses after selecting a newer commit", async () => {
+    gitStatusClean = false;
+    gitHistoryCommits = [
+      {
+        sha: "aaa111",
+        parents: ["parent-aaa"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "First commit",
+        refs: [],
+        files: [{ path: "a.ts", status: "modified", staged: false }],
+      },
+      {
+        sha: "bbb222",
+        parents: ["parent-bbb"],
+        authorName: "Test User",
+        committerName: "Test User",
+        summary: "Second commit",
+        refs: [],
+        files: [{ path: "b.ts", status: "modified", staged: false }],
+      },
+    ];
+    gitCommitFilesBySha = new Map([
+      ["bbb222", [{ path: "b.ts", status: "modified", staged: false }]],
+    ]);
+    const firstCommitFiles = deferred<Response>();
+    deferredGitCommitFiles.set("aaa111", firstCommitFiles);
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    const tools = within(
+      screen.getByRole("complementary", { name: "Workspace tools" }),
+    );
+    fireEvent.click(tools.getByRole("button", { name: "Git" }));
+    const gitPanel = within(tools.getByRole("region", { name: "Git" }));
+    await waitFor(() =>
+      expect(tools.queryAllByText("src/App.tsx").length).toBeGreaterThan(0),
+    );
+    fireEvent.click(tools.getByRole("tab", { name: "History" }));
+    await tools.findByRole("button", { name: /First commit/ });
+
+    fireEvent.click(tools.getByRole("button", { name: /First commit/ }));
+    await waitFor(() =>
+      expect(
+        fetchCalls.some((call) => {
+          if (new URL(call.url).pathname !== "/v1/git/commit-files") {
+            return false;
+          }
+          return JSON.parse(String(call.init?.body ?? "{}")).sha === "aaa111";
+        }),
+      ).toBe(true),
+    );
+
+    fireEvent.click(tools.getByRole("button", { name: /Second commit/ }));
+    expect((await tools.findAllByText("b.ts")).length).toBeGreaterThan(0);
+
+    await act(async () => {
+      firstCommitFiles.resolve(
+        jsonResponse({
+          result: {
+            requestId: "git-commit-files-stale",
+            context: { kind: "project", projectId: "project-1" },
+            sha: "aaa111",
+            files: [{ path: "a.ts", status: "modified", staged: false }],
+          },
+        }),
+      );
+      await firstCommitFiles.promise;
+    });
+
+    await waitFor(() => {
+      expect(gitPanel.queryByText("No file selected")).not.toBeInTheDocument();
+      expect(gitPanel.getAllByText("b.ts").length).toBeGreaterThan(0);
+    });
+    expect(
+      fetchCalls.some((call) => {
+        if (new URL(call.url).pathname !== "/v1/git/diff") {
+          return false;
+        }
+        const body = JSON.parse(String(call.init?.body ?? "{}"));
+        return (
+          body.mode === "commit" &&
+          body.path === "b.ts" &&
+          body.oldRef === "parent-bbb" &&
+          body.newRef === "bbb222"
+        );
+      }),
+    ).toBe(true);
   });
 
   it("renders children under changed file path nodes in tree view", async () => {

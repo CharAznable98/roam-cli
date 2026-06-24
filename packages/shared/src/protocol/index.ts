@@ -163,8 +163,14 @@ export const GitChangeSchema = z.object({
 });
 export type GitChange = z.infer<typeof GitChangeSchema>;
 
+const GitChangeGroupIdSchema = z
+  .enum(["staged", "unstaged", "changes", "untracked"])
+  .transform((id): "staged" | "unstaged" =>
+    id === "staged" ? "staged" : "unstaged",
+  );
+
 export const GitChangeGroupSchema = z.object({
-  id: z.enum(["staged", "unstaged"]),
+  id: GitChangeGroupIdSchema,
   changes: z.array(GitChangeSchema),
 });
 export type GitChangeGroup = z.infer<typeof GitChangeGroupSchema>;

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -482,14 +482,104 @@ async function git(
 }
 
 async function gitBuffer(cwd: string, args: string[]): Promise<Buffer> {
-  const { stdout } = await runQueuedGitCommand(cwd, () =>
-    execFileAsync("git", ["-C", cwd, ...args], {
-      maxBuffer: MAX_DIFF_CONTENT_BYTES + 1,
-      encoding: "buffer",
-      timeout: GIT_COMMAND_TIMEOUT_MS,
-    }),
+  return runQueuedGitCommand(cwd, () =>
+    readGitBuffer(cwd, args, MAX_DIFF_CONTENT_BYTES + 1),
   );
-  return Buffer.from(stdout as Buffer);
+}
+
+function readGitBuffer(
+  cwd: string,
+  args: string[],
+  maxBytes: number,
+): Promise<Buffer> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn("git", ["-C", cwd, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let truncated = false;
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, GIT_COMMAND_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (truncated) {
+        return;
+      }
+      const remaining = maxBytes - stdoutBytes;
+      if (chunk.byteLength > remaining) {
+        stdoutChunks.push(chunk.subarray(0, Math.max(remaining, 0)));
+        stdoutBytes = maxBytes;
+        truncated = true;
+        child.kill("SIGTERM");
+        return;
+      }
+      stdoutChunks.push(chunk);
+      stdoutBytes += chunk.byteLength;
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (
+        stderrChunks.reduce((total, item) => total + item.byteLength, 0) <
+        64 * 1024
+      ) {
+        stderrChunks.push(chunk);
+      }
+    });
+
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks, stdoutBytes);
+      if (truncated) {
+        resolvePromise(stdout);
+        return;
+      }
+      if (timedOut) {
+        reject(
+          Object.assign(new Error("git command timed out"), {
+            code: "GIT_TIMEOUT",
+            killed: true,
+            signal: signal ?? "SIGTERM",
+          }),
+        );
+        return;
+      }
+      if (code === 0) {
+        resolvePromise(stdout);
+        return;
+      }
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      reject(
+        Object.assign(
+          new Error(stderr.trim() || `git exited with code ${code ?? signal}`),
+          {
+            stderr,
+            exitCode: code ?? undefined,
+            signal: signal ?? undefined,
+          },
+        ),
+      );
+    });
+  });
 }
 
 async function runQueuedGitCommand<T>(
