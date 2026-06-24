@@ -956,6 +956,7 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
   }),
   z.object({ type: z.literal("message:created"), message: MessageSchema }),
+  z.object({ type: z.literal("message:updated"), message: MessageSchema }),
   z.object({
     type: z.literal("activity:created"),
     activity: AgentActivitySchema,
@@ -963,12 +964,6 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("message_attachment:created"),
     attachment: MessageAttachmentSchema,
-  }),
-  z.object({
-    type: z.literal("token"),
-    sessionId: z.string().min(1),
-    content: z.string(),
-    encrypted: z.boolean().default(false),
   }),
   z.object({ type: z.literal("approval:requested"), approval: ApprovalSchema }),
   z.object({ type: z.literal("approval:updated"), approval: ApprovalSchema }),
@@ -1023,9 +1018,12 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     result: PathSearchResultSchema,
   }),
   z.object({
-    type: z.literal("assistantMessage"),
+    type: z.literal("assistantOutput"),
     sessionId: z.string().min(1),
-    content: z.string(),
+    outputId: z.string().min(1),
+    content: z.string().optional(),
+    mode: z.enum(["append", "replace"]),
+    done: z.boolean(),
     encrypted: z.boolean().default(false),
   }),
   z.object({
@@ -1034,12 +1032,6 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     agent: AgentKindSchema,
     kind: AgentActivityKindSchema,
     label: z.string().min(1),
-  }),
-  z.object({
-    type: z.literal("token"),
-    sessionId: z.string().min(1),
-    content: z.string(),
-    encrypted: z.boolean().default(false),
   }),
   z.object({ type: z.literal("fileTreeResult"), result: FileTreeResultSchema }),
   z.object({

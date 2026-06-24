@@ -795,9 +795,12 @@ describe("server", () => {
 
     runner.send(
       JSON.stringify({
-        type: "assistantMessage",
+        type: "assistantOutput",
         sessionId,
+        outputId: "output-1",
         content: "done",
+        mode: "replace",
+        done: true,
         encrypted: false,
       }),
     );
@@ -824,15 +827,20 @@ describe("server", () => {
     );
     runner.send(
       JSON.stringify({
-        type: "token",
+        type: "assistantOutput",
         sessionId,
+        outputId: "output-2",
         content: " streamed",
+        mode: "append",
+        done: true,
         encrypted: false,
       }),
     );
     await expectEventually(
       stream,
-      (event) => event.type === "token" && event.content === " streamed",
+      (event) =>
+        event.type === "message:created" &&
+        event.message.content === " streamed",
     );
 
     const detail = await app.inject({
@@ -1076,15 +1084,20 @@ describe("server", () => {
 
     runner.send(
       JSON.stringify({
-        type: "token",
+        type: "assistantOutput",
         sessionId,
+        outputId: "output-1",
         content: "first answer",
+        mode: "replace",
+        done: true,
         encrypted: false,
       }),
     );
     await expectEventually(
       stream,
-      (event) => event.type === "token" && event.content === "first answer",
+      (event) =>
+        event.type === "message:created" &&
+        event.message.content === "first answer",
     );
     runner.send(
       JSON.stringify({
@@ -1128,15 +1141,20 @@ describe("server", () => {
 
     runner.send(
       JSON.stringify({
-        type: "token",
+        type: "assistantOutput",
         sessionId,
+        outputId: "output-2",
         content: "second answer",
+        mode: "replace",
+        done: true,
         encrypted: false,
       }),
     );
     await expectEventually(
       stream,
-      (event) => event.type === "token" && event.content === "second answer",
+      (event) =>
+        event.type === "message:created" &&
+        event.message.content === "second answer",
     );
 
     const detail = await app.inject({

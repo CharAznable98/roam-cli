@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentActivity,
@@ -548,42 +548,46 @@ export class ServerStore {
     return message;
   }
 
-  appendAssistantToken(
+  applyAssistantOutput(
     sessionId: string,
-    content: string,
+    outputId: string,
+    content: string | undefined,
+    mode: "append" | "replace",
+    _done: boolean,
     createdAt: string,
     encrypted: boolean,
-  ): Message {
-    const streamPrefix = `stream_${sessionId}_`;
-    const latest = this.db
-      .prepare(
-        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-      )
-      .get(sessionId) as MessageRow | undefined;
-    if (
-      latest?.role === "assistant" &&
-      latest.id.startsWith(streamPrefix) &&
-      Boolean(latest.encrypted) === encrypted
-    ) {
-      const id = latest.id;
-      this.db
-        .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
-        .run(content, id);
-      return (
-        this.listMessages(sessionId).find((message) => message.id === id) ??
-        toMessage(latest)
-      );
+  ): { message: Message; created: boolean } {
+    const id = streamMessageId(sessionId, outputId);
+    const existing = this.db
+      .prepare("SELECT * FROM messages WHERE id = ? AND session_id = ?")
+      .get(id, sessionId) as MessageRow | undefined;
+    const nextContent = content ?? "";
+    if (existing) {
+      if (mode === "replace") {
+        this.db
+          .prepare("UPDATE messages SET content = ? WHERE id = ?")
+          .run(nextContent, id);
+      } else if (content !== undefined && content.length > 0) {
+        this.db
+          .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
+          .run(content, id);
+      }
+      return {
+        message:
+          this.listMessages(sessionId).find((message) => message.id === id) ??
+          toMessage(existing),
+        created: false,
+      };
     }
-    const id = `${streamPrefix}${randomUUID()}`;
     const message: Message = {
       id,
       sessionId,
       role: "assistant",
-      content,
+      content: nextContent,
       encrypted,
       createdAt,
     };
-    return this.addMessage(message);
+    return { message: this.addMessage(message), created: true };
   }
 
   listMessages(sessionId: string): Message[] {
@@ -1077,6 +1081,11 @@ function toMessage(row: MessageRow): Message {
     encrypted: Boolean(row.encrypted),
     createdAt: row.created_at,
   };
+}
+
+function streamMessageId(sessionId: string, outputId: string): string {
+  const digest = createHash("sha256").update(outputId).digest("hex").slice(0, 24);
+  return `stream_${sessionId}_${digest}`;
 }
 
 function toAgentActivity(row: AgentActivityRow): AgentActivity {

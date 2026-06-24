@@ -2778,10 +2778,15 @@ describe("App", () => {
         sockets[0]?.dispatchEvent(
           new MessageEvent("message", {
             data: JSON.stringify({
-              type: "token",
-              sessionId: "session-1",
-              content: " streamed answer",
-              encrypted: false,
+              type: "message:created",
+              message: {
+                id: "stream-session-1-autoscroll",
+                sessionId: "session-1",
+                role: "assistant",
+                content: " streamed answer",
+                encrypted: false,
+                createdAt: new Date(Date.now() + 1000).toISOString(),
+              },
             }),
           }),
         );
@@ -2798,10 +2803,15 @@ describe("App", () => {
         sockets[0]?.dispatchEvent(
           new MessageEvent("message", {
             data: JSON.stringify({
-              type: "token",
-              sessionId: "session-1",
-              content: " while reading",
-              encrypted: false,
+              type: "message:updated",
+              message: {
+                id: "stream-session-1-autoscroll",
+                sessionId: "session-1",
+                role: "assistant",
+                content: " streamed answer while reading",
+                encrypted: false,
+                createdAt: new Date(Date.now() + 1000).toISOString(),
+              },
             }),
           }),
         );
@@ -4204,6 +4214,10 @@ describe("App", () => {
 
     const firstUserAt = new Date(Date.now() + 1000).toISOString();
     const secondUserAt = new Date(Date.now() + 2000).toISOString();
+    const firstAnswerAt = new Date(Date.parse(firstUserAt) + 500).toISOString();
+    const secondAnswerAt = new Date(
+      Date.parse(secondUserAt) + 500,
+    ).toISOString();
 
     act(() => {
       sockets[0]?.dispatchEvent(
@@ -4224,10 +4238,15 @@ describe("App", () => {
       sockets[0]?.dispatchEvent(
         new MessageEvent("message", {
           data: JSON.stringify({
-            type: "token",
-            sessionId: "session-1",
-            content: "first answer",
-            encrypted: false,
+            type: "message:created",
+            message: {
+              id: "stream-session-1-first",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "first answer",
+              encrypted: false,
+              createdAt: firstAnswerAt,
+            },
           }),
         }),
       );
@@ -4249,10 +4268,15 @@ describe("App", () => {
       sockets[0]?.dispatchEvent(
         new MessageEvent("message", {
           data: JSON.stringify({
-            type: "token",
-            sessionId: "session-1",
-            content: "second answer",
-            encrypted: false,
+            type: "message:created",
+            message: {
+              id: "stream-session-1-second",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "second answer",
+              encrypted: false,
+              createdAt: secondAnswerAt,
+            },
           }),
         }),
       );
@@ -4283,10 +4307,15 @@ describe("App", () => {
       sockets[0]?.dispatchEvent(
         new MessageEvent("message", {
           data: JSON.stringify({
-            type: "token",
-            sessionId: "session-1",
-            content: "**draft preview**",
-            encrypted: false,
+            type: "message:created",
+            message: {
+              id: "stream-session-1-markdown",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "**draft preview**",
+              encrypted: false,
+              createdAt: new Date(Date.now() + 1000).toISOString(),
+            },
           }),
         }),
       );

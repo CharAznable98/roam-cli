@@ -1253,22 +1253,50 @@ describe("RunnerEventService", () => {
     const session = store.createSession(sessionRecord());
 
     service.handle({
-      type: "token",
+      type: "assistantOutput",
       sessionId: session.id,
+      outputId: "output-1",
       content: "partial",
+      mode: "append",
+      done: false,
       encrypted: false,
     });
     expect(store.listMessages(session.id)).toMatchObject([
       { role: "assistant", content: "partial", encrypted: false },
     ]);
     expect(streamEvents).toContainEqual(
-      expect.objectContaining({ type: "token", content: "partial" }),
+      expect.objectContaining({
+        type: "message:created",
+        message: expect.objectContaining({ content: "partial" }),
+      }),
     );
 
     service.handle({
-      type: "token",
+      type: "assistantOutput",
       sessionId: session.id,
+      outputId: "output-1",
+      content: " more",
+      mode: "append",
+      done: true,
+      encrypted: false,
+    });
+    expect(store.listMessages(session.id)).toMatchObject([
+      { role: "assistant", content: "partial more", encrypted: false },
+    ]);
+    expect(streamEvents).toContainEqual(
+      expect.objectContaining({
+        type: "message:updated",
+        message: expect.objectContaining({ content: "partial more" }),
+      }),
+    );
+
+    service.handle({
+      type: "assistantOutput",
+      sessionId: session.id,
+      outputId: "output-2",
       content: "secret",
+      mode: "replace",
+      done: true,
       encrypted: true,
     });
     expect(store.listMessages(session.id).at(-1)).toMatchObject({
@@ -1450,9 +1478,12 @@ describe("RunnerEventService", () => {
         label: "Running tests",
       });
       service.handle({
-        type: "assistantMessage",
+        type: "assistantOutput",
         sessionId: session.id,
+        outputId: "output-1",
         content: "done",
+        mode: "replace",
+        done: true,
         encrypted: false,
       });
     } finally {
@@ -1469,6 +1500,50 @@ describe("RunnerEventService", () => {
     expect(message?.createdAt).toBe("2026-06-05T00:00:00.002Z");
     expect(Date.parse(activities[1]?.createdAt ?? "")).toBeLessThan(
       Date.parse(message?.createdAt ?? ""),
+    );
+  });
+
+  it("orders new assistant output after the latest session message", () => {
+    const hub = new ConnectionHub(store);
+    const service = new RunnerEventService(
+      store,
+      hub,
+      new RunnerRpcClient(hub),
+    );
+    store.createProject(projectRecord());
+    const session = store.createSession(sessionRecord());
+    store.addMessage({
+      id: "message-follow-up-user",
+      sessionId: session.id,
+      role: "user",
+      content: "follow up",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.010Z",
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-05T00:00:00.000Z"));
+    try {
+      service.handle({
+        type: "assistantOutput",
+        sessionId: session.id,
+        outputId: "follow-up-output",
+        content: "follow up answer",
+        mode: "replace",
+        done: true,
+        encrypted: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const messages = store.listMessages(session.id);
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "follow up"],
+      ["assistant", "follow up answer"],
+    ]);
+    expect(Date.parse(messages[1]?.createdAt ?? "")).toBeGreaterThan(
+      Date.parse(messages[0]?.createdAt ?? ""),
     );
   });
 

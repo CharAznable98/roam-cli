@@ -12,11 +12,7 @@ import type {
   ServerEvent,
   Session,
 } from "@roamcli/shared/protocol";
-import {
-  appendTokenMessage,
-  type UiMessage,
-  upsertMessage,
-} from "../features/conversation/model";
+import { type UiMessage, upsertMessage } from "../features/conversation/model";
 import {
   appliedPatchApprovalIds,
   extractPatchHunks,
@@ -931,7 +927,7 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "session:deleted") {
     return removeSessionState(state, event.sessionId);
   }
-  if (event.type === "message:created") {
+  if (event.type === "message:created" || event.type === "message:updated") {
     return {
       ...state,
       messages: upsertMessage(state.messages, event.message),
@@ -950,16 +946,6 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
         state.messageAttachments,
         event.attachment,
         (item) => item.id,
-      ),
-    };
-  }
-  if (event.type === "token") {
-    return {
-      ...state,
-      messages: appendTokenMessage(
-        state.messages,
-        event.sessionId,
-        event.content,
       ),
     };
   }

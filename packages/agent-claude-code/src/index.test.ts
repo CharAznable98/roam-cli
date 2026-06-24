@@ -174,8 +174,11 @@ describe("claude code agent plugin", () => {
         threadId: "claude-session-1",
       });
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: "claude-output-1",
         content: "Claude response",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({
         type: "status",
@@ -241,8 +244,8 @@ describe("claude code agent plugin", () => {
     expect(
       events.some(
         (event) =>
-          event.type === "message" &&
-          event.content.startsWith("Claude Code task"),
+          event.type === "assistantOutput" &&
+          (event.content ?? "").startsWith("Claude Code task"),
       ),
     ).toBe(false);
   });
@@ -294,8 +297,11 @@ describe("claude code agent plugin", () => {
     });
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
         content: "Follow-up response",
+        mode: "replace",
+        done: true,
+        outputId: "claude-output-2",
       });
       expect(
         events.filter(
@@ -425,18 +431,35 @@ describe("claude code agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "token",
+        type: "assistantOutput",
+        outputId: "claude-output-1",
         content: "Claude response",
+        mode: "append",
+        done: false,
       });
       expect(events).toContainEqual({
         type: "status",
         status: "completed",
       });
     });
-    expect(events).not.toContainEqual({
-      type: "message",
-      content: "Claude response",
-    });
+    expect(
+      events.filter((event) => event.type === "assistantOutput"),
+    ).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: "claude-output-1",
+        content: "Claude response",
+        mode: "append",
+        done: false,
+      },
+      {
+        type: "assistantOutput",
+        outputId: "claude-output-1",
+        content: "Claude response",
+        mode: "replace",
+        done: true,
+      },
+    ]);
   });
 
   it("emits final assistant output when stream token delivery fails", async () => {
@@ -463,7 +486,10 @@ describe("claude code agent plugin", () => {
       .createSession(
         makeContext({
           emit: async (event) => {
-            if (event.type === "token") {
+            if (
+              event.type === "assistantOutput" &&
+              event.mode === "append"
+            ) {
               throw new Error("sink down");
             }
             events.push(event);
@@ -474,8 +500,11 @@ describe("claude code agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: "claude-output-1",
         content: "Claude response",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({
         type: "status",
@@ -483,8 +512,10 @@ describe("claude code agent plugin", () => {
       });
     });
     expect(events).not.toContainEqual({
-      type: "token",
+      type: "assistantOutput",
       content: "Claude response",
+      mode: "append",
+      done: false,
     });
   });
 

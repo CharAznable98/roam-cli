@@ -53,19 +53,28 @@ export interface ArtifactDraft {
   mimeType?: string;
 }
 
+export type AssistantOutputMode = "append" | "replace";
+
+export interface AssistantOutputEvent {
+  type: "assistantOutput";
+  outputId: string;
+  content?: string;
+  mode: AssistantOutputMode;
+  done: boolean;
+  encrypted?: boolean;
+}
+
 export type AgentRuntimeEvent =
   | { type: "status"; status: SessionStatus }
   | { type: "thread"; threadId: string }
-  | { type: "message"; content: string; encrypted?: boolean }
-  | { type: "token"; content: string; encrypted?: boolean }
+  | AssistantOutputEvent
   | { type: "activity"; kind: AgentActivityKind; label: string }
   | { type: "approval"; draft: ApprovalRequestDraft }
   | { type: "artifact"; draft: ArtifactDraft }
   | { type: "error"; message: string; code?: string };
 
 export interface AgentParseResult {
-  text: string;
-  messages?: readonly string[];
+  assistantOutputs?: readonly AssistantOutputEvent[];
   approvals: readonly ApprovalRequestDraft[];
   artifacts: readonly ArtifactDraft[];
   threadId?: string;

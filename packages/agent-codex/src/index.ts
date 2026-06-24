@@ -16,6 +16,7 @@ import type {
   AgentPluginContext,
   AgentSession,
   AgentSessionContext,
+  AssistantOutputEvent,
   ApprovalRequestDraft,
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
@@ -217,11 +218,8 @@ class CodexProcessSession implements AgentSession {
         threadId: parsed.threadId,
       });
     }
-    for (const message of parsed.messages ?? []) {
-      await this.#options.context.emit({ type: "message", content: message });
-    }
-    if (parsed.text.length > 0) {
-      await this.#options.context.emit({ type: "token", content: parsed.text });
+    for (const output of parsed.assistantOutputs ?? []) {
+      await this.#options.context.emit(output);
     }
     for (const draft of parsed.approvals) {
       this.#trackTask(this.#requestApproval(draft), this.#approvalTasks);
@@ -297,10 +295,11 @@ function statusForExit(
 
 export class CodexJsonParser implements AgentOutputParser {
   #buffer = "";
+  #outputSequence = 0;
 
   feed(chunk: string | Buffer): AgentParseResult {
     this.#buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-    const messages: string[] = [];
+    const assistantOutputs: AssistantOutputEvent[] = [];
     let threadId: string | undefined;
     const approvals: ApprovalRequestDraft[] = [];
     const artifacts: ArtifactDraft[] = [];
@@ -326,11 +325,19 @@ export class CodexJsonParser implements AgentOutputParser {
       const directives = parseTextDirectives(event.item.text);
       approvals.push(...directives.approvals);
       artifacts.push(...directives.artifacts);
-      messages.push(event.item.text);
+      assistantOutputs.push({
+        type: "assistantOutput",
+        outputId:
+          typeof event.item.id === "string"
+            ? event.item.id
+            : `codex-output-${++this.#outputSequence}`,
+        content: event.item.text,
+        mode: "replace",
+        done: true,
+      });
     }
     return {
-      text: "",
-      messages,
+      assistantOutputs,
       approvals,
       artifacts,
       ...(threadId ? { threadId } : {}),

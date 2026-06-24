@@ -12,7 +12,9 @@ describe("audit and disconnected cache", () => {
 
     const first = await audit.append("event", { value: 1 });
     const second = await audit.append("event", { value: 2 });
-    const lines = (await readFile(join(dir, "audit.jsonl"), "utf8")).trim().split("\n");
+    const lines = (await readFile(join(dir, "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n");
 
     expect(lines).toHaveLength(2);
     expect(first.previousHash).toMatch(/^0{64}$/);
@@ -24,8 +26,20 @@ describe("audit and disconnected cache", () => {
     const dir = await mkdtemp(join(tmpdir(), "roam-runner-cache-"));
     const cache = new EventCache(join(dir, "pending.jsonl"));
 
-    await cache.append({ type: "sessionStatus", sessionId: "s1", status: "running" });
-    await cache.append({ type: "token", sessionId: "s1", content: "hello", encrypted: false });
+    await cache.append({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "running",
+    });
+    await cache.append({
+      type: "assistantOutput",
+      sessionId: "s1",
+      outputId: "output-1",
+      content: "hello",
+      mode: "replace",
+      done: true,
+      encrypted: false,
+    });
 
     const sent: string[] = [];
     const count = await cache.drain((event) => {
@@ -34,7 +48,7 @@ describe("audit and disconnected cache", () => {
     });
 
     expect(count).toBe(2);
-    expect(sent).toEqual(["sessionStatus", "token"]);
+    expect(sent).toEqual(["sessionStatus", "assistantOutput"]);
     expect(await cache.readAll()).toEqual([]);
   });
 });

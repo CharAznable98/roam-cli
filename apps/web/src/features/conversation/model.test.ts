@@ -1,7 +1,6 @@
 import type { AgentActivity } from "@roamcli/shared/protocol";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  appendTokenMessage,
   getConversationDisplayItems,
   sortMessages,
   toUiMessage,
@@ -119,42 +118,6 @@ describe("conversation model", () => {
         (message) => message.id,
       ),
     ).toEqual(["first", "second"]);
-  });
-
-  it("appends streamed tokens to the latest stream assistant message", () => {
-    vi.setSystemTime(new Date("2026-06-05T00:00:03.000Z"));
-    const seeded = appendTokenMessage([] as UiMessage[], "session-1", "hello");
-    const appended = appendTokenMessage(seeded, "session-1", " world");
-
-    expect(appended).toHaveLength(1);
-    expect(appended[0]?.content).toBe("hello world");
-    expect(appended[0]?.id).toMatch(/^stream-session-1-/);
-    vi.useRealTimers();
-  });
-
-  it("does not re-sort the full message list for streaming token updates", () => {
-    const newerUser: UiMessage = {
-      id: "newer-user",
-      sessionId: "session-1",
-      role: "user",
-      content: "question",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:03.000Z",
-    };
-    const stream: UiMessage = {
-      id: "stream-session-1-existing",
-      sessionId: "session-1",
-      role: "assistant",
-      content: "hello",
-      encrypted: false,
-      createdAt: "2026-06-05T00:00:02.000Z",
-    };
-
-    expect(
-      appendTokenMessage([newerUser, stream], "session-1", " world").map(
-        (message) => message.id,
-      ),
-    ).toEqual(["newer-user", "stream-session-1-existing"]);
   });
 
   it("groups completed turn output before the final assistant message", () => {

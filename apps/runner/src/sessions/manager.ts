@@ -539,19 +539,14 @@ export class SessionManager {
           threadId: event.threadId,
         });
         return;
-      case "message":
+      case "assistantOutput":
         await this.#emit({
-          type: "assistantMessage",
+          type: "assistantOutput",
           sessionId,
-          content: event.content,
-          encrypted: event.encrypted ?? false,
-        });
-        return;
-      case "token":
-        await this.#emit({
-          type: "token",
-          sessionId,
-          content: event.content,
+          outputId: event.outputId,
+          ...(event.content === undefined ? {} : { content: event.content }),
+          mode: event.mode,
+          done: event.done,
           encrypted: event.encrypted ?? false,
         });
         return;

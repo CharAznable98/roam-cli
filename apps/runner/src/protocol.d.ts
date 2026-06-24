@@ -597,9 +597,12 @@ declare module "@roamcli/shared/protocol" {
     | { type: "agentSkillListResult"; result: AgentSkillListResult }
     | { type: "pathSearchResult"; result: PathSearchResult }
     | {
-        type: "assistantMessage";
+        type: "assistantOutput";
         sessionId: string;
-        content: string;
+        outputId: string;
+        content?: string;
+        mode: "append" | "replace";
+        done: boolean;
         encrypted: boolean;
       }
     | {
@@ -609,7 +612,6 @@ declare module "@roamcli/shared/protocol" {
         kind: AgentActivityKind;
         label: string;
       }
-    | { type: "token"; sessionId: string; content: string; encrypted: boolean }
     | { type: "fileTreeResult"; result: FileTreeResult }
     | { type: "fileContentResult"; result: FileContentResult }
     | { type: "fileWriteResult"; result: FileWriteResult }
