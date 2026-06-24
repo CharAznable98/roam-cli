@@ -1,6 +1,7 @@
 import type {
   ApiGitBlameQuery,
   ApiGitCommit,
+  ApiGitCommitFilesQuery,
   ApiGitContext,
   ApiGitFileDiffQuery,
   ApiGitHistoryQuery,
@@ -10,13 +11,13 @@ import type {
   ApiGitRemoveWorktree,
   GitBlame,
   GitBranchList,
+  GitCommitFiles,
   GitCommitPage,
   GitContextRef,
   GitFileDiff,
   GitJob,
   GitStatusResult,
 } from "@roamcli/shared/protocol";
-import { nowIso } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import { newId } from "../../infra/ids.js";
 import type {
@@ -37,8 +38,7 @@ export class GitService {
     private readonly runnerRpcTimeoutMs: number,
     gitJobs?: GitJobRunner,
   ) {
-    this.gitJobs =
-      gitJobs ?? new GitJobRunner(store, hub, rpc, runnerRpcTimeoutMs);
+    this.gitJobs = gitJobs ?? new GitJobRunner(store, hub, rpc);
   }
 
   async status(
@@ -131,6 +131,28 @@ export class GitService {
         ...(query.path === undefined ? {} : { path: query.path }),
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         limit: query.limit,
+      },
+      this.runnerRpcTimeoutMs,
+    );
+    return ok({ result });
+  }
+
+  async commitFiles(
+    query: ApiGitCommitFilesQuery,
+  ): Promise<ServiceResult<{ result: GitCommitFiles }>> {
+    const resolved = this.resolveContext(query.context);
+    if (!resolved.ok) {
+      return resolved;
+    }
+    const result = await this.rpc.requestRunner<GitCommitFiles>(
+      resolved.value.runnerId,
+      {
+        type: "gitCommitFiles",
+        requestId: newId("git_commit_files"),
+        projectId: resolved.value.projectId,
+        context: resolved.value.context,
+        cwd: resolved.value.cwd,
+        sha: query.sha,
       },
       this.runnerRpcTimeoutMs,
     );
@@ -243,15 +265,6 @@ export class GitService {
         cwd: resolved.cwd,
       }),
     );
-    if (result.ok && result.value.job.status === "succeeded") {
-      const session = this.store.markSessionWorktreeDeleted(
-        body.context.sessionId,
-        nowIso(),
-      );
-      if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
-      }
-    }
     return result;
   }
 
@@ -298,7 +311,8 @@ export class GitService {
     if (
       session.executionMode !== "managed_worktree" ||
       session.status === "pending" ||
-      session.worktreeDeletedAt
+      session.worktreeDeletedAt ||
+      this.gitJobs.hasActiveWorktreeRemovalJob(session.id)
     ) {
       return fail("worktree_not_available");
     }

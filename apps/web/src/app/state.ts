@@ -5,6 +5,7 @@ import type {
   FileContentResult,
   FileNode,
   FileTreeResult,
+  GitJob,
   Message,
   MessageAttachment,
   Project,
@@ -47,6 +48,7 @@ export interface AppState {
   activities: AgentActivity[];
   approvals: Approval[];
   artifacts: Artifact[];
+  gitJobs: GitJob[];
   messageAttachments: MessageAttachment[];
   hunks: SessionPatchHunk[];
   filesBySession: Record<string, FileNode[]>;
@@ -80,6 +82,7 @@ export const initialAppState: AppState = {
   activities: [],
   approvals: [],
   artifacts: [],
+  gitJobs: [],
   messageAttachments: [],
   hunks: [],
   filesBySession: {},
@@ -992,6 +995,12 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
     return {
       ...state,
       artifacts: upsertBy(state.artifacts, event.artifact, (item) => item.id),
+    };
+  }
+  if (event.type === "git:job") {
+    return {
+      ...state,
+      gitJobs: upsertBy(state.gitJobs, event.job, (item) => item.id),
     };
   }
   if (event.type === "file:tree") {

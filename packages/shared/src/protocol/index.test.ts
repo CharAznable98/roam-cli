@@ -177,7 +177,58 @@ describe("protocol schemas", () => {
         behind: 0,
         clean: true,
         unborn: false,
-        groups: [{ id: "changes", changes: [] }],
+        groups: [
+          {
+            id: "changes",
+            changes: [
+              {
+                path: "src/App.tsx",
+                status: "modified",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "untracked",
+            changes: [
+              {
+                path: "scratch.txt",
+                status: "untracked",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "conflicts",
+            changes: [
+              {
+                path: "conflicted.txt",
+                status: "conflicted",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "ignored",
+            changes: [
+              {
+                path: "cache.tmp",
+                status: "ignored",
+                staged: false,
+              },
+            ],
+          },
+          {
+            id: "submodules",
+            changes: [
+              {
+                path: "vendor/lib",
+                status: "submodule",
+                staged: false,
+              },
+            ],
+          },
+        ],
       },
     });
 
@@ -187,6 +238,13 @@ describe("protocol schemas", () => {
         kind: "repository",
         requestId: "git-status-1",
         clean: true,
+        groups: [
+          { id: "unstaged", changes: [{ path: "src/App.tsx" }] },
+          { id: "unstaged", changes: [{ path: "scratch.txt" }] },
+          { id: "unstaged", changes: [{ path: "conflicted.txt" }] },
+          { id: "unstaged", changes: [{ path: "cache.tmp" }] },
+          { id: "unstaged", changes: [{ path: "vendor/lib" }] },
+        ],
       },
     });
   });

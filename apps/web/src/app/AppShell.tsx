@@ -9,6 +9,7 @@ import { getNotificationSupport } from "../features/pwa/pwa";
 import type {
   AccountSecurityState,
   ApiChangePassword,
+  GitJob,
   Project,
   Session,
   SessionStatus,
@@ -65,6 +66,35 @@ type SessionArchiveDialogState = {
   submitting?: "keep" | "remove";
 };
 
+const TERMINAL_GIT_JOB_STATUSES = new Set<GitJob["status"]>([
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+const GIT_JOB_POLL_INTERVAL_MS = 500;
+
+async function waitForGitJob(input: {
+  jobId: string;
+  projectId: string;
+  getJobs: () => GitJob[];
+  fetchGitJobs: (projectId: string) => Promise<GitJob[]>;
+}): Promise<GitJob> {
+  for (;;) {
+    const eventJob = input.getJobs().find((job) => job.id === input.jobId);
+    if (eventJob && TERMINAL_GIT_JOB_STATUSES.has(eventJob.status)) {
+      return eventJob;
+    }
+    const jobs = await input.fetchGitJobs(input.projectId);
+    const polledJob = jobs.find((job) => job.id === input.jobId);
+    if (polledJob && TERMINAL_GIT_JOB_STATUSES.has(polledJob.status)) {
+      return polledJob;
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, GIT_JOB_POLL_INTERVAL_MS),
+    );
+  }
+}
+
 export function AppShell({ controller }: AppShellProps) {
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
   const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
@@ -118,6 +148,7 @@ export function AppShell({ controller }: AppShellProps) {
     applyAcceptedPatch,
     sendControl,
     archiveSession,
+    refreshSessionDetail,
     selectFile,
     openFileForEdit,
     startSelectedFileEdit,
@@ -133,7 +164,9 @@ export function AppShell({ controller }: AppShellProps) {
     fetchGitStatus,
     fetchGitDiff,
     fetchGitHistory,
+    fetchGitCommitFiles,
     fetchGitBranches,
+    fetchGitJobs,
     initGitRepository,
     stageGitPaths,
     unstageGitPaths,
@@ -142,6 +175,10 @@ export function AppShell({ controller }: AppShellProps) {
     runGitRemoteOperation,
     removeGitWorktree,
   } = controller;
+  const gitJobsRef = useRef(state.gitJobs);
+  useEffect(() => {
+    gitJobsRef.current = state.gitJobs;
+  }, [state.gitJobs]);
   const requestSettingsAccountRefresh = useCallback(() => {
     if (settingsAccountRefreshPendingRef.current) {
       return;
@@ -171,10 +208,33 @@ export function AppShell({ controller }: AppShellProps) {
         const shouldSendWorktreeStrategy =
           session.executionMode === "managed_worktree" &&
           !session.worktreeDeletedAt;
-        await archiveSession(
+        const result = await archiveSession(
           session.id,
           shouldSendWorktreeStrategy ? { worktree } : {},
         );
+        if (result?.job) {
+          try {
+            const job = await waitForGitJob({
+              jobId: result.job.id,
+              projectId: result.job.projectId,
+              getJobs: () => gitJobsRef.current,
+              fetchGitJobs,
+            });
+            if (job.status !== "succeeded") {
+              throw new Error(job.errorSummary ?? "Worktree cleanup failed.");
+            }
+            try {
+              await refreshSessionDetail(session.id);
+            } catch {
+              dispatch({ type: "sessionDeleted", sessionId: session.id });
+            }
+          } finally {
+            dispatch({
+              type: "sessionArchiveFinished",
+              sessionId: session.id,
+            });
+          }
+        }
         setArchiveDialog(null);
       } catch (archiveError: unknown) {
         setArchiveDialog({
@@ -183,7 +243,7 @@ export function AppShell({ controller }: AppShellProps) {
         });
       }
     },
-    [archiveDialog, archiveSession],
+    [archiveDialog, archiveSession, fetchGitJobs, refreshSessionDetail],
   );
 
   const setActiveTab = useCallback(
@@ -588,11 +648,15 @@ export function AppShell({ controller }: AppShellProps) {
                     project={selectedProject}
                     runnerOnline={Boolean(selectedRunner)}
                     sessions={runnerSessions}
+                    archivingSessionIds={state.archivingSessionIds}
                     defaultContext={selectedGitContext}
                     onFetchStatus={fetchGitStatus}
                     onFetchDiff={fetchGitDiff}
                     onFetchHistory={fetchGitHistory}
+                    onFetchCommitFiles={fetchGitCommitFiles}
                     onFetchBranches={fetchGitBranches}
+                    gitJobs={state.gitJobs}
+                    onFetchJobs={fetchGitJobs}
                     onInitRepository={initGitRepository}
                     onStagePaths={stageGitPaths}
                     onUnstagePaths={unstageGitPaths}

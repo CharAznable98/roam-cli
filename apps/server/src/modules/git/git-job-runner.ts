@@ -10,6 +10,8 @@ import { newId } from "../../infra/ids.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { ok, type ServiceResult } from "../result.js";
 
+export const DEFAULT_GIT_JOB_TIMEOUT_MS = 30_000;
+
 export type GitResolvedContext = {
   projectId: string;
   runnerId: string;
@@ -21,7 +23,7 @@ export type GitResolvedContext = {
 export class GitMutationQueue {
   private readonly writeQueues = new Map<string, Promise<unknown>>();
 
-  enqueue<T>(context: GitContextRef, work: () => Promise<T>): Promise<T> {
+  enqueue(context: GitContextRef, work: () => Promise<void>): void {
     const key = contextQueueKey(context);
     const previous = this.writeQueues.get(key) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(work);
@@ -34,16 +36,23 @@ export class GitMutationQueue {
         }
       });
     this.writeQueues.set(key, tracked);
-    return current;
   }
 }
 
+type PendingGitJob = {
+  runnerId: string;
+  job: GitJob;
+  resolve?: () => void;
+};
+
 export class GitJobRunner {
+  private readonly pendingJobs = new Map<string, PendingGitJob>();
+
   constructor(
     private readonly store: ServerStore,
     private readonly hub: ConnectionHub,
     private readonly rpc: RunnerRpcClient,
-    private readonly runnerRpcTimeoutMs: number,
+    private readonly gitJobTimeoutMs = DEFAULT_GIT_JOB_TIMEOUT_MS,
     private readonly queue = new GitMutationQueue(),
   ) {}
 
@@ -52,22 +61,141 @@ export class GitJobRunner {
     operation: string,
     buildCommand: (resolved: GitResolvedContext, requestId: string) => T,
   ): Promise<ServiceResult<{ job: GitJob }>> {
-    return this.queue.enqueue(resolved.context, async () => {
-      const requestId = newId(`git_${operation}`);
-      const queuedJob = this.createQueuedJob(requestId, operation, resolved);
-      try {
-        const job = await this.rpc.requestRunner<GitJob>(
-          resolved.runnerId,
-          buildCommand(resolved, requestId),
-          this.runnerRpcTimeoutMs,
-        );
-        return ok({ job });
-      } catch (error: unknown) {
-        const failed = this.failQueuedJob(queuedJob, error);
-        if (error instanceof RunnerRpcError) {
-          throw error;
+    const requestId = newId(`git_${operation}`);
+    const queuedJob = this.createQueuedJob(requestId, operation, resolved);
+    if (!this.hub.isRunnerOnline(resolved.runnerId)) {
+      return ok({
+        job: this.failJob(
+          queuedJob,
+          new RunnerRpcError("runner is offline", "runner_offline"),
+        ),
+      });
+    }
+
+    this.pendingJobs.set(queuedJob.id, {
+      runnerId: resolved.runnerId,
+      job: queuedJob,
+    });
+    this.queue.enqueue(resolved.context, () =>
+      this.dispatchQueuedJob(queuedJob.id, resolved, buildCommand),
+    );
+    return ok({ job: queuedJob });
+  }
+
+  handleRunnerJobResult(job: GitJob): boolean {
+    const pending = this.pendingJobs.get(job.id);
+    if (!pending) {
+      return false;
+    }
+    this.pendingJobs.delete(job.id);
+    pending.resolve?.();
+    return true;
+  }
+
+  normalizeRunnerJobResult(job: GitJob): GitJob {
+    const pending = this.pendingJobs.get(job.id);
+    if (!pending) {
+      return job;
+    }
+    return {
+      ...job,
+      operation: pending.job.operation,
+      contextKind: pending.job.contextKind,
+      ...(pending.job.sessionId ? { sessionId: pending.job.sessionId } : {}),
+    };
+  }
+
+  hasActiveWorktreeRemovalJob(sessionId: string): boolean {
+    for (const pending of this.pendingJobs.values()) {
+      if (
+        pending.job.sessionId === sessionId &&
+        isWorktreeRemovalOperation(pending.job.operation) &&
+        (pending.job.status === "queued" || pending.job.status === "running")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  failPendingForRunner(runnerId: string, error: RunnerRpcError): void {
+    for (const [jobId, pending] of this.pendingJobs) {
+      if (pending.runnerId === runnerId) {
+        this.pendingJobs.delete(jobId);
+        this.failJob(pending.job, error);
+        pending.resolve?.();
+      }
+    }
+  }
+
+  private async dispatchQueuedJob<T extends RunnerRpcCommand>(
+    jobId: string,
+    resolved: GitResolvedContext,
+    buildCommand: (resolved: GitResolvedContext, requestId: string) => T,
+  ): Promise<void> {
+    const pending = this.pendingJobs.get(jobId);
+    if (!pending) {
+      return;
+    }
+    if (!this.hub.isRunnerOnline(resolved.runnerId)) {
+      this.pendingJobs.delete(jobId);
+      this.failJob(
+        pending.job,
+        new RunnerRpcError("runner is offline", "runner_offline"),
+      );
+      return;
+    }
+
+    const running = this.markJobRunning(pending.job);
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
         }
-        return ok({ job: failed });
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        const latest = this.pendingJobs.get(jobId);
+        if (latest) {
+          this.pendingJobs.delete(jobId);
+          try {
+            this.failJob(
+              latest.job,
+              new RunnerRpcError("runner request timed out", "runner_timeout"),
+            );
+          } catch {
+            // The server may be shutting down while a queued runner job is still pending.
+          }
+        }
+        finish();
+      }, this.gitJobTimeoutMs);
+      this.pendingJobs.set(jobId, {
+        ...pending,
+        job: running,
+        resolve: finish,
+      });
+      try {
+        if (
+          !this.hub.sendToRunner(
+            resolved.runnerId,
+            buildCommand(resolved, jobId),
+          )
+        ) {
+          throw new RunnerRpcError("runner is offline", "runner_offline");
+        }
+      } catch (error: unknown) {
+        const latest = this.pendingJobs.get(jobId);
+        this.pendingJobs.delete(jobId);
+        this.failJob(
+          latest?.job ?? running,
+          error instanceof RunnerRpcError
+            ? error
+            : new RunnerRpcError("runner is offline", "runner_offline"),
+        );
+        finish();
       }
     });
   }
@@ -93,7 +221,18 @@ export class GitJobRunner {
     return job;
   }
 
-  private failQueuedJob(job: GitJob, error: unknown): GitJob {
+  private markJobRunning(job: GitJob): GitJob {
+    const running: GitJob = {
+      ...job,
+      status: "running",
+      startedAt: nowIso(),
+    };
+    this.store.upsertGitJob(running);
+    this.hub.broadcast({ type: "git:job", job: running });
+    return running;
+  }
+
+  private failJob(job: GitJob, error: unknown): GitJob {
     const failed: GitJob = {
       ...job,
       status: "failed",
@@ -111,4 +250,10 @@ function contextQueueKey(context: GitContextRef): string {
   return context.kind === "project"
     ? `project:${context.projectId}`
     : `session_worktree:${context.sessionId}`;
+}
+
+function isWorktreeRemovalOperation(operation: string): boolean {
+  return (
+    operation === "remove_worktree" || operation === "archive_remove_worktree"
+  );
 }

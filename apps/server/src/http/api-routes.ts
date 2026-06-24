@@ -13,6 +13,7 @@ import {
   ApiSetupOwnerSchema,
   ApiGitBlameQuerySchema,
   ApiGitCommitSchema,
+  ApiGitCommitFilesQuerySchema,
   ApiGitContextSchema,
   ApiGitFileDiffQuerySchema,
   ApiGitHistoryQuerySchema,
@@ -441,6 +442,9 @@ function registerSessionRoutes(
         }
         return sendServiceError(reply, result);
       }
+      if (result.value.job) {
+        return reply.code(202).send({ job: result.value.job });
+      }
       return reply.code(204).send();
     } catch (error) {
       return sendRunnerRpcError(reply, error);
@@ -769,6 +773,24 @@ function registerGitRoutes(app: FastifyInstance, context: AppContext): void {
     }
     try {
       const result = await context.services.git.history(parsed.data);
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
+  app.post("/v1/git/commit-files", async (request, reply) => {
+    const parsed = ApiGitCommitFilesQuerySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    try {
+      const result = await context.services.git.commitFiles(parsed.data);
       if (!result.ok) {
         return sendServiceError(reply, result);
       }

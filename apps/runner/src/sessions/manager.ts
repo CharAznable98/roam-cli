@@ -178,6 +178,9 @@ export class SessionManager {
       case "gitCommitPage":
         await this.#workspaceCommands.readGitCommitPage(command);
         return;
+      case "gitCommitFiles":
+        await this.#workspaceCommands.readGitCommitFiles(command);
+        return;
       case "gitBranchList":
         await this.#workspaceCommands.readGitBranches(command);
         return;

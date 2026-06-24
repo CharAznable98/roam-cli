@@ -163,15 +163,22 @@ export const GitChangeSchema = z.object({
 });
 export type GitChange = z.infer<typeof GitChangeSchema>;
 
-export const GitChangeGroupSchema = z.object({
-  id: z.enum([
+const GitChangeGroupIdSchema = z
+  .enum([
     "staged",
+    "unstaged",
     "changes",
-    "conflicts",
     "untracked",
+    "conflicts",
     "ignored",
     "submodules",
-  ]),
+  ])
+  .transform((id): "staged" | "unstaged" =>
+    id === "staged" ? "staged" : "unstaged",
+  );
+
+export const GitChangeGroupSchema = z.object({
+  id: GitChangeGroupIdSchema,
   changes: z.array(GitChangeSchema),
 });
 export type GitChangeGroup = z.infer<typeof GitChangeGroupSchema>;
@@ -294,6 +301,14 @@ export const GitCommitPageSchema = z.object({
   nextCursor: z.string().min(1).optional(),
 });
 export type GitCommitPage = z.infer<typeof GitCommitPageSchema>;
+
+export const GitCommitFilesSchema = z.object({
+  requestId: z.string().min(1),
+  context: GitContextRefSchema,
+  sha: z.string().min(1),
+  files: z.array(GitChangeSchema),
+});
+export type GitCommitFiles = z.infer<typeof GitCommitFilesSchema>;
 
 export const GitBranchSchema = z.object({
   name: z.string().min(1),
@@ -869,6 +884,14 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     limit: z.number().int().positive().max(200).default(50),
   }),
   z.object({
+    type: z.literal("gitCommitFiles"),
+    requestId: z.string().min(1),
+    projectId: z.string().min(1),
+    context: GitContextRefSchema,
+    cwd: z.string().min(1),
+    sha: z.string().min(1),
+  }),
+  z.object({
     type: z.literal("gitBranchList"),
     requestId: z.string().min(1),
     projectId: z.string().min(1),
@@ -928,6 +951,7 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     projectId: z.string().min(1),
     context: GitContextRefSchema,
     cwd: z.string().min(1),
+    jobOperation: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal("resolveApproval"),
@@ -987,6 +1011,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("git:diff"), result: GitFileDiffSchema }),
   z.object({ type: z.literal("git:blame"), result: GitBlameSchema }),
   z.object({ type: z.literal("git:history"), result: GitCommitPageSchema }),
+  z.object({
+    type: z.literal("git:commitFiles"),
+    result: GitCommitFilesSchema,
+  }),
   z.object({ type: z.literal("git:branches"), result: GitBranchListSchema }),
   z.object({ type: z.literal("git:job"), job: GitJobSchema }),
   z.object({
@@ -1076,6 +1104,10 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("gitCommitPageResult"),
     result: GitCommitPageSchema,
+  }),
+  z.object({
+    type: z.literal("gitCommitFilesResult"),
+    result: GitCommitFilesSchema,
   }),
   z.object({
     type: z.literal("gitBranchListResult"),
@@ -1191,6 +1223,14 @@ export const ApiGitHistoryQuerySchema = z.object({
   limit: z.number().int().positive().max(200).default(50),
 });
 export type ApiGitHistoryQuery = z.infer<typeof ApiGitHistoryQuerySchema>;
+
+export const ApiGitCommitFilesQuerySchema = z.object({
+  context: GitContextRefSchema,
+  sha: z.string().min(1),
+});
+export type ApiGitCommitFilesQuery = z.infer<
+  typeof ApiGitCommitFilesQuerySchema
+>;
 
 export const ApiGitPathsSchema = z.object({
   context: GitContextRefSchema,

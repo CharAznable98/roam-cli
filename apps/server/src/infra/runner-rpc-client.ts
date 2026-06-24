@@ -9,6 +9,7 @@ import type {
   FileWriteResult,
   GitBlame,
   GitBranchList,
+  GitCommitFiles,
   GitCommitPage,
   GitFileDiff,
   GitJob,
@@ -36,6 +37,7 @@ type RunnerRpcResult =
   | GitFileDiff
   | GitBlame
   | GitCommitPage
+  | GitCommitFiles
   | GitBranchList
   | GitJob;
 
@@ -58,6 +60,7 @@ export type RunnerRpcCommand = Extract<
       | "gitFileDiff"
       | "gitBlame"
       | "gitCommitPage"
+      | "gitCommitFiles"
       | "gitBranchList"
       | "gitInit"
       | "gitStagePaths"

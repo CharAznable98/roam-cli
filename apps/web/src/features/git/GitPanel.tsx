@@ -1,6 +1,7 @@
 import { DiffEditor } from "@monaco-editor/react";
 import type {
   ApiGitCommit,
+  ApiGitCommitFilesQuery,
   ApiGitContext,
   ApiGitFileDiffQuery,
   ApiGitHistoryQuery,
@@ -11,6 +12,7 @@ import type {
   GitBranchList,
   GitChange,
   GitChangeGroup,
+  GitCommitFiles,
   GitCommitPage,
   GitCommitSummary,
   GitFileDiff,
@@ -53,6 +55,16 @@ type AsyncState = "idle" | "loading" | "ready" | "error";
 type GitTab = "changes" | "history" | "branch";
 type ChangeViewMode = "tree" | "list";
 const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const TERMINAL_GIT_JOB_STATUSES = new Set<GitJob["status"]>([
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+const GIT_JOB_POLL_INTERVAL_MS = 500;
+const RUNNING_GIT_JOB_STATUSES = new Set<GitJob["status"]>([
+  "queued",
+  "running",
+]);
 
 type GitContextOption = {
   key: string;
@@ -72,11 +84,17 @@ type GitPanelProps = {
   project: Project | undefined;
   runnerOnline: boolean;
   sessions: Session[];
+  archivingSessionIds: Record<string, true>;
   defaultContext: ApiGitContext | undefined;
   onFetchStatus: (context: ApiGitContext) => Promise<GitStatusResult>;
   onFetchDiff: (query: ApiGitFileDiffQuery) => Promise<GitFileDiff>;
   onFetchHistory: (query: ApiGitHistoryQuery) => Promise<GitCommitPage>;
+  onFetchCommitFiles: (
+    query: ApiGitCommitFilesQuery,
+  ) => Promise<GitCommitFiles>;
   onFetchBranches: (context: ApiGitContext) => Promise<GitBranchList>;
+  gitJobs: GitJob[];
+  onFetchJobs: (projectId: string) => Promise<GitJob[]>;
   onInitRepository: (input: ApiGitInit) => Promise<GitJob>;
   onStagePaths: (input: ApiGitPaths) => Promise<GitJob>;
   onUnstagePaths: (input: ApiGitPaths) => Promise<GitJob>;
@@ -94,11 +112,15 @@ export function GitPanel({
   project,
   runnerOnline,
   sessions,
+  archivingSessionIds,
   defaultContext,
   onFetchStatus,
   onFetchDiff,
   onFetchHistory,
+  onFetchCommitFiles,
   onFetchBranches,
+  gitJobs,
+  onFetchJobs,
   onInitRepository,
   onStagePaths,
   onUnstagePaths,
@@ -125,6 +147,11 @@ export function GitPanel({
   const [historyPage, setHistoryPage] = useState<GitCommitPage | undefined>();
   const [historyState, setHistoryState] = useState<AsyncState>("idle");
   const [historyError, setHistoryError] = useState("");
+  const [commitFilesBySha, setCommitFilesBySha] = useState<
+    Record<string, GitCommitFiles>
+  >({});
+  const [commitFilesState, setCommitFilesState] = useState<AsyncState>("idle");
+  const [commitFilesError, setCommitFilesError] = useState("");
   const [selectedCommitSha, setSelectedCommitSha] = useState("");
   const [selectedCommitPath, setSelectedCommitPath] = useState("");
   const [selectedChange, setSelectedChange] = useState<GitChange | undefined>();
@@ -140,6 +167,10 @@ export function GitPanel({
   const statusContextKeyRef = useRef("");
   const historyScopeRef = useRef("");
   const statusRequestSequenceRef = useRef(0);
+  const commitFilesRequestSequenceRef = useRef(0);
+  const gitJobsRef = useRef(gitJobs);
+  const [unavailableWorktreeContextKeys, setUnavailableWorktreeContextKeys] =
+    useState<Record<string, true>>({});
   const compactDiff = useCompactDiff(panelRef);
 
   useEffect(() => {
@@ -149,12 +180,22 @@ export function GitPanel({
   }, [active]);
 
   useEffect(() => {
+    gitJobsRef.current = gitJobs;
+  }, [gitJobs]);
+
+  useEffect(() => {
     setSelectedContextKey(defaultContextKey);
   }, [defaultContextKey]);
 
   const contextOptions = useMemo(
-    () => buildContextOptions(project, sessions, defaultContextKey),
-    [defaultContextKey, project, sessions],
+    () =>
+      buildContextOptions(
+        project,
+        sessions,
+        defaultContextKey,
+        archivingSessionIds,
+      ),
+    [archivingSessionIds, defaultContextKey, project, sessions],
   );
   const activeContextKey = selectedContextKey || defaultContextKey;
   const selectedContextOption = contextOptions.find(
@@ -165,6 +206,34 @@ export function GitPanel({
   const selectedContextIdentity = selectedContext
     ? contextKey(selectedContext)
     : "";
+  const selectedSession =
+    selectedContext?.kind === "session_worktree"
+      ? sessions.find((session) => session.id === selectedContext.sessionId)
+      : undefined;
+  const contextAvailable = (context: ApiGitContext | undefined) => {
+    if (!context || context.kind !== "session_worktree") {
+      return true;
+    }
+    if (unavailableWorktreeContextKeys[contextKey(context)]) {
+      return false;
+    }
+    const session = sessions.find((item) => item.id === context.sessionId);
+    if (
+      !session ||
+      archivingSessionIds[session.id] ||
+      session.archivedAt ||
+      session.worktreeDeletedAt
+    ) {
+      return false;
+    }
+    return !gitJobs.some(
+      (job) =>
+        job.sessionId === session.id &&
+        isWorktreeRemovalOperation(job.operation) &&
+        RUNNING_GIT_JOB_STATUSES.has(job.status),
+    );
+  };
+  const selectedContextAvailable = contextAvailable(selectedContext);
   const selectedContextMatchesDefault =
     defaultContext !== undefined &&
     selectedContextIdentity === defaultContextKey;
@@ -179,7 +248,10 @@ export function GitPanel({
   const selectedCommit = historyPage?.commits.find(
     (commit) => commit.sha === selectedCommitSha,
   );
-  const selectedCommitFile = selectedCommit?.files?.find(
+  const selectedCommitFiles = selectedCommitSha
+    ? commitFilesBySha[selectedCommitSha]
+    : undefined;
+  const selectedCommitFile = selectedCommitFiles?.files.find(
     (file) => file.path === selectedCommitPath,
   );
   const selectedMode = selectedChange?.staged ? "staged" : "working_tree";
@@ -262,10 +334,32 @@ export function GitPanel({
   }, [historyScope]);
 
   useEffect(() => {
+    if (
+      !defaultContextKey ||
+      contextOptions.some((option) => option.key === activeContextKey)
+    ) {
+      return;
+    }
+    setSelectedContextKey(defaultContextKey);
+  }, [activeContextKey, contextOptions, defaultContextKey]);
+
+  useEffect(() => {
+    if (!defaultContextKey || selectedContextAvailable) {
+      return;
+    }
+    setSelectedContextKey(defaultContextKey);
+  }, [defaultContextKey, selectedContextAvailable]);
+
+  useEffect(() => {
     if (!active) {
       return;
     }
-    if (!selectedContext || !project || !runnerOnline) {
+    if (
+      !selectedContext ||
+      !project ||
+      !runnerOnline ||
+      !selectedContextAvailable
+    ) {
       setStatusResult(undefined);
       setStatusState("idle");
       return;
@@ -278,6 +372,9 @@ export function GitPanel({
     setHistoryPage(undefined);
     setHistoryState("idle");
     setHistoryError("");
+    setCommitFilesBySha({});
+    setCommitFilesState("idle");
+    setCommitFilesError("");
     setSelectedCommitSha("");
     setSelectedCommitPath("");
     setSelectedChange(undefined);
@@ -285,10 +382,16 @@ export function GitPanel({
     void reloadStatus(selectedContext);
     // reloadStatus maintains its own stale-response guard.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, project, runnerOnline, selectedContextIdentity]);
+  }, [
+    active,
+    project,
+    runnerOnline,
+    selectedContextAvailable,
+    selectedContextIdentity,
+  ]);
 
   useEffect(() => {
-    if (!active || !selectedContext || !status) {
+    if (!active || !selectedContext || !selectedContextAvailable || !status) {
       setBranches(undefined);
       setBranchesState("idle");
       setBranchesError("");
@@ -312,15 +415,30 @@ export function GitPanel({
     return () => {
       cancelled = true;
     };
-  }, [onFetchBranches, active, selectedContext, status]);
+  }, [
+    onFetchBranches,
+    active,
+    selectedContext,
+    selectedContextAvailable,
+    status,
+  ]);
 
   useEffect(() => {
-    if (!active || activeTab !== "history" || !selectedContext || !status) {
+    if (
+      !active ||
+      activeTab !== "history" ||
+      !selectedContext ||
+      !selectedContextAvailable ||
+      !status
+    ) {
       return;
     }
     setHistoryState("loading");
     setHistoryError("");
     setHistoryPage(undefined);
+    setCommitFilesBySha({});
+    setCommitFilesState("idle");
+    setCommitFilesError("");
     setSelectedCommitSha("");
     setSelectedCommitPath("");
     if (status.unborn) {
@@ -337,9 +455,6 @@ export function GitPanel({
         if (cancelled) return;
         setHistoryPage(page);
         setHistoryState("ready");
-        const firstCommit = page.commits[0];
-        setSelectedCommitSha(firstCommit?.sha ?? "");
-        setSelectedCommitPath(firstCommit?.files?.[0]?.path ?? "");
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -354,13 +469,19 @@ export function GitPanel({
     active,
     activeTab,
     selectedContext,
+    selectedContextAvailable,
     status?.branch,
     status?.headSha,
     status?.unborn,
   ]);
 
   useEffect(() => {
-    if (!active || !selectedContext || !diffTarget?.query.context) {
+    if (
+      !active ||
+      !selectedContext ||
+      !selectedContextAvailable ||
+      !diffTarget?.query.context
+    ) {
       setDiff(undefined);
       setDiffState("idle");
       setDiffError("");
@@ -389,7 +510,81 @@ export function GitPanel({
     return () => {
       cancelled = true;
     };
-  }, [onFetchDiff, active, selectedContext, diffTarget?.key]);
+  }, [
+    onFetchDiff,
+    active,
+    selectedContext,
+    selectedContextAvailable,
+    diffTarget?.key,
+  ]);
+
+  const loadCommitFiles = async (commit: GitCommitSummary) => {
+    if (!selectedContext || !selectedContextAvailable) {
+      return;
+    }
+    const requestSequence = ++commitFilesRequestSequenceRef.current;
+    const requestContextKey = contextKey(selectedContext);
+    const requestSha = commit.sha;
+    const cached = commitFilesBySha[commit.sha];
+    if (cached) {
+      setCommitFilesState("ready");
+      setCommitFilesError("");
+      setSelectedCommitPath((current) =>
+        current && cached.files.some((file) => file.path === current)
+          ? current
+          : (cached.files[0]?.path ?? ""),
+      );
+      return;
+    }
+    setCommitFilesState("loading");
+    setCommitFilesError("");
+    setSelectedCommitPath("");
+    try {
+      const result = await onFetchCommitFiles({
+        context: selectedContext,
+        sha: requestSha,
+      });
+      if (
+        statusContextKeyRef.current !== requestContextKey ||
+        commitFilesRequestSequenceRef.current !== requestSequence ||
+        result.sha !== requestSha
+      ) {
+        return;
+      }
+      setCommitFilesBySha((current) => ({
+        ...current,
+        [result.sha]: result,
+      }));
+      setCommitFilesState("ready");
+      setSelectedCommitPath(result.files[0]?.path ?? "");
+    } catch (error: unknown) {
+      if (
+        statusContextKeyRef.current !== requestContextKey ||
+        commitFilesRequestSequenceRef.current !== requestSequence
+      ) {
+        return;
+      }
+      setCommitFilesState("error");
+      setCommitFilesError(errorMessage(error));
+    }
+  };
+
+  const waitForJob = async (job: GitJob): Promise<GitJob> => {
+    for (;;) {
+      const eventJob = gitJobsRef.current.find((item) => item.id === job.id);
+      if (eventJob && TERMINAL_GIT_JOB_STATUSES.has(eventJob.status)) {
+        return eventJob;
+      }
+      const jobs = await onFetchJobs(job.projectId);
+      const polledJob = jobs.find((item) => item.id === job.id);
+      if (polledJob && TERMINAL_GIT_JOB_STATUSES.has(polledJob.status)) {
+        return polledJob;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, GIT_JOB_POLL_INTERVAL_MS),
+      );
+    }
+  };
 
   const applyReloadedStatus = (nextStatus: GitStatusResult) => {
     setStatusResult(nextStatus);
@@ -415,6 +610,9 @@ export function GitPanel({
     statusContextKeyRef.current === requestContextKey;
 
   const reloadStatus = async (context: ApiGitContext) => {
+    if (!contextAvailable(context)) {
+      return;
+    }
     const requestContextKey = contextKey(context);
     const requestSequence = statusRequestSequenceRef.current + 1;
     statusRequestSequenceRef.current = requestSequence;
@@ -435,7 +633,7 @@ export function GitPanel({
   };
 
   const refresh = () => {
-    if (!selectedContext || !project) return;
+    if (!selectedContext || !project || !selectedContextAvailable) return;
     setSelectedContextKey(contextKey(selectedContext));
     setStatusState("loading");
     void reloadStatus(selectedContext);
@@ -492,9 +690,17 @@ export function GitPanel({
     setJobState("loading");
     setJobError("");
     try {
-      const job = await run();
+      const startedJob = await run();
+      const job = TERMINAL_GIT_JOB_STATUSES.has(startedJob.status)
+        ? startedJob
+        : await waitForJob(startedJob);
       if (job.status === "failed") {
         const message = job.errorSummary ?? messages.failure;
+        setJobState("error");
+        setJobError(message);
+        onNotify("error", messages.failure, message);
+      } else if (job.status === "cancelled") {
+        const message = job.errorSummary ?? "Git job was cancelled.";
         setJobState("error");
         setJobError(message);
         onNotify("error", messages.failure, message);
@@ -688,7 +894,7 @@ export function GitPanel({
               <DiffPane
                 title={selectedChange?.path ?? "No file selected"}
                 eyebrow={
-                  selectedChange?.staged ? "Staged diff" : "Working tree diff"
+                  selectedChange?.staged ? "Staged diff" : "Unstaged diff"
                 }
                 actions={
                   selectedChange ? (
@@ -783,13 +989,16 @@ export function GitPanel({
                   selectedSha={selectedCommitSha}
                   onSelect={(commit) => {
                     setSelectedCommitSha(commit.sha);
-                    setSelectedCommitPath(commit.files?.[0]?.path ?? "");
+                    void loadCommitFiles(commit);
                   }}
                   onLoadMore={loadMoreHistory}
                 />
               </aside>
               <HistoryDetails
                 commit={selectedCommit}
+                files={selectedCommitFiles}
+                filesState={commitFilesState}
+                filesError={commitFilesError}
                 selectedPath={selectedCommitPath}
                 onSelectPath={setSelectedCommitPath}
                 diffPane={
@@ -867,6 +1076,7 @@ export function GitPanel({
                   return;
                 }
                 const worktreeContext = selectedContext;
+                const worktreeContextKey = contextKey(worktreeContext);
                 const projectContext: ApiGitContext = {
                   kind: "project",
                   projectId: project.id,
@@ -876,6 +1086,11 @@ export function GitPanel({
                     "Remove this worktree from disk? The branch will not be deleted.",
                   )
                 ) {
+                  setUnavailableWorktreeContextKeys((current) => ({
+                    ...current,
+                    [worktreeContextKey]: true,
+                  }));
+                  setSelectedContextKey(contextKey(projectContext));
                   void runJob(
                     () => onRemoveWorktree({ context: worktreeContext }),
                     {
@@ -884,9 +1099,16 @@ export function GitPanel({
                       failure: "Remove worktree failed",
                     },
                     projectContext,
-                  ).then(() =>
-                    setSelectedContextKey(contextKey(projectContext)),
-                  );
+                  ).then((job) => {
+                    if (job?.status === "succeeded") {
+                      return;
+                    }
+                    setUnavailableWorktreeContextKeys((current) => {
+                      const next = { ...current };
+                      delete next[worktreeContextKey];
+                      return next;
+                    });
+                  });
                 }
               }}
             />
@@ -1156,7 +1378,7 @@ function GroupHeader({
   onUnstageAll: (paths: string[]) => void;
 }) {
   const paths = gitActionPaths(group.changes);
-  const canStage = group.id === "changes" || group.id === "untracked";
+  const canStage = group.id === "unstaged";
   const canUnstage = group.id === "staged";
   return (
     <h3>
@@ -1450,11 +1672,17 @@ function HistoryList({
 
 function HistoryDetails({
   commit,
+  files,
+  filesState,
+  filesError,
   selectedPath,
   onSelectPath,
   diffPane,
 }: {
   commit: GitCommitSummary | undefined;
+  files: GitCommitFiles | undefined;
+  filesState: AsyncState;
+  filesError: string;
   selectedPath: string;
   onSelectPath: (path: string) => void;
   diffPane: ReactNode;
@@ -1477,10 +1705,18 @@ function HistoryDetails({
       </section>
       <div className="git-commit-files">
         <h3>Changed files</h3>
-        {(commit.files ?? []).length === 0 ? (
+        {filesState === "loading" && !files ? (
+          <div className="empty-state compact">Loading changed files...</div>
+        ) : filesState === "error" ? (
+          <GitErrorPanel
+            title="Changed files failed"
+            message={filesError}
+            compact
+          />
+        ) : (files?.files ?? []).length === 0 ? (
           <div className="empty-state compact">No changed files listed.</div>
         ) : (
-          commit.files?.map((file) => (
+          files?.files.map((file) => (
             <button
               key={`${commit.sha}:${file.path}`}
               type="button"
@@ -1594,8 +1830,18 @@ function ActionMenu({
   label: string;
   children: ReactNode;
 }) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
   return (
-    <details className="git-action-menu">
+    <details
+      ref={detailsRef}
+      className="git-action-menu"
+      onClick={(event) => {
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest("button")) {
+          window.setTimeout(() => detailsRef.current?.removeAttribute("open"));
+        }
+      }}
+    >
       <summary aria-label={label} title={label}>
         <MoreHorizontal size={16} />
       </summary>
@@ -1640,6 +1886,7 @@ function buildContextOptions(
   project: Project | undefined,
   sessions: Session[],
   defaultKey: string,
+  archivingSessionIds: Record<string, true> = {},
 ): GitContextOption[] {
   if (!project) {
     return [];
@@ -1659,6 +1906,8 @@ function buildContextOptions(
     if (
       session.executionMode !== "managed_worktree" ||
       session.status === "pending" ||
+      session.archivedAt ||
+      archivingSessionIds[session.id] ||
       session.worktreeDeletedAt
     ) {
       continue;
@@ -1685,6 +1934,12 @@ function contextKey(context: ApiGitContext): string {
   return context.kind === "project"
     ? `project:${context.projectId}`
     : `session:${context.sessionId}`;
+}
+
+function isWorktreeRemovalOperation(operation: string): boolean {
+  return (
+    operation === "remove_worktree" || operation === "archive_remove_worktree"
+  );
 }
 
 function isRepositoryStatus(
@@ -1714,11 +1969,8 @@ function changeStillExists(status: GitStatus, change: GitChange): boolean {
 
 function groupLabel(groupId: string): string {
   if (groupId === "staged") return "Staged";
-  if (groupId === "changes") return "Working tree";
-  if (groupId === "conflicts") return "Conflicts";
-  if (groupId === "untracked") return "Untracked";
-  if (groupId === "ignored") return "Ignored";
-  return "Submodules";
+  if (groupId === "unstaged") return "Unstaged";
+  return "Changes";
 }
 
 function historyRef(status: GitStatus): string {

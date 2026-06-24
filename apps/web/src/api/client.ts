@@ -8,6 +8,7 @@ import type {
   ApiCreateSession,
   ApiGitBlameQuery,
   ApiGitCommit,
+  ApiGitCommitFilesQuery,
   ApiGitContext,
   ApiGitFileDiffQuery,
   ApiGitHistoryQuery,
@@ -30,6 +31,7 @@ import type {
   FileWriteResult,
   GitBlame,
   GitBranchList,
+  GitCommitFiles,
   GitCommitPage,
   GitFileDiff,
   GitJob,
@@ -101,7 +103,7 @@ export interface RoamApiClient {
   deleteSession(
     sessionId: string,
     options?: { worktree?: "keep" | "remove" },
-  ): Promise<void>;
+  ): Promise<{ job?: GitJob }>;
   fetchMessageAttachmentContent(
     sessionId: string,
     attachmentId: string,
@@ -127,6 +129,7 @@ export interface RoamApiClient {
   fetchGitDiff(query: ApiGitFileDiffQuery): Promise<GitFileDiff>;
   fetchGitBlame(query: ApiGitBlameQuery): Promise<GitBlame>;
   fetchGitHistory(query: ApiGitHistoryQuery): Promise<GitCommitPage>;
+  fetchGitCommitFiles(query: ApiGitCommitFilesQuery): Promise<GitCommitFiles>;
   fetchGitBranches(context: ApiGitContext): Promise<GitBranchList>;
   fetchGitJobs(projectId: string): Promise<GitJob[]>;
   initGitRepository(input: ApiGitInit): Promise<GitJob>;
@@ -223,6 +226,10 @@ interface GitBlameResponse {
 
 interface GitHistoryResponse {
   result: GitCommitPage;
+}
+
+interface GitCommitFilesResponse {
+  result: GitCommitFiles;
 }
 
 interface GitBranchesResponse {
@@ -515,11 +522,13 @@ export function createRoamApiClient(
         query.set("worktree", options.worktree);
       }
       const suffix = query.size > 0 ? `?${query.toString()}` : "";
-      await request<void>(
-        `/v1/sessions/${encodeURIComponent(sessionId)}${suffix}`,
-        {
-          method: "DELETE",
-        },
+      return (
+        (await request<{ job?: GitJob }>(
+          `/v1/sessions/${encodeURIComponent(sessionId)}${suffix}`,
+          {
+            method: "DELETE",
+          },
+        )) ?? {}
       );
     },
 
@@ -626,6 +635,17 @@ export function createRoamApiClient(
         method: "POST",
         body: JSON.stringify(query),
       });
+      return result;
+    },
+
+    async fetchGitCommitFiles(query) {
+      const { result } = await request<GitCommitFilesResponse>(
+        "/v1/git/commit-files",
+        {
+          method: "POST",
+          body: JSON.stringify(query),
+        },
+      );
       return result;
     },
 

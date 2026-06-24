@@ -41,14 +41,23 @@ export async function createServer(
   authService.initialize({ resetOwner: config.resetOwner });
   let insecureHttpWarningLogged = false;
   let rpc: RunnerRpcClient;
+  let gitJobRunner: GitJobRunner | undefined;
   const hub = new ConnectionHub(store, {
     onRunnerReplaced: (runnerId) => {
+      gitJobRunner?.failPendingForRunner(
+        runnerId,
+        new RunnerRpcError("runner reconnected", "runner_offline"),
+      );
       rpc.rejectPendingForRunner(
         runnerId,
         new RunnerRpcError("runner reconnected", "runner_offline"),
       );
     },
     onRunnerDisconnected: (runnerId) => {
+      gitJobRunner?.failPendingForRunner(
+        runnerId,
+        new RunnerRpcError("runner disconnected", "runner_offline"),
+      );
       rpc.rejectPendingForRunner(
         runnerId,
         new RunnerRpcError("runner disconnected", "runner_offline"),
@@ -59,11 +68,11 @@ export async function createServer(
   const approvalService = new ApprovalService(store, hub);
   const artifactService = new ArtifactService(store, artifacts, hub);
   const gitMutationQueue = new GitMutationQueue();
-  const gitJobRunner = new GitJobRunner(
+  gitJobRunner = new GitJobRunner(
     store,
     hub,
     rpc,
-    config.runnerRpcTimeoutMs,
+    config.gitJobTimeoutMs,
     gitMutationQueue,
   );
   const sessionService = new SessionCommandService(
@@ -86,7 +95,13 @@ export async function createServer(
     config.runnerRpcTimeoutMs,
     gitJobRunner,
   );
-  const runnerEventService = new RunnerEventService(store, hub, rpc);
+  const runnerEventService = new RunnerEventService(
+    store,
+    hub,
+    rpc,
+    gitJobRunner,
+    (job) => sessionService.archiveSessionAfterWorktreeRemoval(job),
+  );
 
   const context: AppContext = {
     store,

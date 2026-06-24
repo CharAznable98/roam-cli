@@ -21,6 +21,8 @@ import {
 } from "../src/infra/runner-rpc-client.js";
 import { ServerStore } from "../src/infra/sqlite-store.js";
 import { ApprovalService } from "../src/modules/approvals/approval-service.js";
+import { GitJobRunner } from "../src/modules/git/git-job-runner.js";
+import { GitService } from "../src/modules/git/git-service.js";
 import { RunnerEventService } from "../src/modules/runners/runner-event-service.js";
 import { ArtifactService } from "../src/modules/artifacts/artifact-service.js";
 import { SessionCommandService } from "../src/modules/sessions/session-command-service.js";
@@ -641,8 +643,22 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const runnerEvents = new RunnerEventService(store, hub, rpc);
-    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 100);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      100,
+      gitJobs,
+    );
+    const runnerEvents = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      gitJobs,
+      (job) => service.archiveSessionAfterWorktreeRemoval(job),
+    );
     store.createProject(projectRecord());
     store.createSession({
       ...sessionRecord(),
@@ -675,10 +691,23 @@ describe("SessionCommandService", () => {
       projectId: "project-1",
       context: { kind: "session_worktree", sessionId: "session-1" },
       cwd: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      jobOperation: "archive_remove_worktree",
     });
     expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
 
-    const now = new Date().toISOString();
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      value: {
+        job: expect.objectContaining({
+          id: removeCommand?.requestId,
+          operation: "archive_remove_worktree",
+          status: "queued",
+        }),
+      },
+    });
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+
+    const now = "2000-01-01T00:00:00.000Z";
     runnerEvents.handle({
       type: "gitJobResult",
       job: {
@@ -686,7 +715,7 @@ describe("SessionCommandService", () => {
         projectId: "project-1",
         sessionId: "session-1",
         contextKind: "session_worktree",
-        operation: "remove_worktree",
+        operation: "archive_remove_worktree",
         status: "succeeded",
         createdAt: now,
         startedAt: now,
@@ -694,15 +723,17 @@ describe("SessionCommandService", () => {
       },
     });
 
-    await expect(pending).resolves.toMatchObject({ ok: true });
-    expect(store.getSession("session-1")).toMatchObject({
+    const archived = store.getSession("session-1");
+    expect(archived).toMatchObject({
       archivedAt: expect.any(String),
       worktreeDeletedAt: expect.any(String),
     });
+    expect(archived?.archivedAt).not.toBe(now);
+    expect(archived?.worktreeDeletedAt).not.toBe(now);
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
         id: removeCommand?.requestId,
-        operation: "remove_worktree",
+        operation: "archive_remove_worktree",
         status: "succeeded",
       }),
     );
@@ -716,6 +747,140 @@ describe("SessionCommandService", () => {
         }),
       }),
     );
+  });
+
+  it("rejects Git reads for a session while archive worktree removal is pending", async () => {
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const approvals = new ApprovalService(store, hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 100);
+    const sessionService = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      100,
+      gitJobs,
+    );
+    const gitService = new GitService(store, hub, rpc, 100, gitJobs);
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+      gitBranchName: "session-1",
+    });
+
+    const pending = sessionService.deleteSession("session-1", {
+      worktree: "remove",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const removeCommandCount = runnerMessages.filter(
+      (message) => message.type === "gitRemoveWorktree",
+    ).length;
+
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      value: {
+        job: expect.objectContaining({
+          operation: "archive_remove_worktree",
+          status: "queued",
+        }),
+      },
+    });
+    await expect(
+      gitService.branches({
+        kind: "session_worktree",
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "worktree_not_available",
+    });
+    expect(
+      runnerMessages.filter((message) => message.type === "gitRemoveWorktree"),
+    ).toHaveLength(removeCommandCount);
+    expect(
+      runnerMessages.filter((message) => message.type === "gitBranchList"),
+    ).toEqual([]);
+  });
+
+  it("times out unanswered queued Git jobs and releases the mutation queue", async () => {
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 5);
+    const runnerEvents = new RunnerEventService(store, hub, rpc, gitJobs);
+    const gitService = new GitService(store, hub, rpc, 5, gitJobs);
+    const context = { kind: "project" as const, projectId: "project-1" };
+    store.createProject(projectRecord());
+
+    await expect(
+      gitService.stage({ context, paths: ["README.md"] }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { job: expect.objectContaining({ status: "queued" }) },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "gitStagePaths",
+      paths: ["README.md"],
+    });
+    const stageCommand = runnerMessages.at(-1);
+    if (stageCommand?.type !== "gitStagePaths") {
+      throw new Error("stage command was not sent");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        operation: "stage",
+        status: "failed",
+        errorCode: "runner_timeout",
+      }),
+    );
+    const lateFinishedAt = new Date().toISOString();
+    runnerEvents.handle({
+      type: "gitJobResult",
+      job: {
+        id: stageCommand.requestId,
+        projectId: "project-1",
+        contextKind: "project",
+        operation: "stage",
+        status: "succeeded",
+        createdAt: lateFinishedAt,
+        startedAt: lateFinishedAt,
+        finishedAt: lateFinishedAt,
+      },
+    });
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: stageCommand.requestId,
+        operation: "stage",
+        status: "failed",
+        errorCode: "runner_timeout",
+      }),
+    );
+
+    await expect(
+      gitService.discard({ context, paths: ["README.md"] }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { job: expect.objectContaining({ status: "queued" }) },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "gitDiscardPaths",
+      paths: ["README.md"],
+    });
   });
 
   it.each(["pending", "running", "waiting_approval"] satisfies SessionStatus[])(
@@ -737,7 +902,8 @@ describe("SessionCommandService", () => {
         ...sessionRecord(),
         status,
         executionMode: "managed_worktree",
-        executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+        executionFolder:
+          "/workspace/.roam-runner/worktrees/project-1/session-1",
         cwd: "/workspace",
         gitBranchName: "session-1",
       });
@@ -747,8 +913,7 @@ describe("SessionCommandService", () => {
       ).resolves.toMatchObject({
         ok: false,
         error: "worktree_remove_failed",
-        message:
-          "Stop the session before archiving and removing its worktree.",
+        message: "Stop the session before archiving and removing its worktree.",
         code: "session_active",
       });
       expect(runnerMessages).toEqual([]);
@@ -764,8 +929,22 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const runnerEvents = new RunnerEventService(store, hub, rpc);
-    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 100);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      100,
+      gitJobs,
+    );
+    const runnerEvents = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      gitJobs,
+      (job) => service.archiveSessionAfterWorktreeRemoval(job),
+    );
     store.createProject(projectRecord());
     store.createSession({
       ...sessionRecord(),
@@ -797,7 +976,7 @@ describe("SessionCommandService", () => {
         projectId: "project-1",
         sessionId: "session-1",
         contextKind: "session_worktree",
-        operation: "remove_worktree",
+        operation: "archive_remove_worktree",
         status: "failed",
         createdAt: now,
         startedAt: now,
@@ -808,13 +987,25 @@ describe("SessionCommandService", () => {
     });
 
     await expect(pending).resolves.toMatchObject({
-      ok: false,
-      error: "worktree_remove_failed",
-      message: "Directory is not a git repository",
-      code: "GIT_OPERATION_ERROR",
+      ok: true,
+      value: {
+        job: expect.objectContaining({
+          id: removeCommand?.requestId,
+          operation: "archive_remove_worktree",
+        }),
+      },
     });
     expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: removeCommand?.requestId,
+        operation: "archive_remove_worktree",
+        status: "failed",
+        errorCode: "GIT_OPERATION_ERROR",
+        errorSummary: "Directory is not a git repository",
+      }),
+    );
   });
 
   it("keeps managed sessions visible when archive worktree removal cannot reach the runner", async () => {
@@ -844,7 +1035,7 @@ describe("SessionCommandService", () => {
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
-        operation: "remove_worktree",
+        operation: "archive_remove_worktree",
         status: "failed",
         errorCode: "runner_offline",
         errorSummary: "runner is offline",
@@ -852,7 +1043,7 @@ describe("SessionCommandService", () => {
     );
   });
 
-  it("marks worktrees deleted when an archive removal succeeds after timeout", async () => {
+  it("archives worktree sessions when a legacy runner reports remove worktree success", async () => {
     const runnerMessages: RunnerCommand[] = [];
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
@@ -860,8 +1051,22 @@ describe("SessionCommandService", () => {
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
     const rpc = new RunnerRpcClient(hub);
     const approvals = new ApprovalService(store, hub);
-    const runnerEvents = new RunnerEventService(store, hub, rpc);
-    const service = new SessionCommandService(store, hub, approvals, rpc, 5);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 5);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      rpc,
+      5,
+      gitJobs,
+    );
+    const runnerEvents = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      gitJobs,
+      (job) => service.archiveSessionAfterWorktreeRemoval(job),
+    );
     store.createProject(projectRecord());
     store.createSession({
       ...sessionRecord(),
@@ -886,15 +1091,19 @@ describe("SessionCommandService", () => {
     expect(removeCommand).toBeDefined();
 
     await expect(pending).resolves.toMatchObject({
-      ok: false,
-      error: "worktree_remove_failed",
-      message: "runner request timed out",
-      code: "runner_timeout",
+      ok: true,
+      value: {
+        job: expect.objectContaining({
+          id: removeCommand?.requestId,
+          operation: "archive_remove_worktree",
+          status: "queued",
+        }),
+      },
     });
     expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
 
-    const now = new Date().toISOString();
+    const now = "2000-01-01T00:00:00.000Z";
     runnerEvents.handle({
       type: "gitJobResult",
       job: {
@@ -910,15 +1119,28 @@ describe("SessionCommandService", () => {
       },
     });
 
-    expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
-    expect(store.getSession("session-1")?.worktreeDeletedAt).toEqual(now);
+    const archived = store.getSession("session-1");
+    expect(archived).toMatchObject({
+      archivedAt: expect.any(String),
+      worktreeDeletedAt: expect.any(String),
+    });
+    expect(archived?.archivedAt).not.toBe(now);
+    expect(archived?.worktreeDeletedAt).not.toBe(now);
     expect(streamEvents).toContainEqual(
       expect.objectContaining({
         type: "session:updated",
         session: expect.objectContaining({
           id: "session-1",
-          worktreeDeletedAt: now,
+          archivedAt: expect.any(String),
+          worktreeDeletedAt: expect.any(String),
         }),
+      }),
+    );
+    expect(store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: removeCommand?.requestId,
+        operation: "archive_remove_worktree",
+        status: "succeeded",
       }),
     );
   });
