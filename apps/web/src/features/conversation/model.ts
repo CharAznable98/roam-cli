@@ -278,7 +278,6 @@ function pushTurnOutput(
     return;
   }
 
-  const intermediateItems = items.slice(0, finalAssistantIndex);
   const finalItem = items[finalAssistantIndex];
   if (!finalItem || finalItem.type !== "message") {
     for (const item of items) {
@@ -286,6 +285,15 @@ function pushTurnOutput(
     }
     return;
   }
+  const finalSegmentStartIndex = findAssistantSegmentStartIndex(
+    items,
+    finalAssistantIndex,
+  );
+  const intermediateItems = items.slice(0, finalSegmentStartIndex);
+  const finalSegmentItems = items.slice(
+    finalSegmentStartIndex,
+    finalAssistantIndex + 1,
+  );
   const trailingItems = items.slice(finalAssistantIndex + 1);
   if (intermediateItems.some((item) => item.type === "message")) {
     displayItems.push({
@@ -298,10 +306,26 @@ function pushTurnOutput(
       displayItems.push(item);
     }
   }
-  displayItems.push(finalItem);
+  for (const item of finalSegmentItems) {
+    displayItems.push(item);
+  }
   for (const item of trailingItems) {
     displayItems.push(item);
   }
+}
+
+function findAssistantSegmentStartIndex(
+  items: ConversationOutputItem[],
+  assistantIndex: number,
+): number {
+  let segmentStartIndex = assistantIndex;
+  while (
+    segmentStartIndex > 0 &&
+    items[segmentStartIndex - 1]?.type === "activityGroup"
+  ) {
+    segmentStartIndex -= 1;
+  }
+  return segmentStartIndex;
 }
 
 function findLastAssistantIndex(items: ConversationOutputItem[]): number {

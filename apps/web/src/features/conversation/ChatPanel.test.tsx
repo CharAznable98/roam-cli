@@ -186,7 +186,7 @@ describe("ChatPanel", () => {
       },
     ];
 
-    render(
+    const { container } = render(
       <ChatPanel
         session={baseSession}
         messages={[user, assistant]}
@@ -195,9 +195,25 @@ describe("ChatPanel", () => {
       />,
     );
 
+    const historicalActivityButton = screen.getByRole("button", {
+      name: "Activity (1)",
+    });
+    const latestActivityButton = screen.getByRole("button", {
+      name: "Running tests · 1 step",
+    });
     expect(screen.getByText("Activity (1)")).toBeInTheDocument();
     expect(screen.getByText("Running tests")).toBeInTheDocument();
     expect(screen.getByText("· 1 step")).toBeInTheDocument();
+    expect(
+      historicalActivityButton.querySelector(".lucide-loader-circle"),
+    ).toBeNull();
+    expect(historicalActivityButton.querySelector("svg")).not.toBeNull();
+    expect(
+      latestActivityButton.querySelector(".lucide-loader-circle"),
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll(".lucide-loader-circle.animate-spin"),
+    ).toHaveLength(1);
     expect(
       screen.queryByText("Reading apps/web/src/app/useRoamController.ts"),
     ).toBeNull();
@@ -323,17 +339,22 @@ describe("ChatPanel", () => {
       />,
     );
 
-    const intermediateLabel = screen.getByText("Intermediate output (3)");
+    const intermediateLabel = screen.getByText("Intermediate output (2)");
     const intermediateGroup = intermediateLabel.closest("details");
     expect(intermediateGroup).not.toBeNull();
     expect(intermediateGroup).toHaveClass("intermediate-group");
     expect(
       container.querySelectorAll(".message-list > .activity-group"),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
     expect(
       intermediateGroup!.querySelectorAll(".activity-group.nested"),
-    ).toHaveLength(2);
-    expect(within(intermediateGroup!).getAllByRole("button")).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(within(intermediateGroup!).getAllByRole("button")).toHaveLength(1);
+    expect(
+      container.querySelector(
+        ".message-list > .activity-group .activity-group-trigger",
+      ),
+    ).toHaveAttribute("aria-label", "Activity (1)");
     expect(screen.getByText("final answer")).toBeInTheDocument();
 
     expect(
