@@ -47,8 +47,9 @@ describe("SessionManager", () => {
       expect(
         events.some(
           (event) =>
-            event.type === "assistantMessage" &&
-            event.content.includes("codex answer: hello"),
+            event.type === "assistantOutput" &&
+            /^codex-run-[^:]+:item_1$/.test(event.outputId) &&
+            (event.content ?? "").includes("codex answer: hello"),
         ),
       ).toBe(true);
       expect(events).toContainEqual({

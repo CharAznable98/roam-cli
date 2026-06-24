@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentActivity,
@@ -60,6 +60,7 @@ interface MessageRow {
   role: ChatRole;
   content: string;
   encrypted: number;
+  streaming: number;
   created_at: string;
 }
 
@@ -534,8 +535,8 @@ export class ServerStore {
   addMessage(message: Message): Message {
     this.db
       .prepare(
-        `INSERT INTO messages (id, session_id, role, content, encrypted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, role, content, encrypted, streaming, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.id,
@@ -543,47 +544,63 @@ export class ServerStore {
         message.role,
         message.content,
         message.encrypted ? 1 : 0,
+        message.streaming ? 1 : 0,
         message.createdAt,
       );
     return message;
   }
 
-  appendAssistantToken(
+  applyAssistantOutput(
     sessionId: string,
-    content: string,
+    outputId: string,
+    content: string | undefined,
+    mode: "append" | "replace",
+    done: boolean,
     createdAt: string,
     encrypted: boolean,
-  ): Message {
-    const streamPrefix = `stream_${sessionId}_`;
-    const latest = this.db
-      .prepare(
-        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-      )
-      .get(sessionId) as MessageRow | undefined;
-    if (
-      latest?.role === "assistant" &&
-      latest.id.startsWith(streamPrefix) &&
-      Boolean(latest.encrypted) === encrypted
-    ) {
-      const id = latest.id;
-      this.db
-        .prepare("UPDATE messages SET content = content || ? WHERE id = ?")
-        .run(content, id);
-      return (
-        this.listMessages(sessionId).find((message) => message.id === id) ??
-        toMessage(latest)
-      );
+  ): { message: Message; created: boolean } | undefined {
+    const id = streamMessageId(sessionId, outputId);
+    const existing = this.db
+      .prepare("SELECT * FROM messages WHERE id = ? AND session_id = ?")
+      .get(id, sessionId) as MessageRow | undefined;
+    if (existing) {
+      if (mode === "replace" && content !== undefined) {
+        this.db
+          .prepare(
+            "UPDATE messages SET content = ?, streaming = ? WHERE id = ?",
+          )
+          .run(content, done ? 0 : 1, id);
+      } else if (content !== undefined && content.length > 0) {
+        this.db
+          .prepare(
+            "UPDATE messages SET content = content || ?, streaming = ? WHERE id = ?",
+          )
+          .run(content, done ? 0 : 1, id);
+      } else {
+        this.db
+          .prepare("UPDATE messages SET streaming = ? WHERE id = ?")
+          .run(done ? 0 : 1, id);
+      }
+      return {
+        message:
+          this.listMessages(sessionId).find((message) => message.id === id) ??
+          toMessage(existing),
+        created: false,
+      };
     }
-    const id = `${streamPrefix}${randomUUID()}`;
+    if (content === undefined) {
+      return undefined;
+    }
     const message: Message = {
       id,
       sessionId,
       role: "assistant",
       content,
       encrypted,
+      ...(done ? {} : { streaming: true }),
       createdAt,
     };
-    return this.addMessage(message);
+    return { message: this.addMessage(message), created: true };
   }
 
   listMessages(sessionId: string): Message[] {
@@ -893,6 +910,7 @@ export class ServerStore {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         encrypted INTEGER NOT NULL DEFAULT 0,
+        streaming INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
@@ -1013,6 +1031,11 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
+    this.addColumnIfMissing(
+      "messages",
+      "streaming",
+      "INTEGER NOT NULL DEFAULT 0",
+    );
     this.addColumnIfMissing("approvals", "resolved_by", "TEXT");
     this.addColumnIfMissing("approvals", "resolver_session_id", "TEXT");
   }
@@ -1075,8 +1098,14 @@ function toMessage(row: MessageRow): Message {
     role: row.role,
     content: row.content,
     encrypted: Boolean(row.encrypted),
+    ...(row.streaming ? { streaming: true } : {}),
     createdAt: row.created_at,
   };
+}
+
+function streamMessageId(sessionId: string, outputId: string): string {
+  const digest = createHash("sha256").update(outputId).digest("hex").slice(0, 24);
+  return `stream_${sessionId}_${digest}`;
 }
 
 function toAgentActivity(row: AgentActivityRow): AgentActivity {

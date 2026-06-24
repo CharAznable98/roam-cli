@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -92,6 +93,12 @@ class ClaudeCodeSession implements AgentSession {
   #sawAssistantOutput = false;
   #sawStreamText = false;
   #needsFinalOutputFallback = false;
+  #activeOutputId: string | undefined;
+  #lastOutputId: string | undefined;
+  #outputSequence = 0;
+  #runSequence = 0;
+  #runOutputPrefix = `claude-run-${randomUUID()}-0`;
+  readonly #streamedOutputIds = new Set<string>();
 
   public constructor(context: AgentSessionContext) {
     this.#context = context;
@@ -181,6 +188,10 @@ class ClaudeCodeSession implements AgentSession {
     this.#sawAssistantOutput = false;
     this.#sawStreamText = false;
     this.#needsFinalOutputFallback = false;
+    this.#activeOutputId = undefined;
+    this.#lastOutputId = undefined;
+    this.#runOutputPrefix = `claude-run-${randomUUID()}-${++this.#runSequence}`;
+    this.#streamedOutputIds.clear();
     const sdkQuery = query({
       prompt: promptForInput(input),
       options: this.#options(),
@@ -266,26 +277,77 @@ class ClaudeCodeSession implements AgentSession {
       }
     }
     if (message.type === "stream_event") {
+      if (streamEventType(message.event) === "message_start") {
+        const outputId =
+          this.#scopedOutputId(messageStartOutputId(message.event)) ??
+          this.#nextOutputId();
+        this.#activeOutputId = outputId;
+        this.#lastOutputId = outputId;
+        return;
+      }
       const text = partialText(message.event);
       if (text.length > 0) {
-        if (await this.#emit({ type: "token", content: text })) {
+        const outputId =
+          this.#activeOutputId ?? this.#lastOutputId ?? this.#nextOutputId();
+        this.#activeOutputId = outputId;
+        this.#lastOutputId = outputId;
+        if (
+          await this.#emit({
+            type: "assistantOutput",
+            outputId,
+            content: text,
+            mode: "append",
+            done: false,
+          })
+        ) {
           this.#sawAssistantOutput = true;
           this.#sawStreamText = true;
+          this.#streamedOutputIds.add(outputId);
         } else {
           this.#needsFinalOutputFallback = true;
         }
+      }
+      if (streamEventType(message.event) === "message_stop") {
+        const outputId = this.#activeOutputId ?? this.#lastOutputId;
+        if (outputId !== undefined && this.#streamedOutputIds.has(outputId)) {
+          await this.#emit({
+            type: "assistantOutput",
+            outputId,
+            mode: "append",
+            done: true,
+          });
+        }
+        this.#activeOutputId = undefined;
       }
       return;
     }
     if (message.type === "assistant") {
       const text = textFromContent(message.message.content);
       if (text.length > 0) {
-        if (!this.#sawStreamText || this.#needsFinalOutputFallback) {
-          if (await this.#emit({ type: "message", content: text })) {
-            this.#sawAssistantOutput = true;
-            this.#needsFinalOutputFallback = false;
-          }
+        const streamedOutputId =
+          this.#lastOutputId !== undefined &&
+          this.#streamedOutputIds.has(this.#lastOutputId)
+            ? this.#lastOutputId
+            : undefined;
+        const outputId =
+          streamedOutputId ??
+          this.#scopedOutputId(message.message.id) ??
+          this.#activeOutputId ??
+          this.#nextOutputId();
+        this.#lastOutputId = outputId;
+        if (
+          await this.#emit({
+            type: "assistantOutput",
+            outputId,
+            content: text,
+            mode: "replace",
+            done: true,
+          })
+        ) {
+          this.#sawAssistantOutput = true;
+          this.#needsFinalOutputFallback = false;
         }
+        this.#activeOutputId = undefined;
       }
       if (message.error) {
         await this.#emit({
@@ -302,7 +364,16 @@ class ClaudeCodeSession implements AgentSession {
         (!this.#sawAssistantOutput || this.#needsFinalOutputFallback) &&
         message.result.length > 0
       ) {
-        if (await this.#emit({ type: "message", content: message.result })) {
+        const outputId = this.#lastOutputId ?? this.#nextOutputId();
+        if (
+          await this.#emit({
+            type: "assistantOutput",
+            outputId,
+            content: message.result,
+            mode: "replace",
+            done: true,
+          })
+        ) {
           this.#sawAssistantOutput = true;
           this.#needsFinalOutputFallback = false;
         }
@@ -335,6 +406,17 @@ class ClaudeCodeSession implements AgentSession {
       // session result.
       return false;
     }
+  }
+
+  #nextOutputId(): string {
+    this.#outputSequence += 1;
+    return `${this.#runOutputPrefix}:claude-output-${this.#outputSequence}`;
+  }
+
+  #scopedOutputId(outputId: string | undefined): string | undefined {
+    return outputId === undefined
+      ? undefined
+      : `${this.#runOutputPrefix}:${outputId}`;
   }
 }
 
@@ -504,6 +586,22 @@ function partialText(event: unknown): string {
     return "";
   }
   return typeof delta.text === "string" ? delta.text : "";
+}
+
+function streamEventType(event: unknown): string | undefined {
+  return isRecord(event) && typeof event.type === "string"
+    ? event.type
+    : undefined;
+}
+
+function messageStartOutputId(event: unknown): string | undefined {
+  if (!isRecord(event) || event.type !== "message_start") {
+    return undefined;
+  }
+  const message = event.message;
+  return isRecord(message) && typeof message.id === "string"
+    ? message.id
+    : undefined;
 }
 
 function textFromContent(content: unknown): string {

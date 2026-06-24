@@ -73,20 +73,6 @@ export class RunnerEventService {
       return;
     }
 
-    if (event.type === "assistantMessage") {
-      const message: Message = {
-        id: newId("message"),
-        sessionId: event.sessionId,
-        role: "assistant",
-        content: event.content,
-        encrypted: event.encrypted,
-        createdAt: this.nextOutputTimestamp(),
-      };
-      this.store.addMessage(message);
-      this.hub.broadcast({ type: "message:created", message });
-      return;
-    }
-
     if (event.type === "agentActivity") {
       this.addActivity({
         sessionId: event.sessionId,
@@ -97,18 +83,27 @@ export class RunnerEventService {
       return;
     }
 
-    if (event.type === "token") {
-      this.store.appendAssistantToken(
+    if (event.type === "assistantOutput") {
+      const result = this.store.applyAssistantOutput(
         event.sessionId,
+        event.outputId,
         event.content,
-        this.nextOutputTimestamp(),
+        event.mode,
+        event.done,
+        this.nextOutputTimestamp(event.sessionId),
         event.encrypted,
       );
+      if (result === undefined) {
+        return;
+      }
+      const appendingExistingOutput =
+        !result.created && event.mode === "append";
       this.hub.broadcast({
-        type: "token",
-        sessionId: event.sessionId,
-        content: event.content,
-        encrypted: event.encrypted,
+        type: result.created ? "message:created" : "message:updated",
+        message: appendingExistingOutput
+          ? { ...result.message, content: event.content ?? "" }
+          : result.message,
+        ...(appendingExistingOutput ? { contentMode: "append" } : {}),
       });
       return;
     }
@@ -273,8 +268,16 @@ export class RunnerEventService {
     return activity;
   }
 
-  private nextOutputTimestamp(): string {
-    const next = Math.max(Date.now(), this.lastOutputTimestampMs + 1);
+  private nextOutputTimestamp(sessionId?: string): string {
+    const latestSessionMessageTime =
+      sessionId === undefined
+        ? Number.NaN
+        : Date.parse(this.store.listMessages(sessionId).at(-1)?.createdAt ?? "");
+    const lowerBounds = [Date.now(), this.lastOutputTimestampMs + 1];
+    if (Number.isFinite(latestSessionMessageTime)) {
+      lowerBounds.push(latestSessionMessageTime + 1);
+    }
+    const next = Math.max(...lowerBounds);
     this.lastOutputTimestampMs = next;
     return new Date(next).toISOString();
   }

@@ -174,8 +174,13 @@ describe("claude code agent plugin", () => {
         threadId: "claude-session-1",
       });
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({
         type: "status",
@@ -241,8 +246,8 @@ describe("claude code agent plugin", () => {
     expect(
       events.some(
         (event) =>
-          event.type === "message" &&
-          event.content.startsWith("Claude Code task"),
+          event.type === "assistantOutput" &&
+          (event.content ?? "").startsWith("Claude Code task"),
       ),
     ).toBe(false);
   });
@@ -294,8 +299,13 @@ describe("claude code agent plugin", () => {
     });
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
         content: "Follow-up response",
+        mode: "replace",
+        done: true,
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-2$/,
+        ),
       });
       expect(
         events.filter(
@@ -407,6 +417,7 @@ describe("claude code agent plugin", () => {
         {
           type: "assistant",
           message: {
+            id: "msg_final",
             content: [{ type: "text", text: "Claude response" }],
           },
         },
@@ -425,18 +436,41 @@ describe("claude code agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "token",
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
+        mode: "append",
+        done: false,
       });
       expect(events).toContainEqual({
         type: "status",
         status: "completed",
       });
     });
-    expect(events).not.toContainEqual({
-      type: "message",
-      content: "Claude response",
-    });
+    expect(
+      events.filter((event) => event.type === "assistantOutput"),
+    ).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
+        content: "Claude response",
+        mode: "append",
+        done: false,
+      },
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
+        content: "Claude response",
+        mode: "replace",
+        done: true,
+      },
+    ]);
   });
 
   it("emits final assistant output when stream token delivery fails", async () => {
@@ -463,7 +497,10 @@ describe("claude code agent plugin", () => {
       .createSession(
         makeContext({
           emit: async (event) => {
-            if (event.type === "token") {
+            if (
+              event.type === "assistantOutput" &&
+              event.mode === "append"
+            ) {
               throw new Error("sink down");
             }
             events.push(event);
@@ -474,8 +511,13 @@ describe("claude code agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
         content: "Claude response",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({
         type: "status",
@@ -483,9 +525,108 @@ describe("claude code agent plugin", () => {
       });
     });
     expect(events).not.toContainEqual({
-      type: "token",
+      type: "assistantOutput",
       content: "Claude response",
+      mode: "append",
+      done: false,
     });
+  });
+
+  it("scopes fallback output ids across session instances", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const assistantMessage = (text: string) => ({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text }],
+      },
+    });
+    sdk.query
+      .mockReturnValueOnce(fakeQuery([assistantMessage("First")]))
+      .mockReturnValueOnce(fakeQuery([assistantMessage("Second")]));
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter((event) => event.type === "assistantOutput"),
+      ).toHaveLength(2);
+    });
+
+    const outputIds = events
+      .filter((event) => event.type === "assistantOutput")
+      .map((event) => event.outputId);
+    expect(outputIds[0]).toMatch(/^claude-run-[^:]+:claude-output-1$/);
+    expect(outputIds[1]).toMatch(/^claude-run-[^:]+:claude-output-1$/);
+    expect(outputIds[0]).not.toBe(outputIds[1]);
+  });
+
+  it("allocates fresh fallback output ids for separate assistant messages in one run", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const assistantMessage = (text: string) => ({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text }],
+      },
+    });
+    sdk.query.mockReturnValue(
+      fakeQuery([assistantMessage("First"), assistantMessage("Second")]),
+    );
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter((event) => event.type === "assistantOutput"),
+      ).toHaveLength(2);
+    });
+
+    expect(
+      events.filter((event) => event.type === "assistantOutput"),
+    ).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
+        content: "First",
+        mode: "replace",
+        done: true,
+      },
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-2$/,
+        ),
+        content: "Second",
+        mode: "replace",
+        done: true,
+      },
+    ]);
   });
 
   it("passes image attachments through SDK user-message content blocks", async () => {

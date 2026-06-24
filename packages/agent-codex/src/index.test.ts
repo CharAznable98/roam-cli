@@ -126,8 +126,15 @@ describe("codex agent plugin", () => {
     );
 
     expect(result.threadId).toBe("codex-thread-1");
-    expect(result.text).toBe("");
-    expect(result.messages).toEqual(["Projects:\n- roam-cli"]);
+    expect(result.assistantOutputs).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_1$/),
+        content: "Projects:\n- roam-cli",
+        mode: "replace",
+        done: true,
+      },
+    ]);
   });
 
   it("keeps multiple completed codex messages separated", () => {
@@ -141,7 +148,36 @@ describe("codex agent plugin", () => {
       ].join("\n"),
     );
 
-    expect(result.messages).toEqual(["first", "second"]);
+    expect(result.assistantOutputs).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_1$/),
+        content: "first",
+        mode: "replace",
+        done: true,
+      },
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_2$/),
+        content: "second",
+        mode: "replace",
+        done: true,
+      },
+    ]);
+  });
+
+  it("scopes codex item ids per parser run", () => {
+    const first = new CodexJsonParser();
+    const second = new CodexJsonParser();
+    const payload =
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"answer"}}\n';
+
+    const firstOutputId = first.feed(payload).assistantOutputs?.[0]?.outputId;
+    const secondOutputId = second.feed(payload).assistantOutputs?.[0]?.outputId;
+
+    expect(firstOutputId).toMatch(/^codex-run-[^:]+:item_1$/);
+    expect(secondOutputId).toMatch(/^codex-run-[^:]+:item_1$/);
+    expect(firstOutputId).not.toBe(secondOutputId);
   });
 
   it("extracts approval directives from codex assistant text", () => {
@@ -419,8 +455,11 @@ describe("codex agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_1$/),
         content: "stdin closed",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({ type: "status", status: "completed" });
     });
@@ -489,8 +528,11 @@ describe("codex agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
-        type: "message",
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_2$/),
         content: "approval response: approval-1:true",
+        mode: "replace",
+        done: true,
       });
       expect(events).toContainEqual({ type: "status", status: "completed" });
     });

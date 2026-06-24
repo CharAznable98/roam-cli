@@ -12,11 +12,7 @@ import type {
   ServerEvent,
   Session,
 } from "@roamcli/shared/protocol";
-import {
-  appendTokenMessage,
-  type UiMessage,
-  upsertMessage,
-} from "../features/conversation/model";
+import { type UiMessage, upsertMessage } from "../features/conversation/model";
 import {
   appliedPatchApprovalIds,
   extractPatchHunks,
@@ -781,6 +777,7 @@ function reconcileStreamMessage(
   return {
     messages: messages.filter((_, index) => index !== placeholderIndex),
     message:
+      message.streaming === true &&
       placeholder.content.length > message.content.length
         ? { ...message, content: placeholder.content }
         : message,
@@ -862,6 +859,9 @@ function preserveLongerStreamContent(
   if (!isPersistedStreamMessage(message)) {
     return message;
   }
+  if (message.streaming !== true) {
+    return message;
+  }
 
   const existingMessage = messages.find((item) => item.id === message.id);
   if (
@@ -871,6 +871,26 @@ function preserveLongerStreamContent(
     return { ...message, content: existingMessage.content };
   }
   return message;
+}
+
+function appendMessageDelta(
+  messages: UiMessage[],
+  update: Message,
+): UiMessage[] {
+  const existingMessage = messages.find((item) => item.id === update.id);
+  if (!existingMessage) {
+    return upsertMessage(messages, update);
+  }
+
+  const { streaming: _existingStreaming, ...existingWithoutStreaming } =
+    existingMessage;
+  const nextMessage: UiMessage = {
+    ...existingWithoutStreaming,
+    ...update,
+    content: existingMessage.content + update.content,
+    ...(update.streaming === true ? { streaming: true } : {}),
+  };
+  return upsertMessage(messages, nextMessage);
 }
 
 function isPersistedStreamMessage(message: Message): boolean {
@@ -937,6 +957,15 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
       messages: upsertMessage(state.messages, event.message),
     };
   }
+  if (event.type === "message:updated") {
+    return {
+      ...state,
+      messages:
+        event.contentMode === "append"
+          ? appendMessageDelta(state.messages, event.message)
+          : upsertMessage(state.messages, event.message),
+    };
+  }
   if (event.type === "activity:created") {
     return {
       ...state,
@@ -950,16 +979,6 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
         state.messageAttachments,
         event.attachment,
         (item) => item.id,
-      ),
-    };
-  }
-  if (event.type === "token") {
-    return {
-      ...state,
-      messages: appendTokenMessage(
-        state.messages,
-        event.sessionId,
-        event.content,
       ),
     };
   }
