@@ -873,6 +873,26 @@ function preserveLongerStreamContent(
   return message;
 }
 
+function appendMessageDelta(
+  messages: UiMessage[],
+  update: Message,
+): UiMessage[] {
+  const existingMessage = messages.find((item) => item.id === update.id);
+  if (!existingMessage) {
+    return upsertMessage(messages, update);
+  }
+
+  const { streaming: _existingStreaming, ...existingWithoutStreaming } =
+    existingMessage;
+  const nextMessage: UiMessage = {
+    ...existingWithoutStreaming,
+    ...update,
+    content: existingMessage.content + update.content,
+    ...(update.streaming === true ? { streaming: true } : {}),
+  };
+  return upsertMessage(messages, nextMessage);
+}
+
 function isPersistedStreamMessage(message: Message): boolean {
   return (
     message.role === "assistant" &&
@@ -931,10 +951,19 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "session:deleted") {
     return removeSessionState(state, event.sessionId);
   }
-  if (event.type === "message:created" || event.type === "message:updated") {
+  if (event.type === "message:created") {
     return {
       ...state,
       messages: upsertMessage(state.messages, event.message),
+    };
+  }
+  if (event.type === "message:updated") {
+    return {
+      ...state,
+      messages:
+        event.contentMode === "append"
+          ? appendMessageDelta(state.messages, event.message)
+          : upsertMessage(state.messages, event.message),
     };
   }
   if (event.type === "activity:created") {

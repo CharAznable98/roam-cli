@@ -577,6 +577,58 @@ describe("claude code agent plugin", () => {
     expect(outputIds[0]).not.toBe(outputIds[1]);
   });
 
+  it("allocates fresh fallback output ids for separate assistant messages in one run", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const assistantMessage = (text: string) => ({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text }],
+      },
+    });
+    sdk.query.mockReturnValue(
+      fakeQuery([assistantMessage("First"), assistantMessage("Second")]),
+    );
+
+    await claudeCodeAgent
+      .createSession(
+        makeContext({
+          emit: async (event) => {
+            events.push(event);
+          },
+        }),
+      )
+      .start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter((event) => event.type === "assistantOutput"),
+      ).toHaveLength(2);
+    });
+
+    expect(
+      events.filter((event) => event.type === "assistantOutput"),
+    ).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-1$/,
+        ),
+        content: "First",
+        mode: "replace",
+        done: true,
+      },
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(
+          /^claude-run-[^:]+:claude-output-2$/,
+        ),
+        content: "Second",
+        mode: "replace",
+        done: true,
+      },
+    ]);
+  });
+
   it("passes image attachments through SDK user-message content blocks", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-claude-agent-"));
     const imagePath = join(workspace, "image.png");

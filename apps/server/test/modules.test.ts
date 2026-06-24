@@ -1291,7 +1291,8 @@ describe("RunnerEventService", () => {
     expect(streamEvents).toContainEqual(
       expect.objectContaining({
         type: "message:updated",
-        message: expect.objectContaining({ content: "partial more" }),
+        contentMode: "append",
+        message: expect.objectContaining({ content: " more" }),
       }),
     );
 

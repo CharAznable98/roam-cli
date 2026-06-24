@@ -297,6 +297,44 @@ describe("app reducer", () => {
     expect(withMessage.messages).toHaveLength(1);
   });
 
+  it("appends message update deltas from streamed server events", () => {
+    const created = appReducer(initialAppState, {
+      type: "serverEventReceived",
+      event: {
+        type: "message:created",
+        message: {
+          id: "stream_session-1_output",
+          sessionId: "session-1",
+          role: "assistant",
+          content: "partial",
+          encrypted: false,
+          streaming: true,
+          createdAt: "2026-06-05T00:00:00.000Z",
+        },
+      },
+    });
+
+    const updated = appReducer(created, {
+      type: "serverEventReceived",
+      event: {
+        type: "message:updated",
+        contentMode: "append",
+        message: {
+          id: "stream_session-1_output",
+          sessionId: "session-1",
+          role: "assistant",
+          content: " answer",
+          encrypted: false,
+          createdAt: "2026-06-05T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(updated.messages).toHaveLength(1);
+    expect(updated.messages[0]?.content).toBe("partial answer");
+    expect(updated.messages[0]?.streaming).toBeUndefined();
+  });
+
   it("reconciles client stream placeholders when merging persisted session details", () => {
     const next = appReducer(
       {

@@ -96,9 +96,14 @@ export class RunnerEventService {
       if (result === undefined) {
         return;
       }
+      const appendingExistingOutput =
+        !result.created && event.mode === "append";
       this.hub.broadcast({
         type: result.created ? "message:created" : "message:updated",
-        message: result.message,
+        message: appendingExistingOutput
+          ? { ...result.message, content: event.content ?? "" }
+          : result.message,
+        ...(appendingExistingOutput ? { contentMode: "append" } : {}),
       });
       return;
     }

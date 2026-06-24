@@ -333,7 +333,6 @@ class ClaudeCodeSession implements AgentSession {
           streamedOutputId ??
           this.#scopedOutputId(message.message.id) ??
           this.#activeOutputId ??
-          this.#lastOutputId ??
           this.#nextOutputId();
         this.#lastOutputId = outputId;
         if (

@@ -957,7 +957,11 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
   }),
   z.object({ type: z.literal("message:created"), message: MessageSchema }),
-  z.object({ type: z.literal("message:updated"), message: MessageSchema }),
+  z.object({
+    type: z.literal("message:updated"),
+    message: MessageSchema,
+    contentMode: z.enum(["append", "replace"]).optional(),
+  }),
   z.object({
     type: z.literal("activity:created"),
     activity: AgentActivitySchema,
