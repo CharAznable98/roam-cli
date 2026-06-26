@@ -3702,6 +3702,25 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("filters project prompt presets in Settings", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    expect(await settings.findByText("First preset")).toBeInTheDocument();
+    expect(settings.getByText("Second preset")).toBeInTheDocument();
+
+    fireEvent.change(settings.getByLabelText("Search prompt presets"), {
+      target: { value: "second" },
+    });
+
+    expect(settings.queryByText("First preset")).not.toBeInTheDocument();
+    expect(settings.getByText("Second preset")).toBeInTheDocument();
+    expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
   it("falls back to a remaining mobile project after archiving the selected project", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");

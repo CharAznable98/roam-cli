@@ -671,6 +671,7 @@ describe("server", () => {
 
     const firstId = first.json().preset.id as string;
     const secondId = second.json().preset.id as string;
+    const secondUpdatedAt = second.json().preset.updatedAt as string;
     const listed = await app.inject({
       method: "GET",
       url: "/v1/projects/project-1/prompt-presets",
@@ -689,6 +690,7 @@ describe("server", () => {
       payload: { title: "Updated first" },
     });
     expect(updated.statusCode).toBe(200);
+    const firstUpdatedAt = updated.json().preset.updatedAt as string;
     expect(updated.json().preset).toMatchObject({
       id: firstId,
       title: "Updated first",
@@ -706,10 +708,11 @@ describe("server", () => {
       reordered.json().presets.map((preset: any) => ({
         id: preset.id,
         order: preset.order,
+        updatedAt: preset.updatedAt,
       })),
     ).toEqual([
-      { id: firstId, order: 0 },
-      { id: secondId, order: 1 },
+      { id: firstId, order: 0, updatedAt: firstUpdatedAt },
+      { id: secondId, order: 1, updatedAt: secondUpdatedAt },
     ]);
 
     const duplicateOrder = await app.inject({

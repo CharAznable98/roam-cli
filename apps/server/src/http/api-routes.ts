@@ -700,7 +700,6 @@ function registerProjectRoutes(
       presets: context.store.reorderProjectPromptPresets(
         params.id,
         parsed.data.presetIds,
-        nowIso(),
       ),
     };
   });

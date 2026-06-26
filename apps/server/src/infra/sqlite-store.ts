@@ -500,15 +500,14 @@ export class ServerStore {
   reorderProjectPromptPresets(
     projectId: string,
     presetIds: string[],
-    updatedAt: string,
   ): ProjectPromptPreset[] {
     this.db.exec("BEGIN");
     try {
       const update = this.db.prepare(
-        "UPDATE project_prompt_presets SET sort_order = ?, updated_at = ? WHERE project_id = ? AND id = ?",
+        "UPDATE project_prompt_presets SET sort_order = ? WHERE project_id = ? AND id = ?",
       );
       presetIds.forEach((id, index) => {
-        update.run(index, updatedAt, projectId, id);
+        update.run(index, projectId, id);
       });
       this.db.exec("COMMIT");
     } catch (error) {

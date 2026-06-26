@@ -546,6 +546,32 @@
     justify-content: flex-end;
   }
 
+  .prompt-preset-search {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .prompt-preset-search input {
+    min-height: 36px;
+    width: 100%;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: #ffffff;
+    color: var(--text-main);
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+
+  .prompt-preset-search input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(78, 111, 255, 0.12);
+    outline: none;
+  }
+
   .prompt-preset-list {
     display: grid;
     gap: 8px;

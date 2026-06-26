@@ -1489,6 +1489,22 @@ function ProjectSettingsPanel({
     ? (promptPresetStates[selectedProjectId] ?? "idle")
     : "idle";
   const [refreshError, setRefreshError] = useState("");
+  const [presetSearchQuery, setPresetSearchQuery] = useState("");
+  const trimmedPresetSearchQuery = presetSearchQuery.trim().toLowerCase();
+  const filteredPresets = useMemo(() => {
+    if (!trimmedPresetSearchQuery) {
+      return presets;
+    }
+    return presets.filter((preset) => {
+      const title = preset.title.toLowerCase();
+      const content = preset.content.toLowerCase();
+      return (
+        title.includes(trimmedPresetSearchQuery) ||
+        content.includes(trimmedPresetSearchQuery)
+      );
+    });
+  }, [presets, trimmedPresetSearchQuery]);
+  const searchActive = trimmedPresetSearchQuery.length > 0;
 
   const refresh = useCallback(async () => {
     if (!selectedProjectId) {
@@ -1507,6 +1523,10 @@ function ProjectSettingsPanel({
       void refresh();
     }
   }, [promptPresetState, refresh, selectedProjectId]);
+
+  useEffect(() => {
+    setPresetSearchQuery("");
+  }, [selectedProjectId]);
 
   if (projects.length === 0) {
     return (
@@ -1584,10 +1604,27 @@ function ProjectSettingsPanel({
           </div>
         ) : null}
 
+        <label className="prompt-preset-search">
+          <span>Search prompt presets</span>
+          <input
+            type="search"
+            value={presetSearchQuery}
+            onChange={(event) => setPresetSearchQuery(event.target.value)}
+            placeholder="Search title or content"
+            disabled={!selectedProjectId || presets.length === 0}
+          />
+        </label>
+
         <PromptPresetList
           projectId={selectedProjectId}
-          presets={presets}
+          presets={filteredPresets}
           state={promptPresetState}
+          reorderEnabled={!searchActive}
+          emptyMessage={
+            searchActive
+              ? "No prompt presets match this search."
+              : "No prompt presets for this project."
+          }
           onEdit={(preset) => onEditPromptPreset(selectedProjectId, preset)}
           onDelete={(preset) =>
             void onDeletePromptPreset(selectedProjectId, preset)
@@ -1605,6 +1642,8 @@ function PromptPresetList({
   projectId,
   presets,
   state,
+  reorderEnabled,
+  emptyMessage,
   onEdit,
   onDelete,
   onReorder,
@@ -1612,6 +1651,8 @@ function PromptPresetList({
   projectId: string;
   presets: ProjectPromptPreset[];
   state: AsyncState;
+  reorderEnabled: boolean;
+  emptyMessage: string;
   onEdit: (preset: ProjectPromptPreset) => void;
   onDelete: (preset: ProjectPromptPreset) => void;
   onReorder: (presetIds: string[]) => Promise<void>;
@@ -1627,7 +1668,7 @@ function PromptPresetList({
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
-    if (reorderPending) {
+    if (reorderPending || !reorderEnabled) {
       return;
     }
     const { active, over } = event;
@@ -1645,9 +1686,11 @@ function PromptPresetList({
       (preset) => preset.id,
     );
     setReorderPending(true);
-    void onReorder(nextPresetIds).finally(() => {
-      setReorderPending(false);
-    });
+    void onReorder(nextPresetIds)
+      .finally(() => {
+        setReorderPending(false);
+      })
+      .catch(() => undefined);
   };
 
   if (!projectId) {
@@ -1661,7 +1704,7 @@ function PromptPresetList({
   if (presets.length === 0) {
     return (
       <div className="empty-state compact">
-        No prompt presets for this project.
+        {emptyMessage}
       </div>
     );
   }
@@ -1685,7 +1728,7 @@ function PromptPresetList({
             <SortablePromptPresetRow
               key={preset.id}
               preset={preset}
-              reorderDisabled={reorderPending}
+              reorderDisabled={reorderPending || !reorderEnabled}
               onEdit={() => onEdit(preset)}
               onDelete={() => onDelete(preset)}
             />
