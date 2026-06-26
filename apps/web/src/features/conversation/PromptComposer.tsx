@@ -350,10 +350,7 @@ export function PromptComposer({
   }, [promptPickerOpen]);
 
   useEffect(() => {
-    if (
-      promptPickerOpen &&
-      (promptPresetState === "idle" || promptPresetState === "error")
-    ) {
+    if (promptPickerOpen && promptPresetState === "idle") {
       void refreshPromptPresets();
     }
   }, [promptPickerOpen, promptPresetState]);
@@ -522,6 +519,12 @@ export function PromptComposer({
             <input
               value={promptPresetQuery}
               onChange={(event) => setPromptPresetQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
               placeholder="Search prompt presets"
               aria-label="Search prompt presets"
             />
@@ -568,6 +571,11 @@ export function PromptComposer({
                 event.preventDefault();
                 insertPromptPreset(preset);
               }}
+              onClick={(event) => {
+                if (event.detail === 0) {
+                  insertPromptPreset(preset);
+                }
+              }}
             >
               <span className="prompt-suggestion-title">{preset.title}</span>
               <span className="prompt-suggestion-meta">
@@ -583,6 +591,12 @@ export function PromptComposer({
                 event.preventDefault();
                 setPromptPickerOpen(false);
                 onManagePromptPresets();
+              }}
+              onClick={(event) => {
+                if (event.detail === 0) {
+                  setPromptPickerOpen(false);
+                  onManagePromptPresets();
+                }
               }}
             >
               Manage prompts

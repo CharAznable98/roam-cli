@@ -540,7 +540,7 @@ export function AppShell({ controller }: AppShellProps) {
             input as ApiCreateProjectPromptPreset,
           );
         }
-        notify("success", "Prompt saved", "Project prompt presets refreshed.");
+        notify("success", "Prompt saved", "Project prompt preset saved.");
         setPromptPresetEditor(null);
       } catch (saveError: unknown) {
         notify("error", "Prompt was not saved", errorMessage(saveError));
@@ -561,11 +561,7 @@ export function AppShell({ controller }: AppShellProps) {
       }
       try {
         await deleteProjectPromptPreset(projectId, preset.id);
-        notify(
-          "success",
-          "Prompt deleted",
-          "Project prompt presets refreshed.",
-        );
+        notify("success", "Prompt deleted", "Project prompt preset deleted.");
         return true;
       } catch (deleteError: unknown) {
         notify("error", "Prompt was not deleted", errorMessage(deleteError));
