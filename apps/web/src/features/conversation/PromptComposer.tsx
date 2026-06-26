@@ -499,7 +499,6 @@ export function PromptComposer({
             disabled={disabled}
             onClick={() => {
               setPromptPickerOpen((open) => !open);
-              setPromptPresetError(undefined);
               if (token) {
                 setDismissedTokenKey(triggerTokenKey(token));
                 setCaret(-1);

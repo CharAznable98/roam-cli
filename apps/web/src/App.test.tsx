@@ -193,6 +193,7 @@ let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
 let queuedRunnerTokenResponses: Array<Deferred<Response>>;
 let projectPromptPresets: ProjectPromptPreset[];
+let failPromptPresetFetch: boolean;
 let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
@@ -524,6 +525,7 @@ describe("App", () => {
         updatedAt: "2026-06-05T00:00:00.000Z",
       },
     ];
+    failPromptPresetFetch = false;
     queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
@@ -708,6 +710,9 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/prompt-presets") {
+          if (failPromptPresetFetch) {
+            return jsonResponse({ message: "prompt preset unavailable" }, 503);
+          }
           return jsonResponse({ presets: projectPromptPresets });
         }
         if (
@@ -3719,6 +3724,32 @@ describe("App", () => {
     expect(settings.queryByText("First preset")).not.toBeInTheDocument();
     expect(settings.getByText("Second preset")).toBeInTheDocument();
     expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
+  it("keeps prompt preset refresh errors visible after reopening the picker", async () => {
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const presetRequests = () =>
+      fetchCalls.filter((call) =>
+        call.url.endsWith("/v1/projects/project-1/prompt-presets"),
+      );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(
+      await screen.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+    expect(presetRequests()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(screen.getByText(/prompt preset unavailable/)).toBeInTheDocument();
+    expect(presetRequests()).toHaveLength(1);
   });
 
   it("falls back to a remaining mobile project after archiving the selected project", async () => {
