@@ -131,6 +131,11 @@ export function PromptComposer({
     () => ({ runnerId, agent, basePath }),
     [agent, basePath, runnerId],
   );
+
+  useEffect(() => {
+    setPromptPresetError(undefined);
+  }, [scope]);
+
   const rawToken = useMemo(
     () => findTriggerToken(value, caret),
     [caret, value],

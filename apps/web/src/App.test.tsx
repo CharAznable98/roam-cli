@@ -193,6 +193,7 @@ let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
 let queuedRunnerTokenResponses: Array<Deferred<Response>>;
 let projectPromptPresets: ProjectPromptPreset[];
+let backupProjectPromptPresets: ProjectPromptPreset[];
 let failPromptPresetFetch: boolean;
 let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
@@ -525,6 +526,17 @@ describe("App", () => {
         updatedAt: "2026-06-05T00:00:00.000Z",
       },
     ];
+    backupProjectPromptPresets = [
+      {
+        id: "preset-backup",
+        projectId: "project-backup",
+        title: "Backup preset",
+        content: "Backup content",
+        order: 0,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
     failPromptPresetFetch = false;
     queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
@@ -719,7 +731,7 @@ describe("App", () => {
           requestUrl.pathname ===
           "/v1/projects/project-backup/prompt-presets"
         ) {
-          return jsonResponse({ presets: [] });
+          return jsonResponse({ presets: backupProjectPromptPresets });
         }
         if (
           requestUrl.pathname === "/v1/projects/project-1/prompt-presets/order"
@@ -3800,6 +3812,67 @@ describe("App", () => {
 
     expect(screen.getByText(/prompt preset unavailable/)).toBeInTheDocument();
     expect(presetRequests()).toHaveLength(1);
+  });
+
+  it("clears local prompt preset picker errors when switching session scope", async () => {
+    const backupSession = {
+      ...session,
+      id: "session-backup",
+      title: "Backup session",
+      projectId: backupProject.id,
+      runnerId: backupRunner.runnerId,
+      executionFolder: "/backup-workspace",
+      cwd: "/backup-workspace",
+    };
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(
+      await screen.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+
+    failPromptPresetFetch = false;
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:created",
+            session: backupSession,
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project Backup Project" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Backup session/ }));
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Backup session" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(await screen.findByText("Backup preset")).toBeInTheDocument();
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
   });
 
   it("keeps desktop new-session prompt preset errors visible after reopening the modal", async () => {
