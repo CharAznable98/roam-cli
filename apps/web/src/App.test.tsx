@@ -3802,6 +3802,51 @@ describe("App", () => {
     expect(presetRequests()).toHaveLength(1);
   });
 
+  it("keeps desktop new-session prompt preset errors visible after reopening the modal", async () => {
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    let dialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Prompt presets" }),
+    );
+
+    expect(
+      await within(dialog).findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New Session - Real Project" }),
+      ).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    dialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Prompt presets" }),
+    );
+
+    expect(
+      within(dialog).getByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+  });
+
   it("falls back to a remaining mobile project after archiving the selected project", async () => {
     render(<App />);
     await screen.findByText("Loaded from API");

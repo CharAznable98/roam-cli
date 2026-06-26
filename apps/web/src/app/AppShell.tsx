@@ -681,6 +681,7 @@ export function AppShell({ controller }: AppShellProps) {
               onSearchWorkspacePaths={searchWorkspacePaths}
               promptPresetsByProject={projectPromptPresetsByProject}
               promptPresetStates={projectPromptPresetStates}
+              promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
               onRefreshPromptPresets={refreshProjectPromptPresets}
               onManagePromptPresets={openPromptPresetManager}
               onFetchGitStatus={fetchGitStatus}

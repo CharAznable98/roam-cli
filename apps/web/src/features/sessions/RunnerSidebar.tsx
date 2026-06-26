@@ -84,6 +84,7 @@ type RunnerSidebarProps = {
   onSearchWorkspacePaths: PathSearchFetcher;
   promptPresetsByProject?: Record<string, ProjectPromptPreset[]>;
   promptPresetStates?: Record<string, AsyncState>;
+  promptPresetErrorsByProject?: Record<string, string>;
   onRefreshPromptPresets?:
     | ((projectId: string) => Promise<ProjectPromptPreset[]>)
     | undefined;
@@ -109,6 +110,7 @@ export function RunnerSidebar({
   onSearchWorkspacePaths,
   promptPresetsByProject = {},
   promptPresetStates = {},
+  promptPresetErrorsByProject = {},
   onRefreshPromptPresets,
   onManagePromptPresets,
   onFetchGitStatus,
@@ -311,6 +313,7 @@ export function RunnerSidebar({
               promptPresetState={
                 promptPresetStates[sessionProject.id] ?? "idle"
               }
+              promptPresetError={promptPresetErrorsByProject[sessionProject.id]}
               onRefreshPromptPresets={
                 onRefreshPromptPresets
                   ? () => onRefreshPromptPresets(sessionProject.id)
