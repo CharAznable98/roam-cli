@@ -5,6 +5,7 @@ import type {
   Message,
   MessageAttachment,
   Project,
+  ProjectPromptPreset,
   RunnerRegistration,
   Session,
 } from "@roamcli/shared/protocol";
@@ -25,6 +26,7 @@ export interface InitialRemoteState {
   sessions: Session[];
   messages: UiMessage[];
   activities?: AgentActivity[];
+  promptPresets?: ProjectPromptPreset[];
   messageAttachments: MessageAttachment[];
   approvals: Approval[];
   artifacts: Artifact[];

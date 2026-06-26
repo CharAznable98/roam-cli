@@ -5,6 +5,7 @@ import type {
   GitBranchList,
   GitStatusResult,
   Project,
+  ProjectPromptPreset,
   RunnerRegistration,
   Session,
 } from "@roamcli/shared/protocol";
@@ -33,6 +34,7 @@ import type {
   AgentSkillFetcher,
   PathSearchFetcher,
 } from "../conversation/prompt-resources";
+import type { AsyncState } from "../../shared/types/async";
 import {
   composeProjectDirectory,
   projectDirectoryName,
@@ -80,6 +82,12 @@ type RunnerSidebarProps = {
   ) => void | Promise<void>;
   onListAgentSkills: AgentSkillFetcher;
   onSearchWorkspacePaths: PathSearchFetcher;
+  promptPresetsByProject?: Record<string, ProjectPromptPreset[]>;
+  promptPresetStates?: Record<string, AsyncState>;
+  onRefreshPromptPresets?:
+    | ((projectId: string) => Promise<ProjectPromptPreset[]>)
+    | undefined;
+  onManagePromptPresets?: ((projectId: string) => void) | undefined;
   onFetchGitStatus: GitStatusFetcher;
   onFetchGitBranches: GitBranchesFetcher;
 };
@@ -99,6 +107,10 @@ export function RunnerSidebar({
   onCreateSession,
   onListAgentSkills,
   onSearchWorkspacePaths,
+  promptPresetsByProject = {},
+  promptPresetStates = {},
+  onRefreshPromptPresets,
+  onManagePromptPresets,
   onFetchGitStatus,
   onFetchGitBranches,
 }: RunnerSidebarProps) {
@@ -295,6 +307,20 @@ export function RunnerSidebar({
               runner={sessionRunner}
               onListAgentSkills={onListAgentSkills}
               onSearchWorkspacePaths={onSearchWorkspacePaths}
+              promptPresets={promptPresetsByProject[sessionProject.id] ?? []}
+              promptPresetState={
+                promptPresetStates[sessionProject.id] ?? "idle"
+              }
+              onRefreshPromptPresets={
+                onRefreshPromptPresets
+                  ? () => onRefreshPromptPresets(sessionProject.id)
+                  : undefined
+              }
+              onManagePromptPresets={
+                onManagePromptPresets
+                  ? () => onManagePromptPresets(sessionProject.id)
+                  : undefined
+              }
               onFetchGitStatus={onFetchGitStatus}
               onFetchGitBranches={onFetchGitBranches}
               onCreate={async (values) => {

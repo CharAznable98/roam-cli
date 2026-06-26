@@ -3,6 +3,7 @@ import type {
   AgentKind,
   ApiChangePassword,
   ApiAgentSkillList,
+  ApiCreateProjectPromptPreset,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitCommitFilesQuery,
@@ -14,8 +15,10 @@ import type {
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
   ApiPathSearch,
+  ApiUpdateProjectPromptPreset,
   ExecutionMode,
   ImageAttachmentUpload,
+  ProjectPromptPreset,
   Session,
   SessionStatus,
 } from "@roamcli/shared/protocol";
@@ -51,6 +54,7 @@ import {
 import { buildRunnerCommand } from "./runner-command";
 import { loadLastSelection, saveLastSelection } from "./selection-storage";
 import { appReducer, initialAppState, type AppState } from "./state";
+import type { AsyncState } from "../shared/types/async";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
@@ -81,6 +85,11 @@ export function useRoamController() {
     initialAppState,
     hydrateInitialSelection,
   );
+  const [projectPromptPresetsByProject, setProjectPromptPresetsByProject] =
+    useState<Record<string, ProjectPromptPreset[]>>({});
+  const [projectPromptPresetStates, setProjectPromptPresetStates] = useState<
+    Record<string, AsyncState>
+  >({});
   const [authView, setAuthView] = useState<AuthViewState>("checking");
   const [authEpoch, setAuthEpoch] = useState(0);
   const [accountSecurity, setAccountSecurity] = useState<
@@ -1132,6 +1141,78 @@ export function useRoamController() {
     }
   }, [requireApiClient, selectedSession?.id]);
 
+  const refreshProjectPromptPresets = useCallback(
+    async (projectId: string) => {
+      setProjectPromptPresetStates((current) => ({
+        ...current,
+        [projectId]: "loading",
+      }));
+      try {
+        const presets =
+          await requireApiClient().fetchProjectPromptPresets(projectId);
+        setProjectPromptPresetsByProject((current) => ({
+          ...current,
+          [projectId]: presets,
+        }));
+        setProjectPromptPresetStates((current) => ({
+          ...current,
+          [projectId]: "ready",
+        }));
+        return presets;
+      } catch (promptError: unknown) {
+        setProjectPromptPresetStates((current) => ({
+          ...current,
+          [projectId]: "error",
+        }));
+        throw new Error(errorMessage(promptError));
+      }
+    },
+    [requireApiClient],
+  );
+
+  const createProjectPromptPreset = useCallback(
+    async (projectId: string, input: ApiCreateProjectPromptPreset) => {
+      await requireApiClient().createProjectPromptPreset(projectId, input);
+      return refreshProjectPromptPresets(projectId);
+    },
+    [refreshProjectPromptPresets, requireApiClient],
+  );
+
+  const updateProjectPromptPreset = useCallback(
+    async (
+      projectId: string,
+      presetId: string,
+      input: ApiUpdateProjectPromptPreset,
+    ) => {
+      await requireApiClient().updateProjectPromptPreset(
+        projectId,
+        presetId,
+        input,
+      );
+      return refreshProjectPromptPresets(projectId);
+    },
+    [refreshProjectPromptPresets, requireApiClient],
+  );
+
+  const deleteProjectPromptPreset = useCallback(
+    async (projectId: string, presetId: string) => {
+      await requireApiClient().deleteProjectPromptPreset(projectId, presetId);
+      return refreshProjectPromptPresets(projectId);
+    },
+    [refreshProjectPromptPresets, requireApiClient],
+  );
+
+  const reorderProjectPromptPresets = useCallback(
+    async (projectId: string, presetIds: string[]) => {
+      await requireApiClient().reorderProjectPromptPresets(
+        projectId,
+        presetIds,
+      );
+      return refreshProjectPromptPresets(projectId);
+    },
+    [refreshProjectPromptPresets, requireApiClient],
+  );
+
   const fetchMessageAttachmentContent = useCallback(
     async (sessionId: string, attachmentId: string) => {
       return requireApiClient().fetchMessageAttachmentContent(
@@ -1343,6 +1424,8 @@ export function useRoamController() {
 
   return {
     state,
+    projectPromptPresetsByProject,
+    projectPromptPresetStates,
     authView,
     accountSecurity,
     streamReconnect,
@@ -1390,6 +1473,11 @@ export function useRoamController() {
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
+    refreshProjectPromptPresets,
+    createProjectPromptPreset,
+    updateProjectPromptPreset,
+    deleteProjectPromptPreset,
+    reorderProjectPromptPresets,
     fetchMessageAttachmentContent,
     fetchRunnerDirectoryTree,
     createRunnerDirectory,

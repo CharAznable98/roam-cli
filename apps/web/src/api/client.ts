@@ -4,6 +4,7 @@ import type {
   AgentKind,
   ApiChangePassword,
   ApiAgentSkillList,
+  ApiCreateProjectPromptPreset,
   ApiCreateProject,
   ApiCreateSession,
   ApiGitBlameQuery,
@@ -20,6 +21,7 @@ import type {
   ApiLogin,
   ApiSetupOwner,
   ApiUpdateProject,
+  ApiUpdateProjectPromptPreset,
   ApiUpdateSession,
   AuthStatus,
   Approval,
@@ -42,6 +44,7 @@ import type {
   PatchApplyResult,
   PathSearchResult,
   Project,
+  ProjectPromptPreset,
   RunnerRegistration,
   ServerEvent,
   Session,
@@ -83,6 +86,21 @@ export interface RoamApiClient {
   updateProject(projectId: string, input: ApiUpdateProject): Promise<Project>;
   archiveProject(projectId: string): Promise<Project>;
   restoreProject(projectId: string): Promise<Project>;
+  fetchProjectPromptPresets(projectId: string): Promise<ProjectPromptPreset[]>;
+  createProjectPromptPreset(
+    projectId: string,
+    input: ApiCreateProjectPromptPreset,
+  ): Promise<ProjectPromptPreset>;
+  updateProjectPromptPreset(
+    projectId: string,
+    presetId: string,
+    input: ApiUpdateProjectPromptPreset,
+  ): Promise<ProjectPromptPreset>;
+  deleteProjectPromptPreset(projectId: string, presetId: string): Promise<void>;
+  reorderProjectPromptPresets(
+    projectId: string,
+    presetIds: string[],
+  ): Promise<ProjectPromptPreset[]>;
   createSession(input: {
     projectId: string;
     agent: AgentKind;
@@ -160,6 +178,14 @@ interface ProjectsResponse {
 
 interface ProjectResponse {
   project: Project;
+}
+
+interface ProjectPromptPresetsResponse {
+  presets: ProjectPromptPreset[];
+}
+
+interface ProjectPromptPresetResponse {
+  preset: ProjectPromptPreset;
 }
 
 interface CreateSessionResponse {
@@ -444,6 +470,53 @@ export function createRoamApiClient(
         { method: "POST" },
       );
       return project;
+    },
+
+    async fetchProjectPromptPresets(projectId) {
+      const { presets } = await request<ProjectPromptPresetsResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/prompt-presets`,
+      );
+      return presets;
+    },
+
+    async createProjectPromptPreset(projectId, input) {
+      const { preset } = await request<ProjectPromptPresetResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/prompt-presets`,
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return preset;
+    },
+
+    async updateProjectPromptPreset(projectId, presetId, input) {
+      const { preset } = await request<ProjectPromptPresetResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/prompt-presets/${encodeURIComponent(presetId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(input),
+        },
+      );
+      return preset;
+    },
+
+    async deleteProjectPromptPreset(projectId, presetId) {
+      await request<void>(
+        `/v1/projects/${encodeURIComponent(projectId)}/prompt-presets/${encodeURIComponent(presetId)}`,
+        { method: "DELETE" },
+      );
+    },
+
+    async reorderProjectPromptPresets(projectId, presetIds) {
+      const { presets } = await request<ProjectPromptPresetsResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/prompt-presets/order`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ presetIds }),
+        },
+      );
+      return presets;
     },
 
     async createSession(input) {

@@ -2,14 +2,17 @@ import type {
   AgentActivity,
   ImageAttachmentUpload,
   MessageAttachment,
+  ProjectPromptPreset,
   RunnerCapability,
   Session,
 } from "@roamcli/shared/protocol";
 import {
+  BookmarkPlus,
   Bot,
   CheckCircle2,
   ChevronDown,
   CircleStop,
+  Copy,
   ImagePlus,
   LoaderCircle,
   MoreHorizontal,
@@ -53,6 +56,7 @@ import {
 import { PromptComposer } from "./PromptComposer";
 import { SkillListDialog } from "./SkillListDialog";
 import type { AgentSkillFetcher, PathSearchFetcher } from "./prompt-resources";
+import type { AsyncState } from "../../shared/types/async";
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
 
@@ -79,6 +83,14 @@ type ChatPanelProps = {
     | undefined;
   onListAgentSkills?: AgentSkillFetcher | undefined;
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
+  promptPresets?: ProjectPromptPreset[];
+  promptPresetState?: AsyncState;
+  onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
+  onManagePromptPresets?: (() => void) | undefined;
+  onSaveMessageAsPrompt?: ((content: string) => void) | undefined;
+  onNotify?:
+    | ((tone: "error" | "success", title: string, message: string) => void)
+    | undefined;
   statusBanner?: ReactNode;
 };
 
@@ -100,6 +112,12 @@ export function ChatPanel({
   onFetchAttachmentContent,
   onListAgentSkills = emptyAgentSkillList,
   onSearchWorkspacePaths = emptyPathSearch,
+  promptPresets = [],
+  promptPresetState = "idle",
+  onRefreshPromptPresets,
+  onManagePromptPresets,
+  onSaveMessageAsPrompt,
+  onNotify,
   statusBanner,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
@@ -590,6 +608,8 @@ export function ChatPanel({
                 fileLinkContext={fileLinkContext}
                 onOpenFileLink={onOpenFileLink}
                 onFetchAttachmentContent={onFetchAttachmentContent}
+                onSaveMessageAsPrompt={onSaveMessageAsPrompt}
+                onNotify={onNotify}
               />
             ),
           )
@@ -628,6 +648,10 @@ export function ChatPanel({
             basePath={session.executionFolder}
             onListAgentSkills={onListAgentSkills}
             onSearchWorkspacePaths={onSearchWorkspacePaths}
+            promptPresets={promptPresets}
+            promptPresetState={promptPresetState}
+            onRefreshPromptPresets={onRefreshPromptPresets}
+            onManagePromptPresets={onManagePromptPresets}
             onKeyDown={handleComposerKeyDown}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData.files).filter(
@@ -944,12 +968,18 @@ function MessageBubble({
   fileLinkContext,
   onOpenFileLink,
   onFetchAttachmentContent,
+  onSaveMessageAsPrompt,
+  onNotify,
 }: {
   message: UiMessage;
   fileLinkContext: MarkdownFileLinkContext;
   onOpenFileLink?: ((target: MarkdownFileLinkTarget) => void) | undefined;
   onFetchAttachmentContent?:
     | ((sessionId: string, attachmentId: string) => Promise<Blob>)
+    | undefined;
+  onSaveMessageAsPrompt?: ((content: string) => void) | undefined;
+  onNotify?:
+    | ((tone: "error" | "success", title: string, message: string) => void)
     | undefined;
 }) {
   if (message.variant === "thought") {
@@ -983,6 +1013,13 @@ function MessageBubble({
         {isUser ? <User size={16} /> : <Bot size={16} />}
       </div>
       <div className="message-body">
+        {isUser ? (
+          <UserMessageActionMenu
+            content={message.content}
+            onSaveMessageAsPrompt={onSaveMessageAsPrompt}
+            onNotify={onNotify}
+          />
+        ) : null}
         <div className="message-meta">{message.role}</div>
         {isUser ? (
           <p>{message.content}</p>
@@ -999,6 +1036,75 @@ function MessageBubble({
         />
       </div>
     </article>
+  );
+}
+
+function UserMessageActionMenu({
+  content,
+  onSaveMessageAsPrompt,
+  onNotify,
+}: {
+  content: string;
+  onSaveMessageAsPrompt?: ((content: string) => void) | undefined;
+  onNotify?:
+    | ((tone: "error" | "success", title: string, message: string) => void)
+    | undefined;
+}) {
+  const cleanContent = content.trim();
+  const hasText = cleanContent.length > 0;
+  const menuRef = useRef<HTMLDetailsElement>(null);
+
+  const closeMenu = () => {
+    menuRef.current?.removeAttribute("open");
+  };
+
+  const copyMessage = async () => {
+    if (!hasText || !navigator.clipboard) {
+      onNotify?.("error", "Copy failed", "Clipboard is unavailable.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(cleanContent);
+      onNotify?.("success", "Copied", "Message text copied.");
+      closeMenu();
+    } catch (error) {
+      onNotify?.(
+        "error",
+        "Copy failed",
+        getErrorMessage(error, "Clipboard write failed."),
+      );
+    }
+  };
+
+  return (
+    <details className="message-action-menu" ref={menuRef}>
+      <summary aria-label="Message actions" title="Message actions">
+        <MoreHorizontal size={15} />
+      </summary>
+      <div className="message-action-menu-content" role="menu">
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!hasText}
+          onClick={() => void copyMessage()}
+        >
+          <Copy size={14} />
+          <span>Copy</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!hasText || !onSaveMessageAsPrompt}
+          onClick={() => {
+            onSaveMessageAsPrompt?.(cleanContent);
+            closeMenu();
+          }}
+        >
+          <BookmarkPlus size={14} />
+          <span>Save as prompt</span>
+        </button>
+      </div>
+    </details>
   );
 }
 

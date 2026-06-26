@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   ApiApplyPatchSchema,
   ApiApprovalResponseSchema,
+  ApiCreateProjectPromptPresetSchema,
   FileContentResultSchema,
   FileTreeResultSchema,
   FileWriteResultSchema,
   ImageAttachmentUploadSchema,
   PatchApplyResultSchema,
   ApiCreateSessionSchema,
+  ApiReorderProjectPromptPresetsSchema,
+  ApiUpdateProjectPromptPresetSchema,
   DEFAULT_MAX_IMAGE_BYTES,
+  PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
+  PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
   RunnerAuthenticateSchema,
   RunnerCommandSchema,
   RunnerRegistrationSchema,
@@ -140,6 +145,40 @@ describe("protocol schemas", () => {
         prompt: "run",
       }),
     ).toThrow();
+  });
+
+  it("validates project prompt preset inputs", () => {
+    expect(
+      ApiCreateProjectPromptPresetSchema.parse({
+        title: "  Review checklist  ",
+        content: "  Keep bullets concise.\nPreserve line breaks.  ",
+      }),
+    ).toEqual({
+      title: "Review checklist",
+      content: "Keep bullets concise.\nPreserve line breaks.",
+    });
+
+    expect(() =>
+      ApiCreateProjectPromptPresetSchema.parse({
+        title: "x".repeat(PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH + 1),
+        content: "Valid content",
+      }),
+    ).toThrow();
+    expect(() =>
+      ApiCreateProjectPromptPresetSchema.parse({
+        title: "Valid title",
+        content: "x".repeat(PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH + 1),
+      }),
+    ).toThrow();
+    expect(() => ApiUpdateProjectPromptPresetSchema.parse({})).toThrow();
+    expect(
+      ApiUpdateProjectPromptPresetSchema.parse({ content: "  Updated  " }),
+    ).toEqual({ content: "Updated" });
+    expect(
+      ApiReorderProjectPromptPresetsSchema.parse({
+        presetIds: ["promptPreset-1", "promptPreset-2"],
+      }),
+    ).toEqual({ presetIds: ["promptPreset-1", "promptPreset-2"] });
   });
 
   it("validates event discriminators", () => {

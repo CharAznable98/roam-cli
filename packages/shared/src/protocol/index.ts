@@ -123,6 +123,20 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+export const PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH = 80;
+export const PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH = 20_000;
+
+export const ProjectPromptPresetSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  title: z.string().min(1).max(PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH),
+  content: z.string().min(1).max(PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH),
+  order: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type ProjectPromptPreset = z.infer<typeof ProjectPromptPresetSchema>;
+
 export const ExecutionModeSchema = z.enum([
   "direct",
   "managed_worktree",
@@ -1161,6 +1175,47 @@ export const ApiUpdateProjectSchema = z.object({
   directory: z.string().min(1).optional(),
 });
 export type ApiUpdateProject = z.infer<typeof ApiUpdateProjectSchema>;
+
+export const ApiCreateProjectPromptPresetSchema = z.object({
+  title: z.string().trim().min(1).max(PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH),
+  content: z
+    .string()
+    .trim()
+    .min(1)
+    .max(PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH),
+});
+export type ApiCreateProjectPromptPreset = z.infer<
+  typeof ApiCreateProjectPromptPresetSchema
+>;
+
+export const ApiUpdateProjectPromptPresetSchema = z
+  .object({
+    title: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH)
+      .optional(),
+    content: z
+      .string()
+      .trim()
+      .min(1)
+      .max(PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH)
+      .optional(),
+  })
+  .refine((value) => value.title !== undefined || value.content !== undefined, {
+    message: "At least one field is required.",
+  });
+export type ApiUpdateProjectPromptPreset = z.infer<
+  typeof ApiUpdateProjectPromptPresetSchema
+>;
+
+export const ApiReorderProjectPromptPresetsSchema = z.object({
+  presetIds: z.array(z.string().min(1)).min(1),
+});
+export type ApiReorderProjectPromptPresets = z.infer<
+  typeof ApiReorderProjectPromptPresetsSchema
+>;
 
 export const ApiApprovalResponseSchema = z.object({
   approved: z.boolean(),

@@ -2,8 +2,9 @@ import type {
   AgentKind,
   AgentSkillSummary,
   PathSearchEntry,
+  ProjectPromptPreset,
 } from "@roamcli/shared/protocol";
-import { LoaderCircle } from "lucide-react";
+import { BookOpen, LoaderCircle, RefreshCw } from "lucide-react";
 import {
   ClipboardEvent,
   KeyboardEvent,
@@ -24,6 +25,7 @@ import {
   type PathSearchFetcher,
   type PromptResourceScope,
 } from "./prompt-resources";
+import type { AsyncState } from "../../shared/types/async";
 
 const PATH_SEARCH_LIMIT = 50;
 const PANEL_OPTION_LIMIT = 8;
@@ -45,6 +47,10 @@ type PromptComposerProps = {
   ariaInvalid?: boolean;
   disabled?: boolean;
   suggestionPlacement?: "above" | "below";
+  promptPresets?: ProjectPromptPreset[];
+  promptPresetState?: AsyncState;
+  onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
+  onManagePromptPresets?: (() => void) | undefined;
 };
 
 type TriggerToken = {
@@ -88,8 +94,14 @@ export function PromptComposer({
   ariaInvalid,
   disabled,
   suggestionPlacement = "above",
+  promptPresets = [],
+  promptPresetState = "idle",
+  onRefreshPromptPresets,
+  onManagePromptPresets,
 }: PromptComposerProps) {
   const suggestionPanelId = `${useId()}-suggestions`;
+  const promptPresetPanelId = `${useId()}-prompt-presets`;
+  const composerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const suggestionPanelRef = useRef<HTMLDivElement>(null);
   const pendingSelectionRef = useRef<number | undefined>(undefined);
@@ -107,6 +119,9 @@ export function PromptComposer({
   const [dismissedTokenKey, setDismissedTokenKey] = useState<
     string | undefined
   >();
+  const [promptPickerOpen, setPromptPickerOpen] = useState(false);
+  const [promptPresetQuery, setPromptPresetQuery] = useState("");
+  const [promptPresetError, setPromptPresetError] = useState<string>();
   const scope = useMemo<PromptResourceScope>(
     () => ({ runnerId, agent, basePath }),
     [agent, basePath, runnerId],
@@ -272,6 +287,31 @@ export function PromptComposer({
   const panelOpen =
     Boolean(token) &&
     (loading || options.length > 0 || Boolean(error) || hasCompletedEmpty());
+  const filteredPromptPresets = useMemo(() => {
+    const query = promptPresetQuery.trim().toLowerCase();
+    const filtered = query
+      ? promptPresets.filter(
+          (preset) =>
+            preset.title.toLowerCase().includes(query) ||
+            preset.content.toLowerCase().includes(query),
+        )
+      : promptPresets;
+    return filtered.slice(0, PANEL_OPTION_LIMIT);
+  }, [promptPresetQuery, promptPresets]);
+
+  const refreshPromptPresets = async () => {
+    if (!onRefreshPromptPresets) {
+      return;
+    }
+    setPromptPresetError(undefined);
+    try {
+      await onRefreshPromptPresets();
+    } catch (refreshError: unknown) {
+      setPromptPresetError(
+        getErrorMessage(refreshError, "Prompt presets failed."),
+      );
+    }
+  };
 
   useEffect(() => {
     if (!panelOpen || suggestionPlacement !== "below") {
@@ -285,6 +325,38 @@ export function PromptComposer({
     });
     return () => cancelAnimationFrame(frameId);
   }, [loading, options.length, panelOpen, suggestionPlacement]);
+
+  useEffect(() => {
+    if (!promptPickerOpen) {
+      return;
+    }
+    const closeOnOutsidePointer = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !composerRef.current?.contains(target)) {
+        setPromptPickerOpen(false);
+      }
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPromptPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [promptPickerOpen]);
+
+  useEffect(() => {
+    if (
+      promptPickerOpen &&
+      (promptPresetState === "idle" || promptPresetState === "error")
+    ) {
+      void refreshPromptPresets();
+    }
+  }, [promptPickerOpen, promptPresetState]);
 
   function hasCompletedEmpty(): boolean {
     if (!token) {
@@ -369,36 +441,155 @@ export function PromptComposer({
     onKeyDown?.(event);
   };
 
+  const insertPromptPreset = (preset: ProjectPromptPreset) => {
+    const textarea = textareaRef.current;
+    const start =
+      textarea?.selectionStart ?? (caret >= 0 ? caret : value.length);
+    const end = textarea?.selectionEnd ?? start;
+    const insertion = composePromptPresetInsertion(
+      value,
+      start,
+      end,
+      preset.content,
+    );
+    pendingSelectionRef.current = insertion.caret;
+    onChange(insertion.value);
+    setPromptPickerOpen(false);
+    textareaRef.current?.focus();
+  };
+
   return (
-    <div className="prompt-composer">
-      <textarea
-        ref={textareaRef}
-        value={value}
-        aria-label={ariaLabel}
-        aria-invalid={ariaInvalid ? "true" : undefined}
-        aria-expanded={panelOpen ? "true" : undefined}
-        aria-controls={panelOpen ? suggestionPanelId : undefined}
-        disabled={disabled}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setDismissedTokenKey(undefined);
-          setCaret(event.target.selectionStart);
-        }}
-        onBlur={() => {
-          setCaret(-1);
-        }}
-        onClick={updateCaret}
-        onKeyDown={handleKeyDown}
-        onKeyUp={(event) => {
-          if (event.key !== "Escape") {
-            updateCaret();
-          }
-        }}
-        onPaste={onPaste}
-        onSelect={updateCaret}
-        placeholder={placeholder}
-        rows={rows}
-      />
+    <div className="prompt-composer" ref={composerRef}>
+      <div className="prompt-composer-input">
+        <textarea
+          ref={textareaRef}
+          value={value}
+          aria-label={ariaLabel}
+          aria-invalid={ariaInvalid ? "true" : undefined}
+          aria-expanded={panelOpen ? "true" : undefined}
+          aria-controls={panelOpen ? suggestionPanelId : undefined}
+          disabled={disabled}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setDismissedTokenKey(undefined);
+            setCaret(event.target.selectionStart);
+          }}
+          onBlur={() => {
+            setCaret(-1);
+          }}
+          onClick={updateCaret}
+          onKeyDown={handleKeyDown}
+          onKeyUp={(event) => {
+            if (event.key !== "Escape") {
+              updateCaret();
+            }
+          }}
+          onPaste={onPaste}
+          onSelect={updateCaret}
+          placeholder={placeholder}
+          rows={rows}
+        />
+        {onRefreshPromptPresets ? (
+          <button
+            className="prompt-preset-trigger"
+            type="button"
+            aria-label="Prompt presets"
+            aria-expanded={promptPickerOpen}
+            aria-controls={promptPickerOpen ? promptPresetPanelId : undefined}
+            title="Prompt presets"
+            disabled={disabled}
+            onClick={() => {
+              setPromptPickerOpen((open) => !open);
+              setPromptPresetError(undefined);
+              if (token) {
+                setDismissedTokenKey(triggerTokenKey(token));
+                setCaret(-1);
+              }
+            }}
+          >
+            <BookOpen size={15} />
+          </button>
+        ) : null}
+      </div>
+      {promptPickerOpen ? (
+        <div
+          className={`prompt-preset-panel ${suggestionPlacement}`}
+          id={promptPresetPanelId}
+          role="dialog"
+          aria-label="Prompt presets"
+        >
+          <div className="prompt-preset-toolbar">
+            <input
+              value={promptPresetQuery}
+              onChange={(event) => setPromptPresetQuery(event.target.value)}
+              placeholder="Search prompt presets"
+              aria-label="Search prompt presets"
+            />
+            <button
+              className="prompt-preset-refresh"
+              type="button"
+              aria-label="Refresh prompt presets"
+              title="Refresh"
+              onClick={() => void refreshPromptPresets()}
+              disabled={promptPresetState === "loading"}
+            >
+              <RefreshCw
+                size={14}
+                className={
+                  promptPresetState === "loading" ? "animate-spin" : ""
+                }
+              />
+            </button>
+          </div>
+          {promptPresetState === "loading" ? (
+            <div className="prompt-suggestion-status">
+              <LoaderCircle size={15} className="animate-spin" />
+              <span>Loading prompt presets</span>
+            </div>
+          ) : null}
+          {promptPresetError ? (
+            <div className="prompt-suggestion-empty">{promptPresetError}</div>
+          ) : null}
+          {promptPresetState !== "loading" &&
+          !promptPresetError &&
+          filteredPromptPresets.length === 0 ? (
+            <div className="prompt-suggestion-empty">
+              {promptPresetQuery.trim()
+                ? "No prompt presets found"
+                : "No prompt presets yet"}
+            </div>
+          ) : null}
+          {filteredPromptPresets.map((preset) => (
+            <button
+              className="prompt-preset-option"
+              key={preset.id}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                insertPromptPreset(preset);
+              }}
+            >
+              <span className="prompt-suggestion-title">{preset.title}</span>
+              <span className="prompt-suggestion-meta">
+                {singleLine(preset.content)}
+              </span>
+            </button>
+          ))}
+          {onManagePromptPresets ? (
+            <button
+              className="prompt-preset-manage"
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                setPromptPickerOpen(false);
+                onManagePromptPresets();
+              }}
+            >
+              Manage prompts
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {panelOpen ? (
         <div
           ref={suggestionPanelRef}
@@ -513,6 +704,32 @@ function completionKey(option: CompletionOption): string {
 
 function triggerTokenKey(token: TriggerToken): string {
   return `${token.type}:${token.marker}:${token.start}:${token.end}:${token.query}`;
+}
+
+function composePromptPresetInsertion(
+  value: string,
+  start: number,
+  end: number,
+  content: string,
+): { value: string; caret: number } {
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  let inserted = content;
+  if (before.length > 0 && !before.endsWith("\n")) {
+    inserted = `\n\n${inserted}`;
+  }
+  if (after.length > 0 && !after.startsWith("\n")) {
+    inserted = `${inserted}\n\n`;
+  }
+  const nextValue = `${before}${inserted}${after}`;
+  return {
+    value: nextValue,
+    caret: before.length + inserted.length,
+  };
+}
+
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {

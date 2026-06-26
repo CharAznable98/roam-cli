@@ -8,6 +8,7 @@ import type {
   GitStatusResult,
   ImageAttachmentUpload,
   Project,
+  ProjectPromptPreset,
   RunnerCapability,
   RunnerRegistration,
 } from "@roamcli/shared/protocol";
@@ -56,6 +57,10 @@ type NewSessionFormProps = {
   onCreated?: () => void;
   onListAgentSkills?: AgentSkillFetcher | undefined;
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
+  promptPresets?: ProjectPromptPreset[];
+  promptPresetState?: AsyncState;
+  onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
+  onManagePromptPresets?: (() => void) | undefined;
   onFetchGitStatus?: GitStatusFetcher | undefined;
   onFetchGitBranches?: GitBranchesFetcher | undefined;
 };
@@ -67,6 +72,10 @@ export function NewSessionForm({
   onCreated,
   onListAgentSkills = emptyAgentSkillList,
   onSearchWorkspacePaths = emptyPathSearch,
+  promptPresets = [],
+  promptPresetState = "idle",
+  onRefreshPromptPresets,
+  onManagePromptPresets,
   onFetchGitStatus,
   onFetchGitBranches,
 }: NewSessionFormProps) {
@@ -88,8 +97,7 @@ export function NewSessionForm({
     GitStatusResult | undefined
   >();
   const [gitBranches, setGitBranches] = useState<GitBranchList | undefined>();
-  const [gitBranchesState, setGitBranchesState] =
-    useState<AsyncState>("idle");
+  const [gitBranchesState, setGitBranchesState] = useState<AsyncState>("idle");
   const [gitBranchesError, setGitBranchesError] = useState("");
   const agentOptions = useMemo(
     () =>
@@ -144,8 +152,7 @@ export function NewSessionForm({
     setGitBranchesError("");
     setGitBranchName("");
 
-    const loadStatus =
-      onFetchGitStatus ?? (() => defaultGitStatus(gitContext));
+    const loadStatus = onFetchGitStatus ?? (() => defaultGitStatus(gitContext));
     void loadStatus(gitContext)
       .then((statusResult) => {
         if (cancelled) {
@@ -444,6 +451,10 @@ export function NewSessionForm({
           basePath={project.directory}
           onListAgentSkills={onListAgentSkills}
           onSearchWorkspacePaths={onSearchWorkspacePaths}
+          promptPresets={promptPresets}
+          promptPresetState={promptPresetState}
+          onRefreshPromptPresets={onRefreshPromptPresets}
+          onManagePromptPresets={onManagePromptPresets}
           onChange={(nextPrompt) => {
             setPrompt(nextPrompt);
             setError("");
