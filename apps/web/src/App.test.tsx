@@ -716,6 +716,12 @@ describe("App", () => {
           return jsonResponse({ presets: projectPromptPresets });
         }
         if (
+          requestUrl.pathname ===
+          "/v1/projects/project-backup/prompt-presets"
+        ) {
+          return jsonResponse({ presets: [] });
+        }
+        if (
           requestUrl.pathname === "/v1/projects/project-1/prompt-presets/order"
         ) {
           const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -3724,6 +3730,50 @@ describe("App", () => {
     expect(settings.queryByText("First preset")).not.toBeInTheDocument();
     expect(settings.getByText("Second preset")).toBeInTheDocument();
     expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
+  it("clears Settings prompt preset refresh errors when changing projects", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+    });
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    await settings.findByText("First preset");
+
+    failPromptPresetFetch = true;
+    fireEvent.click(settings.getByRole("button", { name: "Refresh" }));
+    expect(
+      await settings.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+
+    failPromptPresetFetch = false;
+    fireEvent.change(settings.getByLabelText("Project"), {
+      target: { value: "project-backup" },
+    });
+
+    await waitFor(() =>
+      expect(
+        settings.queryByText(/prompt preset unavailable/),
+      ).not.toBeInTheDocument(),
+    );
+    expect(settings.getByLabelText("Project")).toHaveValue("project-backup");
   });
 
   it("keeps prompt preset refresh errors visible after reopening the picker", async () => {

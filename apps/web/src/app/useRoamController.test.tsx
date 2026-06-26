@@ -78,10 +78,12 @@ function preset(id: string, order: number): ProjectPromptPreset {
 describe("useRoamController prompt presets", () => {
   let reorderResponses: Array<Deferred<Response>>;
   let reorderBodies: string[][];
+  let promptPresetFetchResponses: Array<Deferred<Response>>;
 
   beforeEach(() => {
     reorderResponses = [];
     reorderBodies = [];
+    promptPresetFetchResponses = [];
     vi.stubGlobal("WebSocket", TestWebSocket);
     vi.stubGlobal(
       "fetch",
@@ -103,6 +105,16 @@ describe("useRoamController prompt presets", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({ sessions: [] });
+        }
+        if (requestUrl.pathname === "/v1/projects/project-1/prompt-presets") {
+          if (init?.method === "POST") {
+            return jsonResponse({ preset: preset("preset-created", 0) });
+          }
+          const response = promptPresetFetchResponses.shift();
+          if (response) {
+            return response.promise;
+          }
+          return jsonResponse({ presets: [] });
         }
         if (
           requestUrl.pathname ===
@@ -179,5 +191,34 @@ describe("useRoamController prompt presets", () => {
       );
       await secondReorder;
     });
+  });
+
+  it("records post-mutation prompt preset refresh failures", async () => {
+    const refreshFailure = deferred<Response>();
+    promptPresetFetchResponses.push(refreshFailure);
+    const { result } = renderHook(() => useRoamController());
+
+    await act(async () => {
+      await result.current.createProjectPromptPreset("project-1", {
+        title: "Created preset",
+        content: "Created content",
+      });
+    });
+    expect(
+      result.current.projectPromptPresetErrorsByProject["project-1"],
+    ).toBeUndefined();
+
+    await act(async () => {
+      refreshFailure.resolve(
+        jsonResponse({ message: "refresh unavailable" }, 503),
+      );
+      await refreshFailure.promise;
+    });
+
+    await waitFor(() =>
+      expect(
+        result.current.projectPromptPresetErrorsByProject["project-1"],
+      ).toMatch(/refresh unavailable/),
+    );
   });
 });

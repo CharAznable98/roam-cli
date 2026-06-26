@@ -200,6 +200,7 @@ export function AppShell({ controller }: AppShellProps) {
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
+    projectPromptPresetErrorsByProject,
     refreshProjectPromptPresets,
     createProjectPromptPreset,
     updateProjectPromptPreset,
@@ -712,6 +713,9 @@ export function AppShell({ controller }: AppShellProps) {
                 promptPresetState={
                   projectPromptPresetStates[selectedSession.projectId] ?? "idle"
                 }
+                promptPresetError={
+                  projectPromptPresetErrorsByProject[selectedSession.projectId]
+                }
                 onRefreshPromptPresets={() =>
                   refreshProjectPromptPresets(selectedSession.projectId)
                 }
@@ -883,6 +887,9 @@ export function AppShell({ controller }: AppShellProps) {
                     onProjectChange={setSettingsProjectId}
                     promptPresetsByProject={projectPromptPresetsByProject}
                     promptPresetStates={projectPromptPresetStates}
+                    promptPresetErrorsByProject={
+                      projectPromptPresetErrorsByProject
+                    }
                     onRefreshPromptPresets={refreshProjectPromptPresets}
                     onNewPromptPreset={(projectId) =>
                       setPromptPresetEditor({ projectId })
@@ -966,6 +973,9 @@ export function AppShell({ controller }: AppShellProps) {
                   }
                   promptPresetState={
                     projectPromptPresetStates[selectedProject.id] ?? "idle"
+                  }
+                  promptPresetError={
+                    projectPromptPresetErrorsByProject[selectedProject.id]
                   }
                   onRefreshPromptPresets={() =>
                     refreshProjectPromptPresets(selectedProject.id)
@@ -1306,6 +1316,7 @@ function SettingsPanel({
   onProjectChange,
   promptPresetsByProject,
   promptPresetStates,
+  promptPresetErrorsByProject,
   onRefreshPromptPresets,
   onNewPromptPreset,
   onEditPromptPreset,
@@ -1327,6 +1338,7 @@ function SettingsPanel({
   onProjectChange: (projectId: string) => void;
   promptPresetsByProject: Record<string, ProjectPromptPreset[]>;
   promptPresetStates: Record<string, AsyncState>;
+  promptPresetErrorsByProject: Record<string, string>;
   onRefreshPromptPresets: (projectId: string) => Promise<ProjectPromptPreset[]>;
   onNewPromptPreset: (projectId: string) => void;
   onEditPromptPreset: (projectId: string, preset: ProjectPromptPreset) => void;
@@ -1437,6 +1449,7 @@ function SettingsPanel({
             onProjectChange={onProjectChange}
             promptPresetsByProject={promptPresetsByProject}
             promptPresetStates={promptPresetStates}
+            promptPresetErrorsByProject={promptPresetErrorsByProject}
             onRefreshPromptPresets={onRefreshPromptPresets}
             onNewPromptPreset={onNewPromptPreset}
             onEditPromptPreset={onEditPromptPreset}
@@ -1456,6 +1469,7 @@ function ProjectSettingsPanel({
   onProjectChange,
   promptPresetsByProject,
   promptPresetStates,
+  promptPresetErrorsByProject,
   onRefreshPromptPresets,
   onNewPromptPreset,
   onEditPromptPreset,
@@ -1468,6 +1482,7 @@ function ProjectSettingsPanel({
   onProjectChange: (projectId: string) => void;
   promptPresetsByProject: Record<string, ProjectPromptPreset[]>;
   promptPresetStates: Record<string, AsyncState>;
+  promptPresetErrorsByProject: Record<string, string>;
   onRefreshPromptPresets: (projectId: string) => Promise<ProjectPromptPreset[]>;
   onNewPromptPreset: (projectId: string) => void;
   onEditPromptPreset: (projectId: string, preset: ProjectPromptPreset) => void;
@@ -1488,6 +1503,9 @@ function ProjectSettingsPanel({
   const promptPresetState = selectedProjectId
     ? (promptPresetStates[selectedProjectId] ?? "idle")
     : "idle";
+  const sharedRefreshError = selectedProjectId
+    ? promptPresetErrorsByProject[selectedProjectId]
+    : undefined;
   const [refreshError, setRefreshError] = useState("");
   const [presetSearchQuery, setPresetSearchQuery] = useState("");
   const trimmedPresetSearchQuery = presetSearchQuery.trim().toLowerCase();
@@ -1526,6 +1544,7 @@ function ProjectSettingsPanel({
 
   useEffect(() => {
     setPresetSearchQuery("");
+    setRefreshError("");
   }, [selectedProjectId]);
 
   if (projects.length === 0) {
@@ -1598,9 +1617,9 @@ function ProjectSettingsPanel({
           </div>
         </div>
 
-        {refreshError ? (
+        {refreshError || sharedRefreshError ? (
           <div className="form-error" role="alert">
-            {refreshError}
+            {refreshError || sharedRefreshError}
           </div>
         ) : null}
 

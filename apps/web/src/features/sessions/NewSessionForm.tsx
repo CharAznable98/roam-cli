@@ -59,6 +59,7 @@ type NewSessionFormProps = {
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
   promptPresets?: ProjectPromptPreset[];
   promptPresetState?: AsyncState;
+  promptPresetError?: string | undefined;
   onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
   onManagePromptPresets?: (() => void) | undefined;
   onFetchGitStatus?: GitStatusFetcher | undefined;
@@ -74,6 +75,7 @@ export function NewSessionForm({
   onSearchWorkspacePaths = emptyPathSearch,
   promptPresets = [],
   promptPresetState = "idle",
+  promptPresetError,
   onRefreshPromptPresets,
   onManagePromptPresets,
   onFetchGitStatus,
@@ -453,6 +455,7 @@ export function NewSessionForm({
           onSearchWorkspacePaths={onSearchWorkspacePaths}
           promptPresets={promptPresets}
           promptPresetState={promptPresetState}
+          promptPresetError={promptPresetError}
           onRefreshPromptPresets={onRefreshPromptPresets}
           onManagePromptPresets={onManagePromptPresets}
           onChange={(nextPrompt) => {

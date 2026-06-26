@@ -398,6 +398,36 @@ describe("PromptComposer", () => {
     expect(managePromptPresets).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes prompt presets when the open picker scope changes", async () => {
+    const firstRefresh = vi.fn(async () => promptPresets);
+    const secondRefresh = vi.fn(async () => promptPresets);
+
+    const { rerender } = render(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={[]}
+        promptPresetState="idle"
+        onRefreshPromptPresets={firstRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    await waitFor(() => expect(firstRefresh).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={[]}
+        promptPresetState="idle"
+        onRefreshPromptPresets={secondRefresh}
+      />,
+    );
+
+    await waitFor(() => expect(secondRefresh).toHaveBeenCalledTimes(1));
+  });
+
   it("does not auto-refresh prompt presets again after an error state", async () => {
     const refreshPromptPresets = vi.fn(async () => promptPresets);
 

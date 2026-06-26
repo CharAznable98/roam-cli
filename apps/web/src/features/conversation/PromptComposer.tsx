@@ -49,6 +49,7 @@ type PromptComposerProps = {
   suggestionPlacement?: "above" | "below";
   promptPresets?: ProjectPromptPreset[];
   promptPresetState?: AsyncState;
+  promptPresetError?: string | undefined;
   onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
   onManagePromptPresets?: (() => void) | undefined;
 };
@@ -96,6 +97,7 @@ export function PromptComposer({
   suggestionPlacement = "above",
   promptPresets = [],
   promptPresetState = "idle",
+  promptPresetError: externalPromptPresetError,
   onRefreshPromptPresets,
   onManagePromptPresets,
 }: PromptComposerProps) {
@@ -123,6 +125,8 @@ export function PromptComposer({
   const [promptPickerOpen, setPromptPickerOpen] = useState(false);
   const [promptPresetQuery, setPromptPresetQuery] = useState("");
   const [promptPresetError, setPromptPresetError] = useState<string>();
+  const visiblePromptPresetError =
+    promptPresetError ?? externalPromptPresetError;
   const scope = useMemo<PromptResourceScope>(
     () => ({ runnerId, agent, basePath }),
     [agent, basePath, runnerId],
@@ -355,7 +359,7 @@ export function PromptComposer({
     if (promptPickerOpen && promptPresetState === "idle") {
       void refreshPromptPresets();
     }
-  }, [promptPickerOpen, promptPresetState]);
+  }, [onRefreshPromptPresets, promptPickerOpen, promptPresetState]);
 
   function hasCompletedEmpty(): boolean {
     if (!token) {
@@ -551,11 +555,13 @@ export function PromptComposer({
               <span>Loading prompt presets</span>
             </div>
           ) : null}
-          {promptPresetError ? (
-            <div className="prompt-suggestion-empty">{promptPresetError}</div>
+          {visiblePromptPresetError ? (
+            <div className="prompt-suggestion-empty">
+              {visiblePromptPresetError}
+            </div>
           ) : null}
           {promptPresetState !== "loading" &&
-          !promptPresetError &&
+          !visiblePromptPresetError &&
           filteredPromptPresets.length === 0 ? (
             <div className="prompt-suggestion-empty">
               {promptPresetQuery.trim()

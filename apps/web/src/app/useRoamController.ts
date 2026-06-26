@@ -90,6 +90,10 @@ export function useRoamController() {
   const [projectPromptPresetStates, setProjectPromptPresetStates] = useState<
     Record<string, AsyncState>
   >({});
+  const [
+    projectPromptPresetErrorsByProject,
+    setProjectPromptPresetErrorsByProject,
+  ] = useState<Record<string, string>>({});
   const [authView, setAuthView] = useState<AuthViewState>("checking");
   const [authEpoch, setAuthEpoch] = useState(0);
   const [accountSecurity, setAccountSecurity] = useState<
@@ -1157,6 +1161,9 @@ export function useRoamController() {
         ...current,
         [projectId]: "loading",
       }));
+      setProjectPromptPresetErrorsByProject((current) =>
+        removeRecordEntry(current, projectId),
+      );
       try {
         const presets =
           await requireApiClient().fetchProjectPromptPresets(projectId);
@@ -1171,9 +1178,13 @@ export function useRoamController() {
             ...current,
             [projectId]: "ready",
           }));
+          setProjectPromptPresetErrorsByProject((current) =>
+            removeRecordEntry(current, projectId),
+          );
         }
         return presets;
       } catch (promptError: unknown) {
+        const message = errorMessage(promptError);
         if (
           promptPresetRequestVersionsRef.current[projectId] === requestVersion
         ) {
@@ -1181,8 +1192,12 @@ export function useRoamController() {
             ...current,
             [projectId]: "error",
           }));
+          setProjectPromptPresetErrorsByProject((current) => ({
+            ...current,
+            [projectId]: message,
+          }));
         }
-        throw new Error(errorMessage(promptError));
+        throw new Error(message);
       }
     },
     [requireApiClient],
@@ -1215,6 +1230,9 @@ export function useRoamController() {
         ...current,
         [projectId]: "ready",
       }));
+      setProjectPromptPresetErrorsByProject((current) =>
+        removeRecordEntry(current, projectId),
+      );
     },
     [],
   );
@@ -1554,6 +1572,7 @@ export function useRoamController() {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
+    projectPromptPresetErrorsByProject,
     runnerCommand: buildRunnerCommand(accountSecurity?.runnerToken ?? ""),
     selectRunner,
     selectProject,
@@ -1625,6 +1644,17 @@ function hasDirtySelectedFileChanges(state: AppState): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function removeRecordEntry<T>(
+  record: Record<string, T>,
+  key: string,
+): Record<string, T> {
+  if (!(key in record)) {
+    return record;
+  }
+  const { [key]: _removed, ...remaining } = record;
+  return remaining;
 }
 
 function isAuthErrorMessage(message: string): boolean {

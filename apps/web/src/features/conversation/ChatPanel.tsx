@@ -85,6 +85,7 @@ type ChatPanelProps = {
   onSearchWorkspacePaths?: PathSearchFetcher | undefined;
   promptPresets?: ProjectPromptPreset[];
   promptPresetState?: AsyncState;
+  promptPresetError?: string | undefined;
   onRefreshPromptPresets?: (() => Promise<ProjectPromptPreset[]>) | undefined;
   onManagePromptPresets?: (() => void) | undefined;
   onSaveMessageAsPrompt?: ((content: string) => void) | undefined;
@@ -114,6 +115,7 @@ export function ChatPanel({
   onSearchWorkspacePaths = emptyPathSearch,
   promptPresets = [],
   promptPresetState = "idle",
+  promptPresetError,
   onRefreshPromptPresets,
   onManagePromptPresets,
   onSaveMessageAsPrompt,
@@ -650,6 +652,7 @@ export function ChatPanel({
             onSearchWorkspacePaths={onSearchWorkspacePaths}
             promptPresets={promptPresets}
             promptPresetState={promptPresetState}
+            promptPresetError={promptPresetError}
             onRefreshPromptPresets={onRefreshPromptPresets}
             onManagePromptPresets={onManagePromptPresets}
             onKeyDown={handleComposerKeyDown}
