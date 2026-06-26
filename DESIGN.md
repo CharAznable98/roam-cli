@@ -3,9 +3,11 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-06-23
+- Last refreshed: 2026-06-26
 - Primary product surfaces:
   - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
+  - Settings tab: account settings, web push settings, and project-level prompt preset configuration.
+  - Prompt composer surfaces in active chat sessions and new session creation.
   - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
   - Runner execution model for direct sessions and Git worktree sessions.
 - Evidence reviewed:
@@ -31,6 +33,11 @@
   - `apps/runner/src/sessions/manager.ts`: agent runtime `message` events are translated into persisted `assistantMessage` runner events.
   - `apps/server/src/modules/runners/runner-event-service.ts`: `assistantMessage` events are stored as normal assistant `Message` records.
   - `apps/web/src/features/conversation/model.ts` and `apps/web/src/features/conversation/ChatPanel.tsx`: current conversation display items, intermediate output grouping, and collapsible message rendering.
+  - 2026-06-26 prompt preset design interview: project-scoped Server product state, Settings-tab project selector, composer picker, user-message action menu, prompt editor dialog, drag-handle ordering, manual refresh, and dnd-kit allowance.
+  - `apps/web/src/features/conversation/PromptComposer.tsx`: current `$` / `/` skill completion and `@` path completion behavior.
+  - `apps/web/src/app/AppShell.tsx` and `apps/web/src/app/navigation.ts`: current Settings tab and settings-detail navigation model.
+  - `apps/web/src/features/sessions/NewSessionForm.tsx`: current reuse of `PromptComposer` for new session prompts.
+  - `apps/server/src/infra/sqlite-store.ts`: current Server-owned Project persistence model.
 
 ## Brand
 
@@ -61,6 +68,9 @@
   - Provide VS Code-like Source Control and GitLens-like local inspection without implementing provider APIs.
   - Use Monaco as the Git tab file/diff inspection foundation.
   - Store the minimum product data needed for identity, session-worktree association, job audit, and session Git artifacts.
+  - Support Project-scoped prompt presets as editable Server-owned product configuration.
+  - Let users insert Project prompt presets into both active chat composer and new session prompt composer.
+  - Let users copy text from user messages and save user-message text into Project prompt presets through a message action menu.
 - Non-goals:
   - Do not show provider lifecycle strings such as `Claude Code task progress:` as assistant/user conversation messages.
   - Do not make activity groups the primary approval action surface.
@@ -69,6 +79,11 @@
   - No strong preflight blocking for destructive Git actions beyond clear user confirmation.
   - No long-term persistence of full diff, blame, commit graph, file history, stdout, or stderr.
   - No Git credential storage in Server or Web.
+  - No prompt preset storage in repository files, runner files, or browser-only local state.
+  - No prompt preset input trigger syntax now or later; presets are selected only through explicit UI.
+  - No prompt variables, categories, favorites, pinning, version history, prompt permissions, or duplicate prevention in the MVP.
+  - No realtime prompt preset synchronization between browser windows; refresh after operations and provide manual refresh.
+  - No saving assistant messages or image attachments as prompt presets in the MVP.
 - Success signals:
   - Users can see the latest running agent action without the chat transcript turning into a status log.
   - Historical agent activity is available through collapsed groups but does not compete with normal messages.
@@ -77,6 +92,9 @@
   - Diff, blame, history, and commit inspection feel responsive on desktop and usable on mobile.
   - Git actions route through the runner and respect runner filesystem boundaries.
   - A browser refresh or reconnect can recover job status and essential audit state without storing large Git data.
+  - Users can create, edit, delete, drag-sort, refresh, and insert Project prompt presets without changing repository files.
+  - Users can save a prior user message as a Project prompt preset with a prefilled editor dialog.
+  - Prompt preset insertion never overwrites existing composer text unless the user edits it manually.
 
 ## Personas and jobs
 
@@ -84,6 +102,7 @@
   - Developer supervising AI coding sessions in one or more projects.
   - Developer reviewing and committing agent-generated changes.
   - Developer managing branch/worktree isolation for parallel session work.
+  - Developer reusing project-specific agent instruction patterns across sessions.
 - User jobs:
   - Create an isolated branch worktree for a new session.
   - Review working tree changes and stage files, hunks, or ranges.
@@ -91,6 +110,9 @@
   - Commit staged changes and push/pull/fetch using the runner machine's Git credentials.
   - Archive a session and decide whether to delete its associated worktree.
   - Copy clear Git failure output and paste it to an agent for diagnosis.
+  - Build and maintain a Project prompt preset list.
+  - Insert a prompt preset into a new session or active session without memorizing trigger syntax.
+  - Promote a useful prior user message into an editable Project prompt preset.
 - Key contexts of use:
   - Desktop review and commit work with side-by-side diff.
   - Tablet inspection with inline diff and secondary panes.
@@ -103,6 +125,22 @@
   - Add a top-level workspace tab named `Git`.
   - Git capabilities must not be split across Files, Approvals, or Chat.
   - Bottom/mobile navigation adds the same Git tab.
+- Settings tab:
+  - Add `Project Settings` to the Settings home.
+  - `Project Settings` contains an active-project selector inside Settings, independent of the global selected Project.
+  - The selector lists only active Projects and highlights the global current Project with a `Current` badge.
+  - Switching the Settings project selector changes only the Project being configured; it does not switch global chat/session context.
+  - `Prompt presets` lives inside Project Settings, not as a top-level workspace tab.
+- Prompt preset composer entry:
+  - Active chat composer and new session prompt composer both expose the same prompt preset picker.
+  - The picker is opened through an explicit composer tool button, not by typing a trigger token.
+  - The picker supports search and insertion only.
+  - The picker provides a `Manage prompts` action that routes to Settings -> Project Settings -> Prompt presets for the relevant Project.
+- User message actions:
+  - Only normal user messages show a message action menu.
+  - User messages render a persistent low-emphasis `...` button at the top right of the message body.
+  - The menu contains `Copy` and `Save as prompt`.
+  - Assistant messages, tool messages, thought messages, and activity groups do not get this MVP action menu.
 - Conversation activity timeline:
   - Normal conversation messages are only user-visible user and assistant content.
   - `tool`, `thought`, `system`, `approval`, and provider status/progress events are auxiliary activity, not normal message boundaries.
@@ -163,6 +201,13 @@
   - Agent lifecycle and tool/task progress must be available as operational context.
   - They must not be persisted as assistant prose or rendered as assistant prose.
   - The visible transcript remains readable without expanding activity groups.
+- Principle 7: Prompt presets are Project state, not repository state.
+  - Prompt presets are stored by Server against `projectId`.
+  - Saving or editing a prompt preset must not dirty the user's repository or worktree.
+  - Runner offline state must not prevent prompt preset management or insertion.
+- Principle 8: Explicit controls beat hidden interaction for message reuse.
+  - User-message actions use a visible `...` menu instead of hover-only buttons.
+  - The menu stays visually quiet but reachable on desktop, mobile, touch, and keyboard.
 - Tradeoffs:
   - The platform warns before dangerous actions but does not strongly block them.
   - Full command output is copyable for active jobs but not persisted long term.
@@ -197,6 +242,7 @@
 - Imagery/iconography:
   - Use lucide icons for toolbar and tab actions where available.
   - Prefer icons for common commands: refresh, stage, unstage, commit, pull, push, branch, tag, history, diff, trash.
+  - Prompt preset controls should use familiar small icons: library/list for picker, grip for drag handle, more-horizontal for message actions, copy for copy, save/bookmark-like action for saving as prompt, refresh for manual reload.
 
 ## Components
 
@@ -206,6 +252,8 @@
   - `StatusPill` for compact state indicators.
   - Notification stack for request errors.
   - Form and button patterns from session creation and file editing.
+  - `PromptComposer` for both chat composer and new session prompt input.
+  - Settings list/detail pattern from `SettingsPanel`.
   - Existing `details` / `summary` collapsible-message styling for low-emphasis expandable activity groups.
 - New/changed components:
   - `AgentActivityGroup`: collapsed non-message activity segment between normal messages.
@@ -222,6 +270,12 @@
   - `GitWorktreesView`: session worktree list and removal action.
   - `GitJobOutput`: active job failure/output panel with copy button.
   - `GitEmptyState`: non-Git repo init state.
+  - `ProjectSettingsPanel`: Settings detail surface with active-project selector and Project configuration sections.
+  - `PromptPresetList`: searchable, refreshable Project prompt preset management list.
+  - `PromptPresetRow`: title/content preview row with drag handle, edit affordance, and row action menu.
+  - `PromptPresetEditorDialog`: shared create/edit/save-from-message dialog with title and content fields.
+  - `PromptPresetPicker`: lightweight composer panel for search and insertion.
+  - `UserMessageActionMenu`: persistent low-emphasis `...` menu on user messages.
 - Variants and states:
   - Agent activity group: latest/running, historical, inside intermediate output.
   - Agent activity kind: status, task_started, task_progress, task_notification, approval, tool, system, thought.
@@ -230,6 +284,9 @@
   - Diff state: loading, ready, too large, binary, read-only, editable current side.
   - Job state: queued, running, succeeded, failed, cancelled.
   - Worktree state: active, archived-session-linked, deleted, unavailable.
+  - Prompt preset list state: loading, ready, refreshing, empty, error, dirty reorder, saving reorder.
+  - Prompt preset editor mode: create blank, edit existing, create from user message.
+  - Prompt preset source message state: text message, text plus attachments, attachments-only.
 - Token/component ownership:
   - Extend existing Tailwind theme and component CSS.
   - Do not introduce a second design-system framework.
@@ -244,6 +301,9 @@
   - Commit message supports normal textarea behavior.
   - Destructive confirmations must trap focus and return focus to the invoking control.
   - Monaco shortcuts must not trap users without visible alternatives.
+  - User-message `...` buttons must be keyboard focusable with accessible labels.
+  - Prompt preset menus and dialogs must return focus to the invoking control when closed.
+  - Prompt preset drag handles must expose keyboard-accessible sorting behavior when using the chosen DnD library.
 - Contrast/readability:
   - Status badges and diff line states must not rely on color only.
   - Use icons/text labels for staged, unstaged, conflict, and deleted states.
@@ -251,6 +311,8 @@
   - Resource groups use headings and list semantics.
   - Diff viewer has accessible file/path/ref labels.
   - Job progress and failure output use live-region updates where appropriate.
+  - Prompt preset rows announce title, short content preview, and current position in the ordered list.
+  - Manual refresh announces loading and error states without moving focus.
 - Reduced motion and sensory considerations:
   - Avoid animated graph effects.
   - Progress indicators should be subtle and non-flashing.
@@ -277,6 +339,9 @@
 - Touch/hover differences:
   - Hover blame details must also be available by tap/click.
   - Context menus need accessible button alternatives.
+  - User-message actions do not depend on hover; the `...` button is persistent.
+  - Prompt preset ordering uses the same drag handle on desktop and mobile.
+  - Drag handles must be large enough for touch without making the whole row draggable.
 - Monaco behavior:
   - Lazy-load Monaco when entering Git tab or opening a diff.
   - Dispose Monaco models on context/file changes and when leaving the Git tab.
@@ -289,26 +354,34 @@
   - Long Git operations create a Git job and progress state.
   - Latest agent activity group shows one short current action plus step count.
   - Activity groups never stream as normal message text.
+  - Prompt preset refresh shows lightweight inline loading and keeps the last usable list visible when possible.
 - Empty:
   - No Git repo: show init repo action.
   - Clean working tree: show clean state, branch/upstream, and sync actions.
   - No history for file/query: show scoped empty state.
+  - No prompt presets: show an empty state with `New prompt`.
 - Error:
   - Show direct, clear Git failure information.
   - Provide `Copy error` for operation, context, branch/ref/file, exit code, stdout/stderr currently available.
   - Do not persist complete stdout/stderr long term.
+  - Prompt preset load/save/delete/reorder failures use the existing notification path and keep the user on the same surface for retry.
 - Success:
   - Job success updates status and displays concise completion feedback.
   - When a normal message arrives after activity, the preceding latest group becomes historical and collapses to `Activity (N)`.
+  - Copy and prompt preset save success use existing toast/notification feedback.
 - Disabled:
   - Worktree mode disabled for non-Git and unborn repos.
   - Commit disabled when there are no staged changes.
   - Operations disabled while a conflicting write job runs in the same context.
+  - `Save as prompt` is disabled or omitted for user messages whose trimmed text content is empty.
+  - Prompt preset save is disabled when trimmed title or content is empty or over the configured length.
 - Offline/slow network:
   - Runner offline keeps Project/Session records visible.
   - Live Git status/diff/history unavailable until runner returns.
   - Existing minimal audit/job state remains visible.
   - Persisted agent activity reloads with session detail after refresh or reconnect.
+  - Runner offline does not disable prompt preset management or insertion.
+  - Server/API unavailable disables prompt preset load/save and surfaces retry/manual refresh.
 
 ## Content voice
 
@@ -325,6 +398,66 @@
   - Do not over-explain Git errors; show copyable output for agent diagnosis.
   - Agent activity copy is productized into short actions such as `Starting task`, `Exploring file preview component`, `Reading apps/web/src/app/useRoamController.ts`, `Waiting for approval`, and `Task completed`.
   - Do not expose provider prefixes such as `Claude Code status:` or `Claude Code task progress:` in default UI.
+
+## Feature design: Project prompt presets
+
+- Scope and ownership:
+  - Prompt presets are Server-owned Project configuration bound to `projectId`.
+  - Prompt presets are not written to repository files, runner-local files, or browser-only local state.
+  - Prompt presets remain manageable and insertable while the Project runner is offline.
+  - Archived Projects are not listed in the Settings Project selector; restore a Project before managing its presets.
+- Preset model:
+  - Fields: `id`, `projectId`, `title`, `content`, `order`, `createdAt`, `updatedAt`.
+  - `title` is required after trim and limited to 1-80 characters.
+  - `content` is required after outer trim and limited to 1-20,000 characters.
+  - Internal newlines, indentation, code blocks, and spacing are preserved.
+  - Duplicate titles and duplicate content are allowed; users manage duplicates themselves.
+- Settings management:
+  - Settings home includes `Project Settings`.
+  - Project Settings includes an active-project selector and highlights the global current Project with `Current`.
+  - The selected Settings project is local to the Settings surface and does not change global project/session selection.
+  - `Prompt presets` shows a searchable list, `New prompt`, manual refresh, and drag-handle ordering.
+  - Desktop and mobile both use drag handles for sorting; the whole row is not draggable.
+  - New prompt presets default to the top of the ordered list.
+  - Editing a prompt preset does not change its order.
+  - Deleting a prompt preset requires confirmation and is not recoverable.
+- Prompt editor dialog:
+  - Create, edit, and save-from-message all use the same editor dialog.
+  - The dialog contains title and content fields, read-only Project context, Save, Cancel, and destructive Delete where applicable.
+  - Save-from-message opens the dialog instead of immediately creating a preset.
+  - Save-from-message pre-fills title from the first non-empty message line, trimmed and truncated to 48 characters, falling back to `Prompt from message`.
+  - Save-from-message pre-fills content from trimmed user-message text and does not include image attachments.
+- Composer picker:
+  - Active chat composer and new session prompt composer both expose a prompt preset picker.
+  - The picker opens from an explicit composer tool button.
+  - Prompt presets must not have input trigger syntax now or later.
+  - The picker supports search by title/content and insertion only.
+  - Selecting a preset inserts its content at the current caret position.
+  - If the composer is empty, insertion simply fills the composer.
+  - If the composer already has content, insertion preserves the existing draft and inserts at the caret with spacing that avoids accidental word joining.
+  - The picker includes `Manage prompts`, which opens Settings -> Project Settings -> Prompt presets for the relevant Project.
+- User-message actions:
+  - Only normal user messages show message actions.
+  - A persistent low-emphasis `...` button sits at the top right of the user message body.
+  - The action menu contains `Copy` and `Save as prompt`.
+  - `Copy` copies trimmed message text while preserving internal formatting.
+  - `Save as prompt` is disabled or absent when trimmed message text is empty.
+  - User-message image attachments are not copied or saved into presets in the MVP.
+  - Operation feedback uses existing toast/notification behavior: `Copied`, `Copy failed`, `Prompt saved`, and save failure errors.
+- Refresh and consistency:
+  - Prompt presets do not require realtime WebSocket synchronization.
+  - After create, edit, delete, or reorder operations, the affected Project prompt preset list refreshes.
+  - A manual refresh button is available in Project Settings.
+  - If multiple browser windows edit the same Project, Server state wins on refresh; no conflict merge UI is required in the MVP.
+- Acceptance criteria:
+  - A user can create, edit, delete with confirmation, manually refresh, and drag-sort prompt presets in Settings -> Project Settings.
+  - Settings Project selector lists active Projects, highlights the global current Project, and does not change global selection when switched.
+  - A user can insert a prompt preset into both active chat composer and new session prompt composer without typing a trigger.
+  - Choosing a preset inserts at the caret and does not overwrite existing draft text.
+  - A user message has a persistent `...` menu with Copy and Save as prompt.
+  - Save as prompt opens the shared editor dialog with prefilled title/content and fixed target Project.
+  - Copy and Save as prompt trim only outer whitespace and preserve internal formatting.
+  - Prompt preset operations do not require the Project runner to be online.
 
 ## Feature design: File preview optimization
 
@@ -380,6 +513,22 @@
   - React 19 + Vite + Tailwind.
   - Use existing reducer/controller state pattern before adding a new state library.
   - Use lucide icons for common Git actions.
+- Project prompt presets:
+  - Store prompt presets in Server persistence, not runner persistence.
+  - Suggested table: `project_prompt_presets` with `id`, `project_id`, `title`, `content`, `sort_order`, `created_at`, `updated_at`.
+  - Suggested API shape:
+    - `GET /v1/projects/:id/prompt-presets`
+    - `POST /v1/projects/:id/prompt-presets`
+    - `PATCH /v1/projects/:id/prompt-presets/:presetId`
+    - `DELETE /v1/projects/:id/prompt-presets/:presetId`
+    - `PUT /v1/projects/:id/prompt-presets/order`
+  - Prompt preset APIs do not call runner RPC and must work while the runner is offline.
+  - Prompt preset create/update validation trims outer whitespace and enforces title/content required plus length caps.
+  - Prompt preset order is explicit and separate from `updatedAt`.
+  - Do not add prompt preset WebSocket broadcast events in the MVP; refresh after write and provide manual refresh.
+  - Web state can cache prompt presets by Project, but Server is the source of truth.
+  - Use a dedicated drag-and-drop library such as dnd-kit for cross-device drag-handle sorting rather than hand-written touch sorting.
+  - Tests should cover protocol validation, Server CRUD/reorder persistence, Web Settings management, composer insertion, user-message actions, and manual refresh behavior.
 - Agent activity protocol:
   - Use a generic `AgentActivity` model rather than a Claude Code-specific protocol.
   - First implementation may emit activities only from Claude Code.

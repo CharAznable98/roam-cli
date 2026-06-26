@@ -19,6 +19,7 @@ import type {
   GitJob,
   Message,
   MessageAttachment,
+  ProjectPromptPreset,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
@@ -191,6 +192,10 @@ let authStatus: AuthStatus;
 let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
 let queuedRunnerTokenResponses: Array<Deferred<Response>>;
+let projectPromptPresets: ProjectPromptPreset[];
+let backupProjectPromptPresets: ProjectPromptPreset[];
+let failPromptPresetFetch: boolean;
+let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -492,6 +497,48 @@ describe("App", () => {
     queuedRunnerResponses = [];
     queuedAccountSecurityResponses = [];
     queuedRunnerTokenResponses = [];
+    projectPromptPresets = [
+      {
+        id: "preset-1",
+        projectId: "project-1",
+        title: "First preset",
+        content: "First content",
+        order: 0,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+      {
+        id: "preset-2",
+        projectId: "project-1",
+        title: "Second preset",
+        content: "Second content",
+        order: 1,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+      {
+        id: "preset-3",
+        projectId: "project-1",
+        title: "Third preset",
+        content: "Third content",
+        order: 2,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    backupProjectPromptPresets = [
+      {
+        id: "preset-backup",
+        projectId: "project-backup",
+        title: "Backup preset",
+        content: "Backup content",
+        order: 0,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    failPromptPresetFetch = false;
+    queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -673,6 +720,45 @@ describe("App", () => {
               updatedAt: "2026-06-05T01:00:00.000Z",
             },
           });
+        }
+        if (requestUrl.pathname === "/v1/projects/project-1/prompt-presets") {
+          if (failPromptPresetFetch) {
+            return jsonResponse({ message: "prompt preset unavailable" }, 503);
+          }
+          return jsonResponse({ presets: projectPromptPresets });
+        }
+        if (
+          requestUrl.pathname ===
+          "/v1/projects/project-backup/prompt-presets"
+        ) {
+          return jsonResponse({ presets: backupProjectPromptPresets });
+        }
+        if (
+          requestUrl.pathname === "/v1/projects/project-1/prompt-presets/order"
+        ) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            presetIds?: string[];
+          };
+          const reordered = (body.presetIds ?? [])
+            .map((presetId, index) => {
+              const preset = projectPromptPresets.find(
+                (candidate) => candidate.id === presetId,
+              );
+              return preset
+                ? {
+                    ...preset,
+                    order: index,
+                    updatedAt: "2026-06-05T00:01:00.000Z",
+                  }
+                : undefined;
+            })
+            .filter((preset): preset is ProjectPromptPreset => Boolean(preset));
+          const queuedResponse = queuedPromptPresetOrderResponses.shift();
+          if (queuedResponse) {
+            return queuedResponse.promise;
+          }
+          projectPromptPresets = reordered;
+          return jsonResponse({ presets: reordered });
         }
         if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
           if (failNextSessionCreate) {
@@ -3607,6 +3693,231 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it("closes the mobile new-session sheet before opening prompt preset management", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sessionSwitcher = openSessionSwitcher();
+
+    fireEvent.click(
+      sessionSwitcher.getByRole("button", {
+        name: "New session in selected project Real Project",
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "New Session - Real Project" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage prompts" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New Session - Real Project" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Project Settings" }),
+    ).toBeInTheDocument();
+  });
+
+  it("filters project prompt presets in Settings", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    expect(await settings.findByText("First preset")).toBeInTheDocument();
+    expect(settings.getByText("Second preset")).toBeInTheDocument();
+
+    fireEvent.change(settings.getByLabelText("Search prompt presets"), {
+      target: { value: "second" },
+    });
+
+    expect(settings.queryByText("First preset")).not.toBeInTheDocument();
+    expect(settings.getByText("Second preset")).toBeInTheDocument();
+    expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
+  it("clears Settings prompt preset refresh errors when changing projects", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+    });
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    await settings.findByText("First preset");
+
+    failPromptPresetFetch = true;
+    fireEvent.click(settings.getByRole("button", { name: "Refresh" }));
+    expect(
+      await settings.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+
+    failPromptPresetFetch = false;
+    fireEvent.change(settings.getByLabelText("Project"), {
+      target: { value: "project-backup" },
+    });
+
+    await waitFor(() =>
+      expect(
+        settings.queryByText(/prompt preset unavailable/),
+      ).not.toBeInTheDocument(),
+    );
+    expect(settings.getByLabelText("Project")).toHaveValue("project-backup");
+  });
+
+  it("keeps prompt preset refresh errors visible after reopening the picker", async () => {
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const presetRequests = () =>
+      fetchCalls.filter((call) =>
+        call.url.endsWith("/v1/projects/project-1/prompt-presets"),
+      );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(
+      await screen.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+    expect(presetRequests()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(screen.getByText(/prompt preset unavailable/)).toBeInTheDocument();
+    expect(presetRequests()).toHaveLength(1);
+  });
+
+  it("clears local prompt preset picker errors when switching session scope", async () => {
+    const backupSession = {
+      ...session,
+      id: "session-backup",
+      title: "Backup session",
+      projectId: backupProject.id,
+      runnerId: backupRunner.runnerId,
+      executionFolder: "/backup-workspace",
+      cwd: "/backup-workspace",
+    };
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(
+      await screen.findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+
+    failPromptPresetFetch = false;
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "runner:online", runner: backupRunner }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "project:created",
+            project: backupProject,
+          }),
+        }),
+      );
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "session:created",
+            session: backupSession,
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project Backup Project" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Backup session/ }));
+    expect(
+      screen.getByRole("button", { name: "Switch Session: Backup session" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(await screen.findByText("Backup preset")).toBeInTheDocument();
+    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("keeps desktop new-session prompt preset errors visible after reopening the modal", async () => {
+    failPromptPresetFetch = true;
+
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sidebar = within(
+      screen.getByRole("complementary", { name: "Projects and sessions" }),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    let dialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Prompt presets" }),
+    );
+
+    expect(
+      await within(dialog).findByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New Session - Real Project" }),
+      ).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(
+      sidebar.getByRole("button", { name: "New session in Real Project" }),
+    );
+    dialog = screen.getByRole("dialog", {
+      name: "New Session - Real Project",
+    });
+    fireEvent.click(
+      await within(dialog).findByRole("button", { name: "Prompt presets" }),
+    );
+
+    expect(
+      within(dialog).getByText(/prompt preset unavailable/),
+    ).toBeInTheDocument();
   });
 
   it("falls back to a remaining mobile project after archiving the selected project", async () => {

@@ -6,24 +6,50 @@ import { FilePanel } from "../features/files/FilePanel";
 import { GitPanel } from "../features/git/GitPanel";
 import { PushSettings } from "../features/pwa/PushSettings";
 import { getNotificationSupport } from "../features/pwa/pwa";
-import type {
-  AccountSecurityState,
-  ApiChangePassword,
-  GitJob,
-  Project,
-  Session,
-  SessionStatus,
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
+  PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
+  type AccountSecurityState,
+  type ApiChangePassword,
+  type ApiCreateProjectPromptPreset,
+  type ApiUpdateProjectPromptPreset,
+  type GitJob,
+  type Project,
+  type ProjectPromptPreset,
+  type Session,
+  type SessionStatus,
 } from "@roamcli/shared/protocol";
 import {
   Archive,
   ArrowLeft,
   Bell,
+  BookOpen,
+  BookmarkPlus,
   ChevronRight,
   Copy,
   FolderPlus,
   FolderOpen,
+  GripVertical,
   KeyRound,
   LogOut,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -52,18 +78,31 @@ import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { AppNotification } from "./state";
 import type { useRoamController } from "./useRoamController";
+import type { AsyncState } from "../shared/types/async";
 
 type AppShellProps = {
   controller: ReturnType<typeof useRoamController>;
 };
 
-type SettingsView = "home" | "account" | "change-password" | "web-push";
+type SettingsView =
+  | "home"
+  | "account"
+  | "change-password"
+  | "web-push"
+  | "project";
 type AccountRefreshState = "idle" | "loading" | "ready" | "error";
 
 type SessionArchiveDialogState = {
   session: Session;
   error?: string;
   submitting?: "keep" | "remove";
+};
+
+type PromptPresetEditorState = {
+  projectId: string;
+  preset?: ProjectPromptPreset;
+  initialTitle?: string;
+  initialContent?: string;
 };
 
 const TERMINAL_GIT_JOB_STATUSES = new Set<GitJob["status"]>([
@@ -102,6 +141,9 @@ export function AppShell({ controller }: AppShellProps) {
     useState(false);
   const [mobileStatusModalOpen, setMobileStatusModalOpen] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>("home");
+  const [settingsProjectId, setSettingsProjectId] = useState("");
+  const [promptPresetEditor, setPromptPresetEditor] =
+    useState<PromptPresetEditorState | null>(null);
   const [settingsAccountRefreshState, setSettingsAccountRefreshState] =
     useState<AccountRefreshState>("idle");
   const [settingsAccountRefreshKey, setSettingsAccountRefreshKey] = useState(0);
@@ -110,6 +152,8 @@ export function AppShell({ controller }: AppShellProps) {
     useState<SessionArchiveDialogState | null>(null);
   const {
     state,
+    projectPromptPresetsByProject,
+    projectPromptPresetStates,
     authView,
     accountSecurity,
     streamReconnect,
@@ -156,6 +200,12 @@ export function AppShell({ controller }: AppShellProps) {
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
+    projectPromptPresetErrorsByProject,
+    refreshProjectPromptPresets,
+    createProjectPromptPreset,
+    updateProjectPromptPreset,
+    deleteProjectPromptPreset,
+    reorderProjectPromptPresets,
     fetchMessageAttachmentContent,
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
@@ -276,6 +326,17 @@ export function AppShell({ controller }: AppShellProps) {
     () => state.projects.filter((project) => !project.archivedAt),
     [state.projects],
   );
+  const currentProjectSettingsTargetId =
+    selectedProject?.id ?? activeProjects[0]?.id ?? "";
+  useEffect(() => {
+    if (
+      settingsProjectId &&
+      activeProjects.some((project) => project.id === settingsProjectId)
+    ) {
+      return;
+    }
+    setSettingsProjectId(selectedProject?.id ?? activeProjects[0]?.id ?? "");
+  }, [activeProjects, selectedProject?.id, settingsProjectId]);
   const hasWorkspaceData =
     activeProjects.length > 0 ||
     state.sessions.some((session) => !session.archivedAt);
@@ -331,6 +392,9 @@ export function AppShell({ controller }: AppShellProps) {
   const changeSettingsView = useCallback(
     (view: SettingsView) => {
       setSettingsView(view);
+      if (view === "project") {
+        setSettingsProjectId(currentProjectSettingsTargetId);
+      }
       if (
         view === "account" &&
         authView === "authenticated" &&
@@ -339,7 +403,12 @@ export function AppShell({ controller }: AppShellProps) {
         requestSettingsAccountRefresh();
       }
     },
-    [authView, requestSettingsAccountRefresh, state.activeTab],
+    [
+      authView,
+      currentProjectSettingsTargetId,
+      requestSettingsAccountRefresh,
+      state.activeTab,
+    ],
   );
 
   useEffect(() => {
@@ -428,6 +497,97 @@ export function AppShell({ controller }: AppShellProps) {
       notify("error", "Runner token update failed", errorMessage(runnerError));
     }
   }, [notify, regenerateRunnerToken]);
+
+  const openPromptPresetManager = useCallback(
+    (projectId: string) => {
+      setMobileSessionModalOpen(false);
+      setSettingsProjectId(projectId);
+      setSettingsView("project");
+      setActiveTab("settings");
+    },
+    [setActiveTab],
+  );
+
+  const openSaveMessageAsPrompt = useCallback(
+    (content: string) => {
+      if (!selectedSession) {
+        return;
+      }
+      const cleanContent = content.trim();
+      if (!cleanContent) {
+        notify("error", "Prompt was not saved", "Message text is empty.");
+        return;
+      }
+      setPromptPresetEditor({
+        projectId: selectedSession.projectId,
+        initialTitle: promptTitleFromMessage(cleanContent),
+        initialContent: cleanContent,
+      });
+    },
+    [notify, selectedSession],
+  );
+
+  const savePromptPreset = useCallback(
+    async (
+      projectId: string,
+      presetId: string | undefined,
+      input: ApiCreateProjectPromptPreset | ApiUpdateProjectPromptPreset,
+    ) => {
+      try {
+        if (presetId) {
+          await updateProjectPromptPreset(projectId, presetId, input);
+        } else {
+          await createProjectPromptPreset(
+            projectId,
+            input as ApiCreateProjectPromptPreset,
+          );
+        }
+        notify("success", "Prompt saved", "Project prompt preset saved.");
+        setPromptPresetEditor(null);
+      } catch (saveError: unknown) {
+        notify("error", "Prompt was not saved", errorMessage(saveError));
+        throw saveError;
+      }
+    },
+    [createProjectPromptPreset, notify, updateProjectPromptPreset],
+  );
+
+  const removePromptPreset = useCallback(
+    async (projectId: string, preset: ProjectPromptPreset) => {
+      if (
+        !window.confirm(
+          `Delete prompt preset "${preset.title}"? This does not affect historical messages.`,
+        )
+      ) {
+        return false;
+      }
+      try {
+        await deleteProjectPromptPreset(projectId, preset.id);
+        notify("success", "Prompt deleted", "Project prompt preset deleted.");
+        return true;
+      } catch (deleteError: unknown) {
+        notify("error", "Prompt was not deleted", errorMessage(deleteError));
+        return false;
+      }
+    },
+    [deleteProjectPromptPreset, notify],
+  );
+
+  const reorderPromptPresets = useCallback(
+    async (projectId: string, presetIds: string[]) => {
+      try {
+        await reorderProjectPromptPresets(projectId, presetIds);
+      } catch (reorderError: unknown) {
+        notify(
+          "error",
+          "Prompt order was not saved",
+          errorMessage(reorderError),
+        );
+        throw reorderError;
+      }
+    },
+    [notify, reorderProjectPromptPresets],
+  );
 
   if (authView !== "authenticated") {
     return (
@@ -519,6 +679,11 @@ export function AppShell({ controller }: AppShellProps) {
               onCreateSession={createSession}
               onListAgentSkills={listAgentSkills}
               onSearchWorkspacePaths={searchWorkspacePaths}
+              promptPresetsByProject={projectPromptPresetsByProject}
+              promptPresetStates={projectPromptPresetStates}
+              promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
+              onRefreshPromptPresets={refreshProjectPromptPresets}
+              onManagePromptPresets={openPromptPresetManager}
               onFetchGitStatus={fetchGitStatus}
               onFetchGitBranches={fetchGitBranches}
             />
@@ -543,6 +708,23 @@ export function AppShell({ controller }: AppShellProps) {
                 onFetchAttachmentContent={fetchMessageAttachmentContent}
                 onListAgentSkills={listAgentSkills}
                 onSearchWorkspacePaths={searchWorkspacePaths}
+                promptPresets={
+                  projectPromptPresetsByProject[selectedSession.projectId] ?? []
+                }
+                promptPresetState={
+                  projectPromptPresetStates[selectedSession.projectId] ?? "idle"
+                }
+                promptPresetError={
+                  projectPromptPresetErrorsByProject[selectedSession.projectId]
+                }
+                onRefreshPromptPresets={() =>
+                  refreshProjectPromptPresets(selectedSession.projectId)
+                }
+                onManagePromptPresets={() =>
+                  openPromptPresetManager(selectedSession.projectId)
+                }
+                onSaveMessageAsPrompt={openSaveMessageAsPrompt}
+                onNotify={notify}
                 statusBanner={
                   state.loadState === "error" ? (
                     <ApiConnectionBanner
@@ -700,6 +882,24 @@ export function AppShell({ controller }: AppShellProps) {
                     runnerCommand={runnerCommand}
                     view={settingsView}
                     onViewChange={changeSettingsView}
+                    projects={activeProjects}
+                    currentProjectId={selectedProject?.id ?? ""}
+                    projectId={settingsProjectId}
+                    onProjectChange={setSettingsProjectId}
+                    promptPresetsByProject={projectPromptPresetsByProject}
+                    promptPresetStates={projectPromptPresetStates}
+                    promptPresetErrorsByProject={
+                      projectPromptPresetErrorsByProject
+                    }
+                    onRefreshPromptPresets={refreshProjectPromptPresets}
+                    onNewPromptPreset={(projectId) =>
+                      setPromptPresetEditor({ projectId })
+                    }
+                    onEditPromptPreset={(projectId, preset) =>
+                      setPromptPresetEditor({ projectId, preset })
+                    }
+                    onDeletePromptPreset={removePromptPreset}
+                    onReorderPromptPresets={reorderPromptPresets}
                     onLogout={logoutFromAccountSecurity}
                     onLogoutAll={logoutAllFromAccountSecurity}
                     onChangePassword={changePasswordFromAccountSecurity}
@@ -769,6 +969,22 @@ export function AppShell({ controller }: AppShellProps) {
                   runner={selectedRunner}
                   onListAgentSkills={listAgentSkills}
                   onSearchWorkspacePaths={searchWorkspacePaths}
+                  promptPresets={
+                    projectPromptPresetsByProject[selectedProject.id] ?? []
+                  }
+                  promptPresetState={
+                    projectPromptPresetStates[selectedProject.id] ?? "idle"
+                  }
+                  promptPresetError={
+                    projectPromptPresetErrorsByProject[selectedProject.id]
+                  }
+                  onRefreshPromptPresets={() =>
+                    refreshProjectPromptPresets(selectedProject.id)
+                  }
+                  onManagePromptPresets={() => {
+                    setMobileSessionModalOpen(false);
+                    openPromptPresetManager(selectedProject.id);
+                  }}
                   onFetchGitStatus={fetchGitStatus}
                   onFetchGitBranches={fetchGitBranches}
                   onCreate={(values) =>
@@ -789,6 +1005,18 @@ export function AppShell({ controller }: AppShellProps) {
               state={archiveDialog}
               onClose={closeArchiveSessionDialog}
               onSubmit={submitArchiveSession}
+            />
+          ) : null}
+
+          {promptPresetEditor ? (
+            <PromptPresetEditorDialog
+              state={promptPresetEditor}
+              project={activeProjects.find(
+                (project) => project.id === promptPresetEditor.projectId,
+              )}
+              onClose={() => setPromptPresetEditor(null)}
+              onSave={savePromptPreset}
+              onDelete={removePromptPreset}
             />
           ) : null}
         </>
@@ -1083,6 +1311,18 @@ function SettingsPanel({
   runnerCommand,
   view,
   onViewChange,
+  projects,
+  currentProjectId,
+  projectId,
+  onProjectChange,
+  promptPresetsByProject,
+  promptPresetStates,
+  promptPresetErrorsByProject,
+  onRefreshPromptPresets,
+  onNewPromptPreset,
+  onEditPromptPreset,
+  onDeletePromptPreset,
+  onReorderPromptPresets,
   onLogout,
   onLogoutAll,
   onChangePassword,
@@ -1093,6 +1333,24 @@ function SettingsPanel({
   runnerCommand: string;
   view: SettingsView;
   onViewChange: (view: SettingsView) => void;
+  projects: Project[];
+  currentProjectId: string;
+  projectId: string;
+  onProjectChange: (projectId: string) => void;
+  promptPresetsByProject: Record<string, ProjectPromptPreset[]>;
+  promptPresetStates: Record<string, AsyncState>;
+  promptPresetErrorsByProject: Record<string, string>;
+  onRefreshPromptPresets: (projectId: string) => Promise<ProjectPromptPreset[]>;
+  onNewPromptPreset: (projectId: string) => void;
+  onEditPromptPreset: (projectId: string, preset: ProjectPromptPreset) => void;
+  onDeletePromptPreset: (
+    projectId: string,
+    preset: ProjectPromptPreset,
+  ) => Promise<boolean>;
+  onReorderPromptPresets: (
+    projectId: string,
+    presetIds: string[],
+  ) => Promise<void>;
   onLogout: () => Promise<void>;
   onLogoutAll: () => Promise<void>;
   onChangePassword: (input: ApiChangePassword) => Promise<void>;
@@ -1111,6 +1369,12 @@ function SettingsPanel({
               title="Account & Security"
               description="Owner password, runner token, and web sessions"
               onClick={() => onViewChange("account")}
+            />
+            <SettingsListItem
+              icon={<BookOpen size={18} />}
+              title="Project Settings"
+              description="Project prompt presets and reusable instructions"
+              onClick={() => onViewChange("project")}
             />
             <SettingsListItem
               icon={<Bell size={18} />}
@@ -1172,7 +1436,614 @@ function SettingsPanel({
           </div>
         </>
       ) : null}
+
+      {view === "project" ? (
+        <>
+          <SettingsDetailHeader
+            title="Project Settings"
+            onBack={() => onViewChange("home")}
+          />
+          <ProjectSettingsPanel
+            projects={projects}
+            currentProjectId={currentProjectId}
+            projectId={projectId}
+            onProjectChange={onProjectChange}
+            promptPresetsByProject={promptPresetsByProject}
+            promptPresetStates={promptPresetStates}
+            promptPresetErrorsByProject={promptPresetErrorsByProject}
+            onRefreshPromptPresets={onRefreshPromptPresets}
+            onNewPromptPreset={onNewPromptPreset}
+            onEditPromptPreset={onEditPromptPreset}
+            onDeletePromptPreset={onDeletePromptPreset}
+            onReorderPromptPresets={onReorderPromptPresets}
+          />
+        </>
+      ) : null}
     </section>
+  );
+}
+
+function ProjectSettingsPanel({
+  projects,
+  currentProjectId,
+  projectId,
+  onProjectChange,
+  promptPresetsByProject,
+  promptPresetStates,
+  promptPresetErrorsByProject,
+  onRefreshPromptPresets,
+  onNewPromptPreset,
+  onEditPromptPreset,
+  onDeletePromptPreset,
+  onReorderPromptPresets,
+}: {
+  projects: Project[];
+  currentProjectId: string;
+  projectId: string;
+  onProjectChange: (projectId: string) => void;
+  promptPresetsByProject: Record<string, ProjectPromptPreset[]>;
+  promptPresetStates: Record<string, AsyncState>;
+  promptPresetErrorsByProject: Record<string, string>;
+  onRefreshPromptPresets: (projectId: string) => Promise<ProjectPromptPreset[]>;
+  onNewPromptPreset: (projectId: string) => void;
+  onEditPromptPreset: (projectId: string, preset: ProjectPromptPreset) => void;
+  onDeletePromptPreset: (
+    projectId: string,
+    preset: ProjectPromptPreset,
+  ) => Promise<boolean>;
+  onReorderPromptPresets: (
+    projectId: string,
+    presetIds: string[],
+  ) => Promise<void>;
+}) {
+  const selectedProject = projects.find((project) => project.id === projectId);
+  const selectedProjectId = selectedProject?.id ?? "";
+  const presets = selectedProjectId
+    ? (promptPresetsByProject[selectedProjectId] ?? [])
+    : [];
+  const promptPresetState = selectedProjectId
+    ? (promptPresetStates[selectedProjectId] ?? "idle")
+    : "idle";
+  const sharedRefreshError = selectedProjectId
+    ? promptPresetErrorsByProject[selectedProjectId]
+    : undefined;
+  const [refreshError, setRefreshError] = useState("");
+  const [presetSearchQuery, setPresetSearchQuery] = useState("");
+  const trimmedPresetSearchQuery = presetSearchQuery.trim().toLowerCase();
+  const filteredPresets = useMemo(() => {
+    if (!trimmedPresetSearchQuery) {
+      return presets;
+    }
+    return presets.filter((preset) => {
+      const title = preset.title.toLowerCase();
+      const content = preset.content.toLowerCase();
+      return (
+        title.includes(trimmedPresetSearchQuery) ||
+        content.includes(trimmedPresetSearchQuery)
+      );
+    });
+  }, [presets, trimmedPresetSearchQuery]);
+  const searchActive = trimmedPresetSearchQuery.length > 0;
+
+  const refresh = useCallback(async () => {
+    if (!selectedProjectId) {
+      return;
+    }
+    setRefreshError("");
+    try {
+      await onRefreshPromptPresets(selectedProjectId);
+    } catch (refreshFailure: unknown) {
+      setRefreshError(errorMessage(refreshFailure));
+    }
+  }, [onRefreshPromptPresets, selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedProjectId && promptPresetState === "idle") {
+      void refresh();
+    }
+  }, [promptPresetState, refresh, selectedProjectId]);
+
+  useEffect(() => {
+    setPresetSearchQuery("");
+    setRefreshError("");
+  }, [selectedProjectId]);
+
+  if (projects.length === 0) {
+    return (
+      <div className="settings-detail project-settings-panel">
+        <div className="empty-state compact">No active projects.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-detail project-settings-panel">
+      <section className="settings-section project-selector-section">
+        <label className="field" htmlFor="settings-project-selector">
+          <span>Project</span>
+          <select
+            id="settings-project-selector"
+            value={selectedProjectId}
+            onChange={(event) => onProjectChange(event.target.value)}
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+                {project.id === currentProjectId ? " (Current)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedProject ? (
+          <p className="settings-meta project-current-meta">
+            {selectedProject.id === currentProjectId
+              ? "Highlighted as the current workspace project."
+              : "Changing this selector only changes Settings context."}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="settings-section prompt-presets-section">
+        <div className="prompt-presets-header">
+          <div>
+            <h3>Prompt Presets</h3>
+            <p className="settings-meta">
+              Reusable project instructions available from session composers.
+            </p>
+          </div>
+          <div className="button-row prompt-presets-actions">
+            <button
+              className="small-button"
+              type="button"
+              onClick={() => void refresh()}
+              disabled={!selectedProjectId || promptPresetState === "loading"}
+            >
+              <RefreshCw
+                size={14}
+                className={
+                  promptPresetState === "loading" ? "animate-spin" : undefined
+                }
+              />
+              Refresh
+            </button>
+            <button
+              className="small-button"
+              type="button"
+              onClick={() => onNewPromptPreset(selectedProjectId)}
+              disabled={!selectedProjectId}
+            >
+              <Plus size={14} />
+              New
+            </button>
+          </div>
+        </div>
+
+        {refreshError || sharedRefreshError ? (
+          <div className="form-error" role="alert">
+            {refreshError || sharedRefreshError}
+          </div>
+        ) : null}
+
+        <label className="prompt-preset-search">
+          <span>Search prompt presets</span>
+          <input
+            type="search"
+            value={presetSearchQuery}
+            onChange={(event) => setPresetSearchQuery(event.target.value)}
+            placeholder="Search title or content"
+            disabled={!selectedProjectId || presets.length === 0}
+          />
+        </label>
+
+        <PromptPresetList
+          projectId={selectedProjectId}
+          presets={filteredPresets}
+          state={promptPresetState}
+          reorderEnabled={!searchActive}
+          emptyMessage={
+            searchActive
+              ? "No prompt presets match this search."
+              : "No prompt presets for this project."
+          }
+          onEdit={(preset) => onEditPromptPreset(selectedProjectId, preset)}
+          onDelete={(preset) =>
+            void onDeletePromptPreset(selectedProjectId, preset)
+          }
+          onReorder={(presetIds) =>
+            onReorderPromptPresets(selectedProjectId, presetIds)
+          }
+        />
+      </section>
+    </div>
+  );
+}
+
+function PromptPresetList({
+  projectId,
+  presets,
+  state,
+  reorderEnabled,
+  emptyMessage,
+  onEdit,
+  onDelete,
+  onReorder,
+}: {
+  projectId: string;
+  presets: ProjectPromptPreset[];
+  state: AsyncState;
+  reorderEnabled: boolean;
+  emptyMessage: string;
+  onEdit: (preset: ProjectPromptPreset) => void;
+  onDelete: (preset: ProjectPromptPreset) => void;
+  onReorder: (presetIds: string[]) => Promise<void>;
+}) {
+  const [reorderPending, setReorderPending] = useState(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (reorderPending || !reorderEnabled) {
+      return;
+    }
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const oldIndex = presets.findIndex((preset) => preset.id === active.id);
+    const newIndex = presets.findIndex((preset) => preset.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) {
+      return;
+    }
+
+    const nextPresetIds = arrayMove(presets, oldIndex, newIndex).map(
+      (preset) => preset.id,
+    );
+    setReorderPending(true);
+    void onReorder(nextPresetIds)
+      .finally(() => {
+        setReorderPending(false);
+      })
+      .catch(() => undefined);
+  };
+
+  if (!projectId) {
+    return <div className="empty-state compact">Select a project.</div>;
+  }
+
+  if (state === "loading" && presets.length === 0) {
+    return <div className="empty-state compact">Loading prompt presets...</div>;
+  }
+
+  if (presets.length === 0) {
+    return (
+      <div className="empty-state compact">
+        {emptyMessage}
+      </div>
+    );
+  }
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext
+        items={presets.map((preset) => preset.id)}
+        strategy={verticalListSortingStrategy}
+      >
+        <div
+          className="prompt-preset-list"
+          role="list"
+          aria-busy={reorderPending || undefined}
+        >
+          {presets.map((preset) => (
+            <SortablePromptPresetRow
+              key={preset.id}
+              preset={preset}
+              reorderDisabled={reorderPending || !reorderEnabled}
+              onEdit={() => onEdit(preset)}
+              onDelete={() => onDelete(preset)}
+            />
+          ))}
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function SortablePromptPresetRow({
+  preset,
+  reorderDisabled,
+  onEdit,
+  onDelete,
+}: {
+  preset: ProjectPromptPreset;
+  reorderDisabled: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: preset.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <article
+      ref={setNodeRef}
+      className={`prompt-preset-row ${isDragging ? "is-dragging" : ""}`}
+      style={style}
+      role="listitem"
+    >
+      <button
+        className="prompt-preset-drag-handle"
+        type="button"
+        aria-label={`Drag prompt preset ${preset.title}`}
+        disabled={reorderDisabled}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={16} />
+      </button>
+      <button className="prompt-preset-row-main" type="button" onClick={onEdit}>
+        <span className="prompt-preset-row-title">{preset.title}</span>
+        <span className="prompt-preset-row-content">
+          {singleLinePreview(preset.content)}
+        </span>
+        <span className="prompt-preset-row-meta">
+          Updated {formatDate(preset.updatedAt)}
+        </span>
+      </button>
+      <details className="prompt-preset-row-actions">
+        <summary aria-label={`Actions for ${preset.title}`}>
+          <MoreHorizontal size={16} />
+        </summary>
+        <div className="prompt-preset-row-menu" role="menu">
+          <button type="button" role="menuitem" onClick={onEdit}>
+            Edit
+          </button>
+          <button
+            className="danger"
+            type="button"
+            role="menuitem"
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function PromptPresetEditorDialog({
+  state,
+  project,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  state: PromptPresetEditorState;
+  project: Project | undefined;
+  onClose: () => void;
+  onSave: (
+    projectId: string,
+    presetId: string | undefined,
+    input: ApiCreateProjectPromptPreset | ApiUpdateProjectPromptPreset,
+  ) => Promise<void>;
+  onDelete: (
+    projectId: string,
+    preset: ProjectPromptPreset,
+  ) => Promise<boolean>;
+}) {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState<"save" | "delete" | "">("");
+  const titleId = "prompt-preset-editor-title";
+  const isEditing = Boolean(state.preset);
+
+  useEffect(() => {
+    setTitle(state.preset?.title ?? state.initialTitle ?? "");
+    setContent(state.preset?.content ?? state.initialContent ?? "");
+    setError("");
+    setSubmitting("");
+  }, [
+    state.initialContent,
+    state.initialTitle,
+    state.preset?.content,
+    state.preset?.id,
+    state.preset?.title,
+  ]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!project) {
+      return;
+    }
+
+    const cleanTitle = title.trim();
+    const cleanContent = content.trim();
+    if (!cleanTitle) {
+      setError("Title is required.");
+      return;
+    }
+    if (!cleanContent) {
+      setError("Prompt content is required.");
+      return;
+    }
+    if (cleanTitle.length > PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH) {
+      setError(
+        `Title must be ${PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH} characters or less.`,
+      );
+      return;
+    }
+    if (cleanContent.length > PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH) {
+      setError(
+        `Prompt content must be ${PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH} characters or less.`,
+      );
+      return;
+    }
+
+    setSubmitting("save");
+    setError("");
+    try {
+      await onSave(project.id, state.preset?.id, {
+        title: cleanTitle,
+        content: cleanContent,
+      });
+    } catch (saveError: unknown) {
+      setError(errorMessage(saveError));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  const deletePreset = async () => {
+    if (!project || !state.preset) {
+      return;
+    }
+    setSubmitting("delete");
+    setError("");
+    try {
+      const deleted = await onDelete(project.id, state.preset);
+      if (deleted) {
+        onClose();
+      }
+    } catch (deleteError: unknown) {
+      setError(errorMessage(deleteError));
+    } finally {
+      setSubmitting("");
+    }
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (!submitting && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        className="modal-panel prompt-preset-editor-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <form onSubmit={(event) => void submit(event)}>
+          <div className="modal-header">
+            <div>
+              <h2 id={titleId}>
+                {isEditing ? "Edit Prompt Preset" : "New Prompt Preset"}
+              </h2>
+              <p className="archive-dialog-subtitle">
+                {project?.name ?? "Project unavailable"}
+              </p>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Close prompt preset editor"
+              onClick={onClose}
+              disabled={Boolean(submitting)}
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="prompt-preset-editor-content">
+            {!project ? (
+              <div className="form-error" role="alert">
+                The selected project is no longer available.
+              </div>
+            ) : null}
+            <label className="field">
+              <span>Title</span>
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                maxLength={PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH}
+                required
+                disabled={!project || Boolean(submitting)}
+              />
+            </label>
+            <label className="field">
+              <span>Content</span>
+              <textarea
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                maxLength={PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH}
+                required
+                disabled={!project || Boolean(submitting)}
+              />
+            </label>
+            <p className="settings-meta prompt-preset-editor-count">
+              {content.length}/{PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH}
+            </p>
+            {error ? (
+              <div className="form-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="archive-dialog-actions prompt-preset-editor-actions">
+            {state.preset ? (
+              <button
+                className="small-button danger"
+                type="button"
+                onClick={() => void deletePreset()}
+                disabled={Boolean(submitting)}
+              >
+                {submitting === "delete" ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <Trash2 size={14} />
+                )}
+                Delete
+              </button>
+            ) : null}
+            <button
+              className="small-button"
+              type="button"
+              onClick={onClose}
+              disabled={Boolean(submitting)}
+            >
+              Cancel
+            </button>
+            <button
+              className="small-button accept"
+              type="submit"
+              disabled={!project || Boolean(submitting)}
+            >
+              {submitting === "save" ? (
+                <RefreshCw size={14} className="animate-spin" />
+              ) : (
+                <BookmarkPlus size={14} />
+              )}
+              Save
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -1721,6 +2592,19 @@ function getCompactStatusLabel(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function promptTitleFromMessage(content: string): string {
+  const firstLine =
+    content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? "Prompt from message";
+  return firstLine.replace(/\s+/g, " ").slice(0, 48) || "Prompt from message";
+}
+
+function singleLinePreview(content: string): string {
+  return content.replace(/\s+/g, " ").trim() || "Empty prompt";
 }
 
 function formatDate(value: string): string {

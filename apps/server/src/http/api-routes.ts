@@ -6,9 +6,11 @@ import {
   ApiChangePasswordSchema,
   ApiCreateMessageSchema,
   ApiCreateProjectSchema,
+  ApiCreateProjectPromptPresetSchema,
   ApiPathSearchSchema,
   ApiCreateSessionSchema,
   ApiLoginSchema,
+  ApiReorderProjectPromptPresetsSchema,
   ApiRegenerateRunnerTokenSchema,
   ApiSetupOwnerSchema,
   ApiGitBlameQuerySchema,
@@ -22,6 +24,7 @@ import {
   ApiGitRemoteOperationSchema,
   ApiGitRemoveWorktreeSchema,
   ApiUpdateProjectSchema,
+  ApiUpdateProjectPromptPresetSchema,
   ApiUpdateSessionSchema,
   ApiWriteFileSchema,
   DEFAULT_MAX_IMAGE_BYTES,
@@ -39,6 +42,7 @@ import {
   DirectoryCreateBodySchema,
   FileContentQuerySchema,
   FileTreeQuerySchema,
+  ProjectPromptPresetParamsSchema,
   ProjectParamsSchema,
   RunnerParamsSchema,
   SessionDeleteQuerySchema,
@@ -567,6 +571,138 @@ function registerProjectRoutes(
     context.hub.broadcast({ type: "project:updated", project });
     return { project };
   });
+
+  app.get("/v1/projects/:id/prompt-presets", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const project = context.store.getProject(params.id);
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    if (project.archivedAt) {
+      return reply.code(409).send({ error: "project_archived" });
+    }
+    return {
+      presets: context.store.listProjectPromptPresets(params.id),
+    };
+  });
+
+  app.post("/v1/projects/:id/prompt-presets", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const project = context.store.getProject(params.id);
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    if (project.archivedAt) {
+      return reply.code(409).send({ error: "project_archived" });
+    }
+    const parsed = ApiCreateProjectPromptPresetSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const now = nowIso();
+    const preset = context.store.createProjectPromptPreset({
+      id: newId("promptPreset"),
+      projectId: params.id,
+      title: parsed.data.title,
+      content: parsed.data.content,
+      order: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return reply.code(201).send({ preset });
+  });
+
+  app.patch(
+    "/v1/projects/:id/prompt-presets/:presetId",
+    async (request, reply) => {
+      const params = ProjectPromptPresetParamsSchema.parse(request.params);
+      const project = context.store.getProject(params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "project_not_found" });
+      }
+      if (project.archivedAt) {
+        return reply.code(409).send({ error: "project_archived" });
+      }
+      const parsed = ApiUpdateProjectPromptPresetSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", issues: parsed.error.issues });
+      }
+      const changes: {
+        title?: string;
+        content?: string;
+        updatedAt: string;
+      } = { updatedAt: nowIso() };
+      if (parsed.data.title !== undefined) {
+        changes.title = parsed.data.title;
+      }
+      if (parsed.data.content !== undefined) {
+        changes.content = parsed.data.content;
+      }
+      const preset = context.store.updateProjectPromptPreset(
+        params.id,
+        params.presetId,
+        changes,
+      );
+      if (!preset) {
+        return reply.code(404).send({ error: "prompt_preset_not_found" });
+      }
+      return { preset };
+    },
+  );
+
+  app.delete(
+    "/v1/projects/:id/prompt-presets/:presetId",
+    async (request, reply) => {
+      const params = ProjectPromptPresetParamsSchema.parse(request.params);
+      const project = context.store.getProject(params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "project_not_found" });
+      }
+      if (project.archivedAt) {
+        return reply.code(409).send({ error: "project_archived" });
+      }
+      const deleted = context.store.deleteProjectPromptPreset(
+        params.id,
+        params.presetId,
+      );
+      if (!deleted) {
+        return reply.code(404).send({ error: "prompt_preset_not_found" });
+      }
+      return { deleted: true };
+    },
+  );
+
+  app.put("/v1/projects/:id/prompt-presets/order", async (request, reply) => {
+    const params = ProjectParamsSchema.parse(request.params);
+    const project = context.store.getProject(params.id);
+    if (!project) {
+      return reply.code(404).send({ error: "project_not_found" });
+    }
+    if (project.archivedAt) {
+      return reply.code(409).send({ error: "project_archived" });
+    }
+    const parsed = ApiReorderProjectPromptPresetsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+    const existing = context.store.listProjectPromptPresets(params.id);
+    const existingIds = existing.map((preset) => preset.id);
+    if (!sameStringSet(existingIds, parsed.data.presetIds)) {
+      return reply.code(400).send({ error: "invalid_prompt_preset_order" });
+    }
+    return {
+      presets: context.store.reorderProjectPromptPresets(
+        params.id,
+        parsed.data.presetIds,
+      ),
+    };
+  });
 }
 
 function registerWorkspaceRoutes(
@@ -990,6 +1126,18 @@ function registerApprovalRoutes(
     }
     return result.value;
   });
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const seen = new Set(left);
+  const candidate = new Set(right);
+  if (seen.size !== candidate.size) {
+    return false;
+  }
+  return right.every((value) => seen.has(value));
 }
 
 function sendAuthError(reply: FastifyReply, error: string): FastifyReply {

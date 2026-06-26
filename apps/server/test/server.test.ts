@@ -638,6 +638,133 @@ describe("server", () => {
     runner.close();
   });
 
+  it("manages project prompt presets without requiring an online runner", async () => {
+    createTestProject(app);
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        title: "  First preset  ",
+        content: "  Preserve\nformatting  ",
+      },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().preset).toMatchObject({
+      projectId: "project-1",
+      title: "First preset",
+      content: "Preserve\nformatting",
+      order: 0,
+    });
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        title: "Second preset",
+        content: "Run this next",
+      },
+    });
+    expect(second.statusCode).toBe(201);
+
+    const firstId = first.json().preset.id as string;
+    const secondId = second.json().preset.id as string;
+    const secondUpdatedAt = second.json().preset.updatedAt as string;
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().presets.map((preset: any) => preset.id)).toEqual([
+      secondId,
+      firstId,
+    ]);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/project-1/prompt-presets/${firstId}`,
+      headers: { "x-test-auth": "1" },
+      payload: { title: "Updated first" },
+    });
+    expect(updated.statusCode).toBe(200);
+    const firstUpdatedAt = updated.json().preset.updatedAt as string;
+    expect(updated.json().preset).toMatchObject({
+      id: firstId,
+      title: "Updated first",
+      content: "Preserve\nformatting",
+    });
+
+    const reordered = await app.inject({
+      method: "PUT",
+      url: "/v1/projects/project-1/prompt-presets/order",
+      headers: { "x-test-auth": "1" },
+      payload: { presetIds: [firstId, secondId] },
+    });
+    expect(reordered.statusCode).toBe(200);
+    expect(
+      reordered.json().presets.map((preset: any) => ({
+        id: preset.id,
+        order: preset.order,
+        updatedAt: preset.updatedAt,
+      })),
+    ).toEqual([
+      { id: firstId, order: 0, updatedAt: firstUpdatedAt },
+      { id: secondId, order: 1, updatedAt: secondUpdatedAt },
+    ]);
+
+    const duplicateOrder = await app.inject({
+      method: "PUT",
+      url: "/v1/projects/project-1/prompt-presets/order",
+      headers: { "x-test-auth": "1" },
+      payload: { presetIds: [firstId, firstId] },
+    });
+    expect(duplicateOrder.statusCode).toBe(400);
+    expect(duplicateOrder.json()).toEqual({
+      error: "invalid_prompt_preset_order",
+    });
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/projects/project-1/prompt-presets/${secondId}`,
+      headers: { "x-test-auth": "1" },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({ deleted: true });
+
+    const listedAfterDelete = await app.inject({
+      method: "GET",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(listedAfterDelete.json().presets).toHaveLength(1);
+    expect(listedAfterDelete.json().presets[0].id).toBe(firstId);
+  });
+
+  it("blocks prompt preset operations for archived projects", async () => {
+    createTestProject(app);
+    app.roam.store.archiveProject("project-1", new Date().toISOString());
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(listed.statusCode).toBe(409);
+    expect(listed.json()).toEqual({ error: "project_archived" });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects/project-1/prompt-presets",
+      headers: { "x-test-auth": "1" },
+      payload: { title: "Archived", content: "Nope" },
+    });
+    expect(created.statusCode).toBe(409);
+    expect(created.json()).toEqual({ error: "project_archived" });
+  });
+
   it("archives and restores a project together with its sessions", async () => {
     createTestProject(app);
     const now = new Date().toISOString();

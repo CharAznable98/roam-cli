@@ -25,6 +25,7 @@ vi.mock("shiki", () => ({
 const originalCreateObjectUrl = URL.createObjectURL;
 const originalRevokeObjectUrl = URL.revokeObjectURL;
 const originalInnerWidth = window.innerWidth;
+const originalClipboard = navigator.clipboard;
 const codeToHtmlMock = vi.mocked(codeToHtml);
 
 const baseSession: Session = {
@@ -80,6 +81,10 @@ describe("ChatPanel", () => {
       configurable: true,
       value: originalInnerWidth,
     });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: originalClipboard,
+    });
   });
 
   it("submits the composer with Command+Enter", async () => {
@@ -113,6 +118,36 @@ describe("ChatPanel", () => {
     expect(
       screen.getByRole("textbox", { name: "Chat composer" }),
     ).toHaveAttribute("placeholder", "Message the active session");
+  });
+
+  it("copies the exact user message text", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const content = "\n  preserve prompt boundaries  \n";
+    const message: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content,
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[message]}
+        onSend={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Message actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Copy/ }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(content));
   });
 
   it("disables follow-up sends while a Claude Code turn is active", () => {

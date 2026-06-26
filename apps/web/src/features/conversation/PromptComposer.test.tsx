@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import "../../test/setup.js";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type {
   AgentSkillListResult,
   PathSearchResult,
+  ProjectPromptPreset,
 } from "@roamcli/shared/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
@@ -342,6 +349,166 @@ describe("PromptComposer", () => {
 
     expect(await screen.findByRole("listbox")).toHaveClass("below");
   });
+
+  it("opens prompt presets, refreshes, inserts at the caret, and manages presets", async () => {
+    const refreshPromptPresets = vi.fn(async () => promptPresets);
+    const managePromptPresets = vi.fn();
+
+    render(
+      <ComposerHarness
+        initialValue="Before"
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={promptPresets}
+        onRefreshPromptPresets={refreshPromptPresets}
+        onManagePromptPresets={managePromptPresets}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Prompt" });
+    if (!(composer instanceof HTMLTextAreaElement)) {
+      throw new Error("Prompt composer did not render a textarea.");
+    }
+    composer.focus();
+    composer.setSelectionRange("Before".length, "Before".length);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    expect(await screen.findByText("Review brief")).toBeInTheDocument();
+    await waitFor(() => expect(refreshPromptPresets).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh prompt presets" }),
+    );
+    await waitFor(() => expect(refreshPromptPresets).toHaveBeenCalledTimes(2));
+
+    const presetOption = screen.getByText("Review brief").closest("button");
+    if (!presetOption) {
+      throw new Error("Prompt preset option button was not found.");
+    }
+    fireEvent.mouseDown(presetOption);
+    await waitFor(() =>
+      expect(composer).toHaveValue("Before\n\nRun tests\nCheck UI"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    const manageButton = await screen.findByRole("button", {
+      name: "Manage prompts",
+    });
+    fireEvent.click(manageButton, { detail: 0 });
+    expect(managePromptPresets).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes prompt presets when the open picker scope changes", async () => {
+    const firstRefresh = vi.fn(async () => promptPresets);
+    const secondRefresh = vi.fn(async () => promptPresets);
+
+    const { rerender } = render(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={[]}
+        promptPresetState="idle"
+        onRefreshPromptPresets={firstRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    await waitFor(() => expect(firstRefresh).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={[]}
+        promptPresetState="idle"
+        onRefreshPromptPresets={secondRefresh}
+      />,
+    );
+
+    await waitFor(() => expect(secondRefresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not auto-refresh prompt presets again after an error state", async () => {
+    const refreshPromptPresets = vi.fn(async () => promptPresets);
+
+    render(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={[]}
+        promptPresetState="error"
+        onRefreshPromptPresets={refreshPromptPresets}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+
+    expect(await screen.findByText("No prompt presets yet")).toBeInTheDocument();
+    expect(refreshPromptPresets).not.toHaveBeenCalled();
+  });
+
+  it("supports keyboard activation in the prompt preset picker", async () => {
+    const managePromptPresets = vi.fn();
+
+    render(
+      <ComposerHarness
+        initialValue="Before"
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={promptPresets}
+        promptPresetState="ready"
+        onRefreshPromptPresets={vi.fn(async () => promptPresets)}
+        onManagePromptPresets={managePromptPresets}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Prompt" });
+    if (!(composer instanceof HTMLTextAreaElement)) {
+      throw new Error("Prompt composer did not render a textarea.");
+    }
+    composer.focus();
+    composer.setSelectionRange("Before".length, "Before".length);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    const presetOption = await screen.findByRole("button", {
+      name: /Review brief/,
+    });
+    fireEvent.click(presetOption, { detail: 0 });
+    await waitFor(() =>
+      expect(composer).toHaveValue("Before\n\nRun tests\nCheck UI"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage prompts" }),
+      { detail: 0 },
+    );
+    expect(managePromptPresets).toHaveBeenCalledTimes(1);
+  });
+
+  it("prevents Enter in prompt preset search from submitting the surrounding form", async () => {
+    render(
+      <ComposerHarness
+        onListAgentSkills={emptyAgentSkillList}
+        onSearchWorkspacePaths={emptyPathSearch}
+        promptPresets={promptPresets}
+        promptPresetState="ready"
+        onRefreshPromptPresets={vi.fn(async () => promptPresets)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    const searchInput = await screen.findByRole("textbox", {
+      name: "Search prompt presets",
+    });
+    const enterEvent = createEvent.keyDown(searchInput, {
+      key: "Enter",
+      code: "Enter",
+    });
+    fireEvent(searchInput, enterEvent);
+
+    expect(enterEvent.defaultPrevented).toBe(true);
+  });
 });
 
 function ComposerHarness({
@@ -349,6 +516,11 @@ function ComposerHarness({
   onSearchWorkspacePaths,
   suggestionPlacement,
   agent = "codex",
+  initialValue = "",
+  promptPresets,
+  promptPresetState,
+  onRefreshPromptPresets,
+  onManagePromptPresets,
 }: {
   onListAgentSkills: ComponentProps<typeof PromptComposer>["onListAgentSkills"];
   onSearchWorkspacePaths: ComponentProps<
@@ -358,10 +530,34 @@ function ComposerHarness({
     typeof PromptComposer
   >["suggestionPlacement"];
   agent?: ComponentProps<typeof PromptComposer>["agent"];
+  initialValue?: string;
+  promptPresets?: ComponentProps<typeof PromptComposer>["promptPresets"];
+  promptPresetState?: ComponentProps<
+    typeof PromptComposer
+  >["promptPresetState"];
+  onRefreshPromptPresets?: ComponentProps<
+    typeof PromptComposer
+  >["onRefreshPromptPresets"];
+  onManagePromptPresets?: ComponentProps<
+    typeof PromptComposer
+  >["onManagePromptPresets"];
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue);
   const placementProps =
     suggestionPlacement === undefined ? {} : { suggestionPlacement };
+  const promptPresetProps: Partial<ComponentProps<typeof PromptComposer>> = {};
+  if (promptPresets !== undefined) {
+    promptPresetProps.promptPresets = promptPresets;
+  }
+  if (promptPresetState !== undefined) {
+    promptPresetProps.promptPresetState = promptPresetState;
+  }
+  if (onRefreshPromptPresets !== undefined) {
+    promptPresetProps.onRefreshPromptPresets = onRefreshPromptPresets;
+  }
+  if (onManagePromptPresets !== undefined) {
+    promptPresetProps.onManagePromptPresets = onManagePromptPresets;
+  }
   return (
     <PromptComposer
       value={value}
@@ -374,6 +570,38 @@ function ComposerHarness({
       ariaLabel="Prompt"
       rows={4}
       {...placementProps}
+      {...promptPresetProps}
     />
   );
+}
+
+const promptPresets: ProjectPromptPreset[] = [
+  {
+    id: "promptPreset-1",
+    projectId: "project-1",
+    title: "Review brief",
+    content: "Run tests\nCheck UI",
+    order: 0,
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+  },
+];
+
+async function emptyAgentSkillList(): Promise<AgentSkillListResult> {
+  return {
+    requestId: "skills-empty",
+    agent: "codex",
+    basePath: "/workspace",
+    queriedAt: "2026-06-26T00:00:00.000Z",
+    skills: [],
+  };
+}
+
+async function emptyPathSearch(): Promise<PathSearchResult> {
+  return {
+    requestId: "paths-empty",
+    basePath: "/workspace",
+    query: "",
+    entries: [],
+  };
 }

@@ -17,6 +17,7 @@ import type {
   Message,
   MessageAttachment,
   Project,
+  ProjectPromptPreset,
   RunnerRegistration,
   Session,
   SessionStatus,
@@ -31,6 +32,16 @@ interface ProjectRow {
   created_at: string;
   updated_at: string;
   last_active_at: string;
+}
+
+interface ProjectPromptPresetRow {
+  id: string;
+  project_id: string;
+  title: string;
+  content: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface SessionRow {
@@ -401,6 +412,109 @@ export class ServerStore {
         "UPDATE projects SET last_active_at = ?, updated_at = ? WHERE id = ?",
       )
       .run(activeAt, activeAt, id);
+  }
+
+  listProjectPromptPresets(projectId: string): ProjectPromptPreset[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM project_prompt_presets WHERE project_id = ? ORDER BY sort_order ASC, created_at DESC",
+      )
+      .all(projectId) as unknown as ProjectPromptPresetRow[];
+    return rows.map(toProjectPromptPreset);
+  }
+
+  getProjectPromptPreset(
+    projectId: string,
+    id: string,
+  ): ProjectPromptPreset | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM project_prompt_presets WHERE project_id = ? AND id = ?",
+      )
+      .get(projectId, id) as ProjectPromptPresetRow | undefined;
+    return row ? toProjectPromptPreset(row) : undefined;
+  }
+
+  createProjectPromptPreset(preset: ProjectPromptPreset): ProjectPromptPreset {
+    this.db.exec("BEGIN");
+    try {
+      this.db
+        .prepare(
+          "UPDATE project_prompt_presets SET sort_order = sort_order + 1 WHERE project_id = ?",
+        )
+        .run(preset.projectId);
+      this.db
+        .prepare(
+          `INSERT INTO project_prompt_presets (id, project_id, title, content, sort_order, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          preset.id,
+          preset.projectId,
+          preset.title,
+          preset.content,
+          preset.order,
+          preset.createdAt,
+          preset.updatedAt,
+        );
+      this.db.exec("COMMIT");
+      return preset;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  updateProjectPromptPreset(
+    projectId: string,
+    id: string,
+    input: { title?: string; content?: string; updatedAt: string },
+  ): ProjectPromptPreset | undefined {
+    const existing = this.getProjectPromptPreset(projectId, id);
+    if (!existing) {
+      return undefined;
+    }
+    this.db
+      .prepare(
+        "UPDATE project_prompt_presets SET title = ?, content = ?, updated_at = ? WHERE project_id = ? AND id = ?",
+      )
+      .run(
+        input.title ?? existing.title,
+        input.content ?? existing.content,
+        input.updatedAt,
+        projectId,
+        id,
+      );
+    return this.getProjectPromptPreset(projectId, id);
+  }
+
+  deleteProjectPromptPreset(projectId: string, id: string): boolean {
+    const result = this.db
+      .prepare(
+        "DELETE FROM project_prompt_presets WHERE project_id = ? AND id = ?",
+      )
+      .run(projectId, id);
+    return result.changes > 0;
+  }
+
+  reorderProjectPromptPresets(
+    projectId: string,
+    presetIds: string[],
+  ): ProjectPromptPreset[] {
+    this.db.exec("BEGIN");
+    try {
+      const update = this.db.prepare(
+        "UPDATE project_prompt_presets SET sort_order = ? WHERE project_id = ? AND id = ?",
+      );
+      presetIds.forEach((id, index) => {
+        update.run(index, projectId, id);
+      });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.listProjectPromptPresets(projectId);
   }
 
   createSession(session: Session): Session {
@@ -904,6 +1018,20 @@ export class ServerStore {
         last_active_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS project_prompt_presets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS project_prompt_presets_project_order_idx
+        ON project_prompt_presets(project_id, sort_order, created_at);
+
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -1067,6 +1195,20 @@ function toProject(row: ProjectRow): Project {
   };
 }
 
+function toProjectPromptPreset(
+  row: ProjectPromptPresetRow,
+): ProjectPromptPreset {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    content: row.content,
+    order: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function toSession(row: SessionRow): Session {
   return {
     id: row.id,
@@ -1104,7 +1246,10 @@ function toMessage(row: MessageRow): Message {
 }
 
 function streamMessageId(sessionId: string, outputId: string): string {
-  const digest = createHash("sha256").update(outputId).digest("hex").slice(0, 24);
+  const digest = createHash("sha256")
+    .update(outputId)
+    .digest("hex")
+    .slice(0, 24);
   return `stream_${sessionId}_${digest}`;
 }
 

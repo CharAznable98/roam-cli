@@ -3,6 +3,7 @@ import type {
   AgentKind,
   ApiChangePassword,
   ApiAgentSkillList,
+  ApiCreateProjectPromptPreset,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitCommitFilesQuery,
@@ -14,8 +15,10 @@ import type {
   ApiGitRemoteOperation,
   ApiGitRemoveWorktree,
   ApiPathSearch,
+  ApiUpdateProjectPromptPreset,
   ExecutionMode,
   ImageAttachmentUpload,
+  ProjectPromptPreset,
   Session,
   SessionStatus,
 } from "@roamcli/shared/protocol";
@@ -51,6 +54,7 @@ import {
 import { buildRunnerCommand } from "./runner-command";
 import { loadLastSelection, saveLastSelection } from "./selection-storage";
 import { appReducer, initialAppState, type AppState } from "./state";
+import type { AsyncState } from "../shared/types/async";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
@@ -81,6 +85,15 @@ export function useRoamController() {
     initialAppState,
     hydrateInitialSelection,
   );
+  const [projectPromptPresetsByProject, setProjectPromptPresetsByProject] =
+    useState<Record<string, ProjectPromptPreset[]>>({});
+  const [projectPromptPresetStates, setProjectPromptPresetStates] = useState<
+    Record<string, AsyncState>
+  >({});
+  const [
+    projectPromptPresetErrorsByProject,
+    setProjectPromptPresetErrorsByProject,
+  ] = useState<Record<string, string>>({});
   const [authView, setAuthView] = useState<AuthViewState>("checking");
   const [authEpoch, setAuthEpoch] = useState(0);
   const [accountSecurity, setAccountSecurity] = useState<
@@ -99,6 +112,10 @@ export function useRoamController() {
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
   const accountSecurityRequestIdRef = useRef(0);
+  const promptPresetRequestVersionsRef = useRef<Record<string, number>>({});
+  const promptPresetReorderChainsRef = useRef<
+    Record<string, Promise<ProjectPromptPreset[]>>
+  >({});
 
   const nextAccountSecurityRequestId = useCallback(() => {
     accountSecurityRequestIdRef.current += 1;
@@ -1132,6 +1149,190 @@ export function useRoamController() {
     }
   }, [requireApiClient, selectedSession?.id]);
 
+  const refreshProjectPromptPresets = useCallback(
+    async (projectId: string) => {
+      const requestVersion =
+        (promptPresetRequestVersionsRef.current[projectId] ?? 0) + 1;
+      promptPresetRequestVersionsRef.current = {
+        ...promptPresetRequestVersionsRef.current,
+        [projectId]: requestVersion,
+      };
+      setProjectPromptPresetStates((current) => ({
+        ...current,
+        [projectId]: "loading",
+      }));
+      setProjectPromptPresetErrorsByProject((current) =>
+        removeRecordEntry(current, projectId),
+      );
+      try {
+        const presets =
+          await requireApiClient().fetchProjectPromptPresets(projectId);
+        if (
+          promptPresetRequestVersionsRef.current[projectId] === requestVersion
+        ) {
+          setProjectPromptPresetsByProject((current) => ({
+            ...current,
+            [projectId]: presets,
+          }));
+          setProjectPromptPresetStates((current) => ({
+            ...current,
+            [projectId]: "ready",
+          }));
+          setProjectPromptPresetErrorsByProject((current) =>
+            removeRecordEntry(current, projectId),
+          );
+        }
+        return presets;
+      } catch (promptError: unknown) {
+        const message = errorMessage(promptError);
+        if (
+          promptPresetRequestVersionsRef.current[projectId] === requestVersion
+        ) {
+          setProjectPromptPresetStates((current) => ({
+            ...current,
+            [projectId]: "error",
+          }));
+          setProjectPromptPresetErrorsByProject((current) => ({
+            ...current,
+            [projectId]: message,
+          }));
+        }
+        throw new Error(message);
+      }
+    },
+    [requireApiClient],
+  );
+
+  const refreshProjectPromptPresetsAfterMutation = useCallback(
+    (projectId: string) => {
+      void refreshProjectPromptPresets(projectId).catch(() => {
+        // refreshProjectPromptPresets already records the per-project error state.
+      });
+    },
+    [refreshProjectPromptPresets],
+  );
+
+  const updateProjectPromptPresetList = useCallback(
+    (
+      projectId: string,
+      updater: (presets: ProjectPromptPreset[]) => ProjectPromptPreset[],
+    ) => {
+      promptPresetRequestVersionsRef.current = {
+        ...promptPresetRequestVersionsRef.current,
+        [projectId]:
+          (promptPresetRequestVersionsRef.current[projectId] ?? 0) + 1,
+      };
+      setProjectPromptPresetsByProject((current) => ({
+        ...current,
+        [projectId]: updater(current[projectId] ?? []),
+      }));
+      setProjectPromptPresetStates((current) => ({
+        ...current,
+        [projectId]: "ready",
+      }));
+      setProjectPromptPresetErrorsByProject((current) =>
+        removeRecordEntry(current, projectId),
+      );
+    },
+    [],
+  );
+
+  const createProjectPromptPreset = useCallback(
+    async (projectId: string, input: ApiCreateProjectPromptPreset) => {
+      const preset = await requireApiClient().createProjectPromptPreset(
+        projectId,
+        input,
+      );
+      updateProjectPromptPresetList(projectId, (presets) => [
+        preset,
+        ...presets.filter((existing) => existing.id !== preset.id),
+      ]);
+      refreshProjectPromptPresetsAfterMutation(projectId);
+      return preset;
+    },
+    [
+      refreshProjectPromptPresetsAfterMutation,
+      requireApiClient,
+      updateProjectPromptPresetList,
+    ],
+  );
+
+  const updateProjectPromptPreset = useCallback(
+    async (
+      projectId: string,
+      presetId: string,
+      input: ApiUpdateProjectPromptPreset,
+    ) => {
+      const preset = await requireApiClient().updateProjectPromptPreset(
+        projectId,
+        presetId,
+        input,
+      );
+      updateProjectPromptPresetList(projectId, (presets) =>
+        presets.map((existing) =>
+          existing.id === preset.id ? preset : existing,
+        ),
+      );
+      refreshProjectPromptPresetsAfterMutation(projectId);
+      return preset;
+    },
+    [
+      refreshProjectPromptPresetsAfterMutation,
+      requireApiClient,
+      updateProjectPromptPresetList,
+    ],
+  );
+
+  const deleteProjectPromptPreset = useCallback(
+    async (projectId: string, presetId: string) => {
+      await requireApiClient().deleteProjectPromptPreset(projectId, presetId);
+      updateProjectPromptPresetList(projectId, (presets) =>
+        presets.filter((preset) => preset.id !== presetId),
+      );
+      refreshProjectPromptPresetsAfterMutation(projectId);
+    },
+    [
+      refreshProjectPromptPresetsAfterMutation,
+      requireApiClient,
+      updateProjectPromptPresetList,
+    ],
+  );
+
+  const reorderProjectPromptPresets = useCallback(
+    async (projectId: string, presetIds: string[]) => {
+      const previous =
+        promptPresetReorderChainsRef.current[projectId] ?? Promise.resolve([]);
+      const reorder = previous.catch(() => []).then(async () => {
+        const presets = await requireApiClient().reorderProjectPromptPresets(
+          projectId,
+          presetIds,
+        );
+        updateProjectPromptPresetList(projectId, () => presets);
+        refreshProjectPromptPresetsAfterMutation(projectId);
+        return presets;
+      });
+
+      promptPresetReorderChainsRef.current = {
+        ...promptPresetReorderChainsRef.current,
+        [projectId]: reorder,
+      };
+      try {
+        return await reorder;
+      } finally {
+        if (promptPresetReorderChainsRef.current[projectId] === reorder) {
+          const { [projectId]: _completedReorder, ...remainingReorders } =
+            promptPresetReorderChainsRef.current;
+          promptPresetReorderChainsRef.current = remainingReorders;
+        }
+      }
+    },
+    [
+      refreshProjectPromptPresetsAfterMutation,
+      requireApiClient,
+      updateProjectPromptPresetList,
+    ],
+  );
+
   const fetchMessageAttachmentContent = useCallback(
     async (sessionId: string, attachmentId: string) => {
       return requireApiClient().fetchMessageAttachmentContent(
@@ -1343,6 +1544,8 @@ export function useRoamController() {
 
   return {
     state,
+    projectPromptPresetsByProject,
+    projectPromptPresetStates,
     authView,
     accountSecurity,
     streamReconnect,
@@ -1369,6 +1572,7 @@ export function useRoamController() {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
+    projectPromptPresetErrorsByProject,
     runnerCommand: buildRunnerCommand(accountSecurity?.runnerToken ?? ""),
     selectRunner,
     selectProject,
@@ -1390,6 +1594,11 @@ export function useRoamController() {
     loadSelectedDirectory,
     refreshSelectedFileTree,
     saveSelectedFile,
+    refreshProjectPromptPresets,
+    createProjectPromptPreset,
+    updateProjectPromptPreset,
+    deleteProjectPromptPreset,
+    reorderProjectPromptPresets,
     fetchMessageAttachmentContent,
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
@@ -1435,6 +1644,17 @@ function hasDirtySelectedFileChanges(state: AppState): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function removeRecordEntry<T>(
+  record: Record<string, T>,
+  key: string,
+): Record<string, T> {
+  if (!(key in record)) {
+    return record;
+  }
+  const { [key]: _removed, ...remaining } = record;
+  return remaining;
 }
 
 function isAuthErrorMessage(message: string): boolean {
