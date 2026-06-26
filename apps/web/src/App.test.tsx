@@ -19,6 +19,7 @@ import type {
   GitJob,
   Message,
   MessageAttachment,
+  ProjectPromptPreset,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
@@ -191,6 +192,8 @@ let authStatus: AuthStatus;
 let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
 let queuedRunnerTokenResponses: Array<Deferred<Response>>;
+let projectPromptPresets: ProjectPromptPreset[];
+let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -492,6 +495,36 @@ describe("App", () => {
     queuedRunnerResponses = [];
     queuedAccountSecurityResponses = [];
     queuedRunnerTokenResponses = [];
+    projectPromptPresets = [
+      {
+        id: "preset-1",
+        projectId: "project-1",
+        title: "First preset",
+        content: "First content",
+        order: 0,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+      {
+        id: "preset-2",
+        projectId: "project-1",
+        title: "Second preset",
+        content: "Second content",
+        order: 1,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+      {
+        id: "preset-3",
+        projectId: "project-1",
+        title: "Third preset",
+        content: "Third content",
+        order: 2,
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -673,6 +706,36 @@ describe("App", () => {
               updatedAt: "2026-06-05T01:00:00.000Z",
             },
           });
+        }
+        if (requestUrl.pathname === "/v1/projects/project-1/prompt-presets") {
+          return jsonResponse({ presets: projectPromptPresets });
+        }
+        if (
+          requestUrl.pathname === "/v1/projects/project-1/prompt-presets/order"
+        ) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            presetIds?: string[];
+          };
+          const reordered = (body.presetIds ?? [])
+            .map((presetId, index) => {
+              const preset = projectPromptPresets.find(
+                (candidate) => candidate.id === presetId,
+              );
+              return preset
+                ? {
+                    ...preset,
+                    order: index,
+                    updatedAt: "2026-06-05T00:01:00.000Z",
+                  }
+                : undefined;
+            })
+            .filter((preset): preset is ProjectPromptPreset => Boolean(preset));
+          const queuedResponse = queuedPromptPresetOrderResponses.shift();
+          if (queuedResponse) {
+            return queuedResponse.promise;
+          }
+          projectPromptPresets = reordered;
+          return jsonResponse({ presets: reordered });
         }
         if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
           if (failNextSessionCreate) {
@@ -3607,6 +3670,36 @@ describe("App", () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it("closes the mobile new-session sheet before opening prompt preset management", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    const sessionSwitcher = openSessionSwitcher();
+
+    fireEvent.click(
+      sessionSwitcher.getByRole("button", {
+        name: "New session in selected project Real Project",
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "New Session - Real Project" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage prompts" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "New Session - Real Project" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Project Settings" }),
+    ).toBeInTheDocument();
   });
 
   it("falls back to a remaining mobile project after archiving the selected project", async () => {

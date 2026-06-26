@@ -109,6 +109,9 @@ export function useRoamController() {
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
   const accountSecurityRequestIdRef = useRef(0);
   const promptPresetRequestVersionsRef = useRef<Record<string, number>>({});
+  const promptPresetReorderChainsRef = useRef<
+    Record<string, Promise<ProjectPromptPreset[]>>
+  >({});
 
   const nextAccountSecurityRequestId = useCallback(() => {
     accountSecurityRequestIdRef.current += 1;
@@ -1279,13 +1282,31 @@ export function useRoamController() {
 
   const reorderProjectPromptPresets = useCallback(
     async (projectId: string, presetIds: string[]) => {
-      const presets = await requireApiClient().reorderProjectPromptPresets(
-        projectId,
-        presetIds,
-      );
-      updateProjectPromptPresetList(projectId, () => presets);
-      refreshProjectPromptPresetsAfterMutation(projectId);
-      return presets;
+      const previous =
+        promptPresetReorderChainsRef.current[projectId] ?? Promise.resolve([]);
+      const reorder = previous.catch(() => []).then(async () => {
+        const presets = await requireApiClient().reorderProjectPromptPresets(
+          projectId,
+          presetIds,
+        );
+        updateProjectPromptPresetList(projectId, () => presets);
+        refreshProjectPromptPresetsAfterMutation(projectId);
+        return presets;
+      });
+
+      promptPresetReorderChainsRef.current = {
+        ...promptPresetReorderChainsRef.current,
+        [projectId]: reorder,
+      };
+      try {
+        return await reorder;
+      } finally {
+        if (promptPresetReorderChainsRef.current[projectId] === reorder) {
+          const { [projectId]: _completedReorder, ...remainingReorders } =
+            promptPresetReorderChainsRef.current;
+          promptPresetReorderChainsRef.current = remainingReorders;
+        }
+      }
     },
     [
       refreshProjectPromptPresetsAfterMutation,

@@ -105,6 +105,7 @@ export function PromptComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const suggestionPanelRef = useRef<HTMLDivElement>(null);
   const pendingSelectionRef = useRef<number | undefined>(undefined);
+  const promptPickerMouseHandledRef = useRef(false);
   const pathRequestRef = useRef(0);
   const [caret, setCaret] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -330,6 +331,7 @@ export function PromptComposer({
     if (!promptPickerOpen) {
       return;
     }
+    promptPickerMouseHandledRef.current = false;
     const closeOnOutsidePointer = (event: MouseEvent) => {
       const target = event.target;
       if (target instanceof Node && !composerRef.current?.contains(target)) {
@@ -569,12 +571,15 @@ export function PromptComposer({
               type="button"
               onMouseDown={(event) => {
                 event.preventDefault();
+                promptPickerMouseHandledRef.current = true;
                 insertPromptPreset(preset);
               }}
-              onClick={(event) => {
-                if (event.detail === 0) {
-                  insertPromptPreset(preset);
+              onClick={() => {
+                if (promptPickerMouseHandledRef.current) {
+                  promptPickerMouseHandledRef.current = false;
+                  return;
                 }
+                insertPromptPreset(preset);
               }}
             >
               <span className="prompt-suggestion-title">{preset.title}</span>
@@ -589,14 +594,17 @@ export function PromptComposer({
               type="button"
               onMouseDown={(event) => {
                 event.preventDefault();
+                promptPickerMouseHandledRef.current = true;
                 setPromptPickerOpen(false);
                 onManagePromptPresets();
               }}
-              onClick={(event) => {
-                if (event.detail === 0) {
-                  setPromptPickerOpen(false);
-                  onManagePromptPresets();
+              onClick={() => {
+                if (promptPickerMouseHandledRef.current) {
+                  promptPickerMouseHandledRef.current = false;
+                  return;
                 }
+                setPromptPickerOpen(false);
+                onManagePromptPresets();
               }}
             >
               Manage prompts

@@ -1064,7 +1064,7 @@ function UserMessageActionMenu({
       return;
     }
     try {
-      await navigator.clipboard.writeText(cleanContent);
+      await navigator.clipboard.writeText(content);
       onNotify?.("success", "Copied", "Message text copied.");
       closeMenu();
     } catch (error) {

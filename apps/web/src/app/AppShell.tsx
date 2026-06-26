@@ -499,6 +499,7 @@ export function AppShell({ controller }: AppShellProps) {
 
   const openPromptPresetManager = useCallback(
     (projectId: string) => {
+      setMobileSessionModalOpen(false);
       setSettingsProjectId(projectId);
       setSettingsView("project");
       setActiveTab("settings");
@@ -969,9 +970,10 @@ export function AppShell({ controller }: AppShellProps) {
                   onRefreshPromptPresets={() =>
                     refreshProjectPromptPresets(selectedProject.id)
                   }
-                  onManagePromptPresets={() =>
-                    openPromptPresetManager(selectedProject.id)
-                  }
+                  onManagePromptPresets={() => {
+                    setMobileSessionModalOpen(false);
+                    openPromptPresetManager(selectedProject.id);
+                  }}
                   onFetchGitStatus={fetchGitStatus}
                   onFetchGitBranches={fetchGitBranches}
                   onCreate={(values) =>
@@ -1614,6 +1616,7 @@ function PromptPresetList({
   onDelete: (preset: ProjectPromptPreset) => void;
   onReorder: (presetIds: string[]) => Promise<void>;
 }) {
+  const [reorderPending, setReorderPending] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -1624,6 +1627,9 @@ function PromptPresetList({
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
+    if (reorderPending) {
+      return;
+    }
     const { active, over } = event;
     if (!over || active.id === over.id) {
       return;
@@ -1638,7 +1644,10 @@ function PromptPresetList({
     const nextPresetIds = arrayMove(presets, oldIndex, newIndex).map(
       (preset) => preset.id,
     );
-    void onReorder(nextPresetIds);
+    setReorderPending(true);
+    void onReorder(nextPresetIds).finally(() => {
+      setReorderPending(false);
+    });
   };
 
   if (!projectId) {
@@ -1667,11 +1676,16 @@ function PromptPresetList({
         items={presets.map((preset) => preset.id)}
         strategy={verticalListSortingStrategy}
       >
-        <div className="prompt-preset-list" role="list">
+        <div
+          className="prompt-preset-list"
+          role="list"
+          aria-busy={reorderPending || undefined}
+        >
           {presets.map((preset) => (
             <SortablePromptPresetRow
               key={preset.id}
               preset={preset}
+              reorderDisabled={reorderPending}
               onEdit={() => onEdit(preset)}
               onDelete={() => onDelete(preset)}
             />
@@ -1684,10 +1698,12 @@ function PromptPresetList({
 
 function SortablePromptPresetRow({
   preset,
+  reorderDisabled,
   onEdit,
   onDelete,
 }: {
   preset: ProjectPromptPreset;
+  reorderDisabled: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -1715,6 +1731,7 @@ function SortablePromptPresetRow({
         className="prompt-preset-drag-handle"
         type="button"
         aria-label={`Drag prompt preset ${preset.title}`}
+        disabled={reorderDisabled}
         {...attributes}
         {...listeners}
       >
