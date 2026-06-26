@@ -318,7 +318,10 @@ export function RunnerSidebar({
               }
               onManagePromptPresets={
                 onManagePromptPresets
-                  ? () => onManagePromptPresets(sessionProject.id)
+                  ? () => {
+                      setSessionProjectId(undefined);
+                      onManagePromptPresets(sessionProject.id);
+                    }
                   : undefined
               }
               onFetchGitStatus={onFetchGitStatus}

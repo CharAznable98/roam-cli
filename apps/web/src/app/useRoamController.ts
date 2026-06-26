@@ -108,6 +108,7 @@ export function useRoamController() {
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
   const accountSecurityRequestIdRef = useRef(0);
+  const promptPresetRequestVersionsRef = useRef<Record<string, number>>({});
 
   const nextAccountSecurityRequestId = useCallback(() => {
     accountSecurityRequestIdRef.current += 1;
@@ -1143,6 +1144,12 @@ export function useRoamController() {
 
   const refreshProjectPromptPresets = useCallback(
     async (projectId: string) => {
+      const requestVersion =
+        (promptPresetRequestVersionsRef.current[projectId] ?? 0) + 1;
+      promptPresetRequestVersionsRef.current = {
+        ...promptPresetRequestVersionsRef.current,
+        [projectId]: requestVersion,
+      };
       setProjectPromptPresetStates((current) => ({
         ...current,
         [projectId]: "loading",
@@ -1150,20 +1157,28 @@ export function useRoamController() {
       try {
         const presets =
           await requireApiClient().fetchProjectPromptPresets(projectId);
-        setProjectPromptPresetsByProject((current) => ({
-          ...current,
-          [projectId]: presets,
-        }));
-        setProjectPromptPresetStates((current) => ({
-          ...current,
-          [projectId]: "ready",
-        }));
+        if (
+          promptPresetRequestVersionsRef.current[projectId] === requestVersion
+        ) {
+          setProjectPromptPresetsByProject((current) => ({
+            ...current,
+            [projectId]: presets,
+          }));
+          setProjectPromptPresetStates((current) => ({
+            ...current,
+            [projectId]: "ready",
+          }));
+        }
         return presets;
       } catch (promptError: unknown) {
-        setProjectPromptPresetStates((current) => ({
-          ...current,
-          [projectId]: "error",
-        }));
+        if (
+          promptPresetRequestVersionsRef.current[projectId] === requestVersion
+        ) {
+          setProjectPromptPresetStates((current) => ({
+            ...current,
+            [projectId]: "error",
+          }));
+        }
         throw new Error(errorMessage(promptError));
       }
     },
@@ -1184,6 +1199,11 @@ export function useRoamController() {
       projectId: string,
       updater: (presets: ProjectPromptPreset[]) => ProjectPromptPreset[],
     ) => {
+      promptPresetRequestVersionsRef.current = {
+        ...promptPresetRequestVersionsRef.current,
+        [projectId]:
+          (promptPresetRequestVersionsRef.current[projectId] ?? 0) + 1,
+      };
       setProjectPromptPresetsByProject((current) => ({
         ...current,
         [projectId]: updater(current[projectId] ?? []),

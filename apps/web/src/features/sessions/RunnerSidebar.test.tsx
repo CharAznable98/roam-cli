@@ -370,6 +370,86 @@ describe("ProjectForm", () => {
 });
 
 describe("RunnerSidebar", () => {
+  it("closes the new-session modal before opening prompt preset management", async () => {
+    const onManagePromptPresets = vi.fn();
+
+    render(
+      <RunnerSidebar
+        projects={[makeProject("project-1")]}
+        runners={runners}
+        selectedProjectId="project-1"
+        sessions={[]}
+        selectedSessionId=""
+        onSelectProject={vi.fn()}
+        onSelectSession={vi.fn()}
+        onCreateProject={vi.fn()}
+        onFetchRunnerDirectoryTree={vi.fn(async () => [])}
+        onCreateRunnerDirectory={vi.fn(async () => ({
+          requestId: "directory-create-test",
+          path: "test",
+          node: directoryNode("test", "test"),
+        }))}
+        onArchiveProject={vi.fn()}
+        onCreateSession={vi.fn()}
+        onListAgentSkills={vi.fn(async () => ({
+          requestId: "agent-skills-test",
+          agent: "codex",
+          basePath: "/workspace/project-1",
+          queriedAt: "2026-06-05T00:00:00.000Z",
+          skills: [],
+        }))}
+        onSearchWorkspacePaths={vi.fn(async () => ({
+          requestId: "path-search-test",
+          basePath: "/workspace/project-1",
+          query: "",
+          entries: [],
+        }))}
+        onFetchGitStatus={vi.fn(async (context) => ({
+          kind: "repository" as const,
+          requestId: "git-status-test",
+          context,
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: false,
+          groups: [],
+        }))}
+        onFetchGitBranches={vi.fn(async (context) => ({
+          requestId: "git-branches-test",
+          context,
+          branches: [],
+        }))}
+        onRefreshPromptPresets={vi.fn(async () => [])}
+        onManagePromptPresets={onManagePromptPresets}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "New session in project-1" }),
+    );
+    expect(
+      await screen.findByRole("dialog", {
+        name: "New Session - project-1",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage prompts" }),
+      { detail: 0 },
+    );
+
+    expect(onManagePromptPresets).toHaveBeenCalledWith("project-1");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", {
+          name: "New Session - project-1",
+        }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("switches directly to sessions from any active project", () => {
     const onSelectSession = vi.fn();
 
