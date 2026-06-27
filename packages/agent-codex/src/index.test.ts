@@ -1099,6 +1099,7 @@ describe("codex agent plugin", () => {
           }),
         }),
       );
+      expect(events).toContainEqual({ type: "status", status: "completed" });
     });
   });
 

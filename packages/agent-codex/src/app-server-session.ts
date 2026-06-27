@@ -615,15 +615,15 @@ export class CodexAppServerSession implements AgentSession {
     }
     for (const draft of directives.approvals) {
       const decision = await this.#requestApproval(draft);
-      await this.#sendApprovalResponse(decision);
+      this.#sendApprovalResponse(decision);
     }
   }
 
-  async #sendApprovalResponse(decision: ApprovalDecision): Promise<void> {
+  #sendApprovalResponse(decision: ApprovalDecision): void {
     if (!this.#threadId || !this.#activeTurnId) {
       return;
     }
-    await this.#steerTurn({
+    void this.#steerTurn({
       content: JSON.stringify({
         type: "approvalResponse",
         approvalId: decision.approvalId,
@@ -631,6 +631,11 @@ export class CodexAppServerSession implements AgentSession {
         signedAt: decision.signedAt,
         signature: decision.signature,
       }),
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      void this.#fail(
+        `Codex app-server approval response failed: ${message}`,
+      );
     });
   }
 
