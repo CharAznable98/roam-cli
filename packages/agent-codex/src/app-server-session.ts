@@ -77,6 +77,7 @@ export class CodexAppServerSession implements AgentSession {
     | undefined;
   readonly #streamedOutputIds = new Set<string>();
   readonly #fileChangeItems = new Map<string, unknown>();
+  readonly #commandExecutionItems = new Map<string, ItemStartedNotification["item"]>();
   readonly #pendingDirectiveApprovals = new Set<Promise<void>>();
 
   public constructor(options: CodexAppServerSessionOptions) {
@@ -351,6 +352,18 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   async #handleRequest(request: JsonRpcRequest): Promise<void> {
+    if (this.#closed) {
+      this.#client?.reject(
+        request.id,
+        `Codex app-server request received after session closed: ${request.method}`,
+        -32000,
+      );
+      return;
+    }
+    if (request.method === "currentTime/read") {
+      this.#handleCurrentTimeRead(request);
+      return;
+    }
     if (
       request.method === "item/commandExecution/requestApproval" ||
       request.method === "execCommandApproval"
@@ -391,9 +404,26 @@ export class CodexAppServerSession implements AgentSession {
     request: JsonRpcRequest,
     handle: () => Promise<void>,
   ): void {
+    if (this.#closed) {
+      this.#client?.reject(
+        request.id,
+        `Codex app-server request received after session closed: ${request.method}`,
+        -32000,
+      );
+      return;
+    }
     void handle().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.#client?.reject(request.id, message);
+    });
+  }
+
+  #handleCurrentTimeRead(request: JsonRpcRequest): void {
+    const unixTimestamp = Math.floor(Date.now() / 1000);
+    this.#client?.respond(request.id, {
+      currentTime: unixTimestamp,
+      unixTimestamp,
+      timestamp: unixTimestamp,
     });
   }
 
@@ -412,9 +442,12 @@ export class CodexAppServerSession implements AgentSession {
 
   async #handleCommandApproval(request: JsonRpcRequest): Promise<void> {
     const params = request.params as CommandApprovalParams;
+    const commandItem = this.#commandExecutionItems.get(params.itemId ?? "");
+    const command = params.command ?? commandItem?.command;
+    const cwd = params.cwd ?? commandItem?.cwd;
     const summary =
       params.reason ??
-      (params.command ? `Run: ${params.command}` : "Codex wants to run a command");
+      (command ? `Run: ${command}` : "Codex wants to run a command");
     const decision = await this.#requestApproval({
       kind: "execCommand",
       summary,
@@ -425,15 +458,22 @@ export class CodexAppServerSession implements AgentSession {
         turnId: params.turnId,
         itemId: params.itemId,
         approvalId: params.approvalId,
-        command: params.command,
-        cwd: params.cwd,
-        commandActions: params.commandActions,
-        additionalPermissions: params.additionalPermissions,
+        command,
+        cwd,
+        commandActions: params.commandActions ?? commandItem?.commandActions,
+        additionalPermissions:
+          params.additionalPermissions ?? commandItem?.additionalPermissions,
         availableDecisions: params.availableDecisions,
-        environmentId: params.environmentId,
-        networkApprovalContext: params.networkApprovalContext,
-        proposedExecpolicyAmendment: params.proposedExecpolicyAmendment,
-        proposedNetworkPolicyAmendments: params.proposedNetworkPolicyAmendments,
+        environmentId: params.environmentId ?? commandItem?.environmentId,
+        networkApprovalContext:
+          params.networkApprovalContext ?? commandItem?.networkApprovalContext,
+        proposedExecpolicyAmendment:
+          params.proposedExecpolicyAmendment ??
+          commandItem?.proposedExecpolicyAmendment,
+        proposedNetworkPolicyAmendments:
+          params.proposedNetworkPolicyAmendments ??
+          commandItem?.proposedNetworkPolicyAmendments,
+        commandExecution: commandItem,
       },
     });
     this.#client?.respond(request.id, {
@@ -565,10 +605,16 @@ export class CodexAppServerSession implements AgentSession {
 
   #handleItemStarted(notification: ItemStartedNotification): void {
     const item = notification.item;
-    if (item?.type !== "fileChange" || !item.id) {
+    if (!item?.id) {
       return;
     }
-    this.#fileChangeItems.set(item.id, item);
+    if (item.type === "fileChange") {
+      this.#fileChangeItems.set(item.id, item);
+      return;
+    }
+    if (item.type === "commandExecution") {
+      this.#commandExecutionItems.set(item.id, item);
+    }
   }
 
   async #handleItemCompleted(
@@ -670,24 +716,20 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   async #sendApprovalResponse(decision: ApprovalDecision): Promise<void> {
-    if (this.#closed || !this.#threadId || !this.#activeTurnId) {
+    if (this.#closed || !this.#threadId) {
       return;
     }
-    try {
-      await this.#steerTurn({
-        content: JSON.stringify({
-          type: "approvalResponse",
-          approvalId: decision.approvalId,
-          approved: decision.approved,
-          signedAt: decision.signedAt,
-          signature: decision.signature,
-        }),
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.#fail(
-        `Codex app-server approval response failed: ${message}`,
-      );
+    this.#queue.push({
+      content: JSON.stringify({
+        type: "approvalResponse",
+        approvalId: decision.approvalId,
+        approved: decision.approved,
+        signedAt: decision.signedAt,
+        signature: decision.signature,
+      }),
+    });
+    if (!this.#activeTurnId) {
+      this.#startDrain();
     }
   }
 
@@ -918,13 +960,13 @@ function isCommandPolicyAmendmentDecision(value: unknown): boolean {
 }
 
 function mcpElicitationAction(
-  params: McpServerElicitationRequestParams,
+  _params: McpServerElicitationRequestParams,
   decision: ApprovalDecision,
 ): "accept" | "decline" | "cancel" {
   if (!decision.approved) {
     return "decline";
   }
-  return params.mode === "url" ? "accept" : "cancel";
+  return "cancel";
 }
 
 function sleep(ms: number): Promise<void> {

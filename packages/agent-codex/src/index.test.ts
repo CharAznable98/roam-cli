@@ -1414,25 +1414,28 @@ describe("codex agent plugin", () => {
     });
   });
 
-  it("steers app-server approval directive decisions back to Codex", async () => {
+  it("sends app-server approval directive decisions as follow-up turns", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-approval-directive-");
-    const capturedPath = join(workspace, "approval-steer.json");
+    const capturedPath = join(workspace, "approval-turn.json");
     await writeAppServerScript(
       workspace,
       "approval-directive.mjs",
       [
         `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "let turnCount = 0;",
         "handleMessage = (message) => {",
         "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
         "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
         "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    turnCount += 1;",
+        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+        "    if (turnCount === 2) {",
+        "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
+        "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+        "      return;",
+        "    }",
         "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
-        "  }",
-        "  if (message.method === 'turn/steer') {",
-        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
         "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
         "  }",
         "};",
@@ -1464,10 +1467,9 @@ describe("codex agent plugin", () => {
       const captured = JSON.parse(await readFile(capturedPath, "utf8"));
       expect(captured).toEqual(
         expect.objectContaining({
-          method: "turn/steer",
+          method: "turn/start",
           params: expect.objectContaining({
             threadId: "thread-1",
-            expectedTurnId: "turn-1",
             input: [
               {
                 type: "text",
@@ -1490,23 +1492,27 @@ describe("codex agent plugin", () => {
 
   it("keeps final directive approvals alive after app-server turn completion", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-final-directive-");
-    const capturedPath = join(workspace, "approval-steer.json");
+    const capturedPath = join(workspace, "approval-turn.json");
     await writeAppServerScript(
       workspace,
       "final-directive.mjs",
       [
         `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "let turnCount = 0;",
         "handleMessage = (message) => {",
         "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
         "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
         "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    turnCount += 1;",
+        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+        "    if (turnCount === 2) {",
+        "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
+        "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+        "      return;",
+        "    }",
         "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
         "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "  if (message.method === 'turn/steer') {",
-        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
-        "    write({ id: message.id, result: {} });",
         "  }",
         "};",
         "setInterval(() => undefined, 1000);",
@@ -1541,9 +1547,8 @@ describe("codex agent plugin", () => {
       const captured = JSON.parse(await readFile(capturedPath, "utf8"));
       expect(captured).toEqual(
         expect.objectContaining({
-          method: "turn/steer",
+          method: "turn/start",
           params: expect.objectContaining({
-            expectedTurnId: "turn-1",
             input: [
               {
                 type: "text",
@@ -1634,6 +1639,66 @@ describe("codex agent plugin", () => {
             event.content.includes("structured Codex tool user input"),
         ),
       ).toBe(true);
+    });
+  });
+
+  it("answers app-server current-time requests", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-current-time-");
+    await writeAppServerScript(
+      workspace,
+      "current-time.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 21, method: 'currentTime/read', params: { threadId: 'thread-1', turnId: 'turn-1' } });",
+        "  }",
+        "  if (message.id === 21 && message.result) {",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      const output = events.find(
+        (event) =>
+          event.type === "assistantOutput" &&
+          typeof event.content === "string" &&
+          event.content.includes("unixTimestamp"),
+      );
+      expect(output).toEqual(
+        expect.objectContaining({
+          type: "assistantOutput",
+          content: expect.stringMatching(
+            /"currentTime":\d+.*"unixTimestamp":\d+.*"timestamp":\d+/,
+          ),
+        }),
+      );
     });
   });
 
@@ -1761,7 +1826,7 @@ describe("codex agent plugin", () => {
     });
   });
 
-  it("accepts approved app-server URL elicitations", async () => {
+  it("cancels approved app-server URL elicitations until content is supported", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-url-elicitation-");
     await writeAppServerScript(
       workspace,
@@ -1823,7 +1888,7 @@ describe("codex agent plugin", () => {
         events.some(
           (event) =>
             event.type === "assistantOutput" &&
-            event.content === '{"action":"accept","content":null,"_meta":null}',
+            event.content === '{"action":"cancel","content":null,"_meta":null}',
         ),
       ).toBe(true);
     });
@@ -1872,6 +1937,70 @@ describe("codex agent plugin", () => {
         code: "CODEX_APP_SERVER_APPROVAL_ERROR",
       });
       expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
+  it("rejects app-server requests that arrive after session closure", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-late-request-");
+    const rejectedPath = join(workspace, "late-rejected.json");
+    await writeAppServerScript(
+      workspace,
+      "late-request.mjs",
+      [
+        `const rejectedPath = ${JSON.stringify(rejectedPath)};`,
+        "process.on('SIGTERM', () => undefined);",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'done' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "    setTimeout(() => write({ id: 31, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test' } }), 20);",
+        "  }",
+        "  if (message.id === 31 && message.error) {",
+        "    fs.writeFileSync(rejectedPath, JSON.stringify(message.error));",
+        "    process.exit(0);",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+      await expect(readFile(rejectedPath, "utf8")).resolves.toContain(
+        "request received after session closed",
+      );
+    });
+    expect(approvals).toEqual([]);
+    expect(events).not.toContainEqual({
+      type: "status",
+      status: "waiting_approval",
     });
   });
 
@@ -2011,6 +2140,71 @@ describe("codex agent plugin", () => {
               ],
               status: "pending",
             },
+          }),
+        }),
+      ]);
+    });
+  });
+
+  it("passes app-server command item details to the approval chain", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-command-details-");
+    await writeAppServerScript(
+      workspace,
+      "command-details.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'commandExecution', command: 'pnpm test', cwd: process.cwd(), commandActions: [{ type: 'run' }], environmentId: 'local' }, startedAtMs: Date.now() } });",
+        "    write({ id: 11, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' } });",
+        "  }",
+        "  if (message.id === 11 && message.result) {",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "execCommand",
+          summary: "Run: pnpm test",
+          payload: expect.objectContaining({
+            itemId: "item-1",
+            command: "pnpm test",
+            cwd: expect.stringContaining("roam-codex-app-server-command-details"),
+            commandActions: [{ type: "run" }],
+            environmentId: "local",
+            commandExecution: expect.objectContaining({
+              id: "item-1",
+              type: "commandExecution",
+              command: "pnpm test",
+            }),
           }),
         }),
       ]);

@@ -95,6 +95,14 @@ export interface ItemStartedNotification {
   item?: {
     id?: string;
     type?: string;
+    command?: string | null;
+    cwd?: string | null;
+    commandActions?: unknown[] | null;
+    additionalPermissions?: unknown;
+    environmentId?: string | null;
+    networkApprovalContext?: unknown;
+    proposedExecpolicyAmendment?: unknown;
+    proposedNetworkPolicyAmendments?: unknown[] | null;
     changes?: unknown;
     status?: string;
   };
