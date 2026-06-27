@@ -660,7 +660,10 @@ function argsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
 
 function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
   const override = env[`ROAMCLI_AGENT_${envKey(kind)}_APP_SERVER_ARGS`];
-  return [...DEFAULT_APP_SERVER_ARGS, ...parseArgs(override ?? "")];
+  if (override !== undefined) {
+    return parseArgs(override);
+  }
+  return [...DEFAULT_APP_SERVER_ARGS];
 }
 
 function modeFor(kind: string, env: NodeJS.ProcessEnv): "app-server" | "exec-json" {

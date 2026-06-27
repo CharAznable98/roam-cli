@@ -67,6 +67,7 @@ export class CodexAppServerSession implements AgentSession {
   #draining = false;
   #stopRequested = false;
   #interruptRequested = false;
+  #stoppedEmitted = false;
   #turnDone:
     | {
         resolve: () => void;
@@ -149,13 +150,22 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (this.#threadId && this.#activeTurnId) {
-      void this.#steerTurn(input).catch(() => {
-        if (this.#closed) {
-          return;
+      const queued = { content: input.content };
+      this.#queue.push(queued);
+      void this.#steerTurn(input).then(
+        () => {
+          const index = this.#queue.indexOf(queued);
+          if (index >= 0) {
+            this.#queue.splice(index, 1);
+          }
+        },
+        () => {
+          if (this.#closed) {
+            return;
+          }
+          this.#startDrain();
         }
-        this.#queue.push({ content: input.content });
-        this.#startDrain();
-      });
+      );
       return;
     }
     this.#queue.push({ content: input.content });
@@ -179,7 +189,7 @@ export class CodexAppServerSession implements AgentSession {
       this.#closed = true;
       this.#queue.length = 0;
       if (this.#threadId && this.#activeTurnId) {
-        await this.#client
+        void this.#client
           ?.request("turn/interrupt", {
             threadId: this.#threadId,
             turnId: this.#activeTurnId,
@@ -188,7 +198,7 @@ export class CodexAppServerSession implements AgentSession {
       }
       this.#child?.kill("SIGTERM");
       this.#client?.close();
-      await this.#emit({ type: "status", status: "stopped" });
+      await this.#emitStopped();
     }
   }
 
@@ -593,10 +603,18 @@ export class CodexAppServerSession implements AgentSession {
       this.#queue.length = 0;
       this.#closeAppServer("SIGTERM");
       done?.resolve();
-      await this.#emit({ type: "status", status: "stopped" });
+      await this.#emitStopped();
       return;
     }
     done?.resolve();
+  }
+
+  async #emitStopped(): Promise<void> {
+    if (this.#stoppedEmitted) {
+      return;
+    }
+    this.#stoppedEmitted = true;
+    await this.#emit({ type: "status", status: "stopped" });
   }
 
   async #request(method: string, params?: unknown): Promise<unknown> {

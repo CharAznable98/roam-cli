@@ -40,6 +40,24 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("uses app-server args overrides as a full replacement", () => {
+    expect(
+      codexAgent.buildCapability({
+        profile: "trusted",
+        env: {
+          ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
+            "app-server",
+            "--stdio",
+            "--custom",
+          ]),
+        },
+      }),
+    ).toMatchObject({
+      args: ["app-server", "--stdio", "--custom"],
+      parser: "codex-app-server",
+    });
+  });
+
   it("builds the legacy codex exec capability when explicitly selected", () => {
     expect(
       codexAgent.buildCapability({
@@ -923,6 +941,75 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("preserves delivered input when app-server completes before steer succeeds", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-steer-race-");
+    const startedMarker = join(workspace, "started.txt");
+    await writeAppServerScript(
+      workspace,
+      "steer-race.mjs",
+      [
+        `const startedMarker = ${JSON.stringify(startedMarker)};`,
+        "let turnCount = 0;",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    turnCount += 1;",
+        "    if (turnCount === 1) {",
+        "      fs.writeFileSync(startedMarker, 'started');",
+        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "      return;",
+        "    }",
+        "    write({ id: message.id, result: { turn: { id: 'turn-2' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+        "  }",
+        "  if (message.method === 'turn/steer') {",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "    write({ id: message.id, error: { code: -32000, message: 'turn already completed' } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(startedMarker, "utf8")).resolves.toBe("started");
+    });
+    session.deliverInput({ content: "run as next turn" });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-2:item-2$/),
+        content: "run as next turn",
+        mode: "replace",
+        done: true,
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+  });
+
   it("does not block app-server interrupts behind pending approval prompts", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-approval-interrupt-");
     const approvalMarker = join(workspace, "approval.txt");
@@ -977,6 +1064,66 @@ describe("codex agent plugin", () => {
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({ type: "status", status: "stopped" });
+    });
+  });
+
+  it("does not wait for app-server interrupt acknowledgement when stopping", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-stop-no-ack-");
+    const startedMarker = join(workspace, "started.txt");
+    const closedMarker = join(workspace, "closed.txt");
+    await writeAppServerScript(
+      workspace,
+      "stop-no-ack.mjs",
+      [
+        `const startedMarker = ${JSON.stringify(startedMarker)};`,
+        `const closedMarker = ${JSON.stringify(closedMarker)};`,
+        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    fs.writeFileSync(startedMarker, 'started');",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(startedMarker, "utf8")).resolves.toBe("started");
+    });
+
+    await expect(
+      Promise.race([
+        Promise.resolve(session.control("stop")).then(() => "stopped"),
+        new Promise((resolve) => setTimeout(() => resolve("timed out"), 500)),
+      ]),
+    ).resolves.toBe("stopped");
+
+    await vi.waitFor(async () => {
+      expect(events).toContainEqual({ type: "status", status: "stopped" });
+      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
     });
   });
 
