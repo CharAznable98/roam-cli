@@ -21,10 +21,12 @@ import type {
   ItemStartedNotification,
   ItemCompletedNotification,
   JsonRpcRequest,
+  McpServerElicitationRequestParams,
   PermissionApprovalParams,
   SandboxPolicy,
   ThreadSandboxMode,
   ThreadResponse,
+  ToolRequestUserInputParams,
   TurnNotification,
   TurnStartResponse,
   UserInput,
@@ -138,6 +140,16 @@ export class CodexAppServerSession implements AgentSession {
 
   public deliverInput(input: AgentInput): void {
     if (this.#closed) {
+      return;
+    }
+    if (this.#threadId && this.#activeTurnId) {
+      void this.#steerTurn(input).catch(() => {
+        if (this.#closed) {
+          return;
+        }
+        this.#queue.push({ content: input.content });
+        this.#startDrain();
+      });
       return;
     }
     this.#queue.push({ content: input.content });
@@ -331,6 +343,14 @@ export class CodexAppServerSession implements AgentSession {
       this.#deferRequest(request, () => this.#handlePermissionApproval(request));
       return;
     }
+    if (request.method === "item/tool/requestUserInput") {
+      this.#deferRequest(request, () => this.#handleToolUserInput(request));
+      return;
+    }
+    if (request.method === "mcpServer/elicitation/request") {
+      this.#deferRequest(request, () => this.#handleMcpElicitation(request));
+      return;
+    }
     this.#client?.reject(
       request.id,
       `Unsupported Codex app-server request: ${request.method}`,
@@ -345,6 +365,19 @@ export class CodexAppServerSession implements AgentSession {
     void handle().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.#client?.reject(request.id, message);
+    });
+  }
+
+  async #steerTurn(input: AgentInput): Promise<void> {
+    const threadId = this.#threadId;
+    const turnId = this.#activeTurnId;
+    if (!threadId || !turnId) {
+      throw new Error("Cannot steer a Codex turn without an active turn");
+    }
+    await this.#request("turn/steer", {
+      threadId,
+      expectedTurnId: turnId,
+      input: userInputFor({ content: input.content }),
     });
   }
 
@@ -423,6 +456,48 @@ export class CodexAppServerSession implements AgentSession {
     this.#client?.respond(request.id, {
       scope: "turn",
       permissions: decision.approved ? requestedPermissions : {},
+    });
+  }
+
+  async #handleToolUserInput(request: JsonRpcRequest): Promise<void> {
+    const params = request.params as ToolRequestUserInputParams;
+    await this.#requestApproval({
+      kind: "execCommand",
+      summary: toolUserInputSummary(params),
+      payload: {
+        source: "codex-app-server",
+        method: request.method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        questions: params.questions,
+      },
+    });
+    this.#client?.respond(request.id, { answers: {} });
+  }
+
+  async #handleMcpElicitation(request: JsonRpcRequest): Promise<void> {
+    const params = request.params as McpServerElicitationRequestParams;
+    const decision = await this.#requestApproval({
+      kind: "execCommand",
+      summary: params.message ?? "Codex tool requested user input",
+      payload: {
+        source: "codex-app-server",
+        method: request.method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        serverName: params.serverName,
+        mode: params.mode,
+        url: params.url,
+        elicitationId: params.elicitationId,
+        requestedSchema: params.requestedSchema,
+        meta: params._meta,
+      },
+    });
+    this.#client?.respond(request.id, {
+      action: decision.approved ? "accept" : "cancel",
+      content: null,
+      _meta: null,
     });
   }
 
@@ -681,6 +756,13 @@ function outputDeltaFrom(value: unknown): string | undefined {
     asString(value.text) ??
     undefined
   );
+}
+
+function toolUserInputSummary(params: ToolRequestUserInputParams): string {
+  const question = params.questions?.find(
+    (candidate) => typeof candidate.question === "string",
+  )?.question;
+  return question ?? "Codex tool requested user input";
 }
 
 function commandApprovalAcceptDecision(method: string): string {

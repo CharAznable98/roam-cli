@@ -839,6 +839,87 @@ describe("codex agent plugin", () => {
     expect(events).not.toContainEqual({ type: "status", status: "completed" });
   });
 
+  it("steers delivered input into the active app-server turn", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-steer-");
+    const startedMarker = join(workspace, "started.txt");
+    const capturedPath = join(workspace, "steer.json");
+    await writeAppServerScript(
+      workspace,
+      "steer.mjs",
+      [
+        `const startedMarker = ${JSON.stringify(startedMarker)};`,
+        `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    fs.writeFileSync(startedMarker, 'started');",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "  }",
+        "  if (message.method === 'turn/steer') {",
+        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
+        "    write({ id: message.id, result: {} });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: message.params.input[0].text } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(startedMarker, "utf8")).resolves.toBe("started");
+    });
+    session.deliverInput({ content: "continue here" });
+
+    await vi.waitFor(async () => {
+      const captured = JSON.parse(await readFile(capturedPath, "utf8"));
+      expect(captured).toEqual(
+        expect.objectContaining({
+          method: "turn/steer",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+            expectedTurnId: "turn-1",
+            input: [
+              {
+                type: "text",
+                text: "continue here",
+                text_elements: [],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(events).toContainEqual({
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        content: "continue here",
+        mode: "replace",
+        done: true,
+      });
+    });
+  });
+
   it("does not block app-server interrupts behind pending approval prompts", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-approval-interrupt-");
     const approvalMarker = join(workspace, "approval.txt");
@@ -942,6 +1023,146 @@ describe("codex agent plugin", () => {
         code: "CODEX_APP_SERVER_ERROR",
       });
       expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
+  it("handles app-server tool user-input requests through approvals", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-user-input-");
+    await writeAppServerScript(
+      workspace,
+      "user-input.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
+        "  }",
+        "  if (message.id === 12 && message.result) {",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "execCommand",
+          summary: "Proceed?",
+          payload: expect.objectContaining({
+            method: "item/tool/requestUserInput",
+            questions: [
+              expect.objectContaining({
+                id: "confirm",
+                question: "Proceed?",
+              }),
+            ],
+          }),
+        }),
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content === '{"answers":{}}',
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("handles app-server MCP elicitation requests through approvals", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-elicitation-");
+    await writeAppServerScript(
+      workspace,
+      "elicitation.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 13, method: 'mcpServer/elicitation/request', params: { threadId: 'thread-1', turnId: 'turn-1', serverName: 'connector', mode: 'form', message: 'Choose account', requestedSchema: { type: 'object' }, _meta: null } });",
+        "  }",
+        "  if (message.id === 13 && message.result) {",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: false,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "execCommand",
+          summary: "Choose account",
+          payload: expect.objectContaining({
+            method: "mcpServer/elicitation/request",
+            serverName: "connector",
+            mode: "form",
+          }),
+        }),
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content === '{"action":"cancel","content":null,"_meta":null}',
+        ),
+      ).toBe(true);
     });
   });
 

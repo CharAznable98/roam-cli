@@ -135,6 +135,32 @@ export interface PermissionApprovalParams {
   permissions?: Record<string, unknown> | null;
 }
 
+export interface ToolRequestUserInputParams {
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  questions?: Array<{
+    id?: string;
+    header?: string;
+    question?: string;
+    isOther?: boolean;
+    isSecret?: boolean;
+    options?: unknown[] | null;
+  }> | null;
+}
+
+export interface McpServerElicitationRequestParams {
+  threadId?: string;
+  turnId?: string | null;
+  serverName?: string;
+  mode?: string;
+  message?: string;
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: unknown;
+  _meta?: unknown;
+}
+
 export type UserInput =
   | {
       type: "text";
