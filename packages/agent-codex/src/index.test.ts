@@ -1689,13 +1689,13 @@ describe("codex agent plugin", () => {
         (event) =>
           event.type === "assistantOutput" &&
           typeof event.content === "string" &&
-          event.content.includes("unixTimestamp"),
+          event.content.includes("currentTimeAt"),
       );
       expect(output).toEqual(
         expect.objectContaining({
           type: "assistantOutput",
           content: expect.stringMatching(
-            /"currentTime":\d+.*"unixTimestamp":\d+.*"timestamp":\d+/,
+            /"currentTimeAt":\d+.*"currentTime":\d+.*"unixTimestamp":\d+.*"timestamp":\d+/,
           ),
         }),
       );

@@ -421,6 +421,7 @@ export class CodexAppServerSession implements AgentSession {
   #handleCurrentTimeRead(request: JsonRpcRequest): void {
     const unixTimestamp = Math.floor(Date.now() / 1000);
     this.#client?.respond(request.id, {
+      currentTimeAt: unixTimestamp,
       currentTime: unixTimestamp,
       unixTimestamp,
       timestamp: unixTimestamp,
