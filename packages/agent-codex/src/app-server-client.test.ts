@@ -73,6 +73,36 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
+  it("serializes same-chunk responses before later notifications", async () => {
+    const child = fakeChild();
+    const notificationStates: boolean[] = [];
+    let responseContinuationRan = false;
+    const client = new CodexAppServerClient({
+      child,
+      onNotification: () => {
+        notificationStates.push(responseContinuationRan);
+      },
+      onRequest: () => undefined,
+    });
+
+    void client.request("turn/start").then(() => {
+      responseContinuationRan = true;
+    });
+    child.stdout.write(
+      [
+        JSON.stringify({ id: 1, result: { turn: { id: "turn-1" } } }),
+        JSON.stringify({
+          method: "turn/completed",
+          params: { turn: { id: "turn-1", status: "completed" } },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notificationStates).toEqual([true]);
+  });
+
   it("writes server request responses", () => {
     const child = fakeChild();
     const client = new CodexAppServerClient({

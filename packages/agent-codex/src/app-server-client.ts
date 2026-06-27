@@ -28,7 +28,9 @@ export class CodexAppServerClient {
   readonly #onRequest: CodexAppServerClientOptions["onRequest"];
   readonly #onParseError: CodexAppServerClientOptions["onParseError"];
   #buffer = "";
+  readonly #lineQueue: string[] = [];
   #nextId = 1;
+  #processing = false;
 
   public constructor(options: CodexAppServerClientOptions) {
     this.#child = options.child;
@@ -81,11 +83,37 @@ export class CodexAppServerClient {
       if (line.trim().length === 0) {
         continue;
       }
-      void this.#handleLine(line).catch((error: unknown) => {
-        void this.#onParseError?.(
+      this.#lineQueue.push(line);
+    }
+    this.#processQueue();
+  }
+
+  #processQueue(): void {
+    if (this.#processing) {
+      return;
+    }
+    this.#processing = true;
+    void this.#drainQueue().finally(() => {
+      this.#processing = false;
+      if (this.#lineQueue.length > 0) {
+        this.#processQueue();
+      }
+    });
+  }
+
+  async #drainQueue(): Promise<void> {
+    while (this.#lineQueue.length > 0) {
+      const line = this.#lineQueue.shift();
+      if (line === undefined) {
+        continue;
+      }
+      try {
+        await this.#handleLine(line);
+      } catch (error: unknown) {
+        await this.#onParseError?.(
           error instanceof Error ? error : new Error(String(error)),
         );
-      });
+      }
     }
   }
 

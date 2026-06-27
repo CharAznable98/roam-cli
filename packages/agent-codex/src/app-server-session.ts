@@ -18,12 +18,14 @@ import type {
   FileChangeApprovalParams,
   ItemCompletedNotification,
   JsonRpcRequest,
+  PermissionApprovalParams,
   ThreadResponse,
   TurnNotification,
   TurnStartResponse,
   UserInput,
 } from "./app-server-protocol.js";
 import { asString, isRecord } from "./app-server-protocol.js";
+import { parseTextDirectives } from "./directives.js";
 
 interface CodexAppServerSessionOptions {
   command: string;
@@ -208,6 +210,7 @@ export class CodexAppServerSession implements AgentSession {
     while (!this.#closed) {
       const input = this.#queue.shift();
       if (input === undefined) {
+        this.#closeAppServer("SIGTERM");
         await this.#emit({ type: "status", status: "completed" });
         return;
       }
@@ -295,6 +298,10 @@ export class CodexAppServerSession implements AgentSession {
       await this.#handleFileApproval(request);
       return;
     }
+    if (request.method === "item/permissions/requestApproval") {
+      await this.#handlePermissionApproval(request);
+      return;
+    }
     this.#client?.reject(
       request.id,
       `Unsupported Codex app-server request: ${request.method}`,
@@ -320,6 +327,10 @@ export class CodexAppServerSession implements AgentSession {
         command: params.command,
         cwd: params.cwd,
         commandActions: params.commandActions,
+        additionalPermissions: params.additionalPermissions,
+        availableDecisions: params.availableDecisions,
+        environmentId: params.environmentId,
+        networkApprovalContext: params.networkApprovalContext,
         proposedExecpolicyAmendment: params.proposedExecpolicyAmendment,
         proposedNetworkPolicyAmendments: params.proposedNetworkPolicyAmendments,
       },
@@ -352,14 +363,35 @@ export class CodexAppServerSession implements AgentSession {
     });
   }
 
+  async #handlePermissionApproval(request: JsonRpcRequest): Promise<void> {
+    const params = request.params as PermissionApprovalParams;
+    const requestedPermissions = params.permissions ?? {};
+    const decision = await this.#requestApproval({
+      kind: "execCommand",
+      summary: params.reason ?? "Codex wants additional permissions",
+      payload: {
+        source: "codex-app-server",
+        method: request.method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        environmentId: params.environmentId,
+        cwd: params.cwd,
+        permissions: requestedPermissions,
+      },
+    });
+    this.#client?.respond(request.id, {
+      scope: decision.approved ? "session" : "turn",
+      permissions: decision.approved ? requestedPermissions : {},
+    });
+  }
+
   async #requestApproval(draft: ApprovalRequestDraft) {
     try {
       return await this.#context.requestApproval(draft);
     } catch (error: unknown) {
-      this.#closed = true;
-      this.#child?.kill("SIGTERM");
       const message = error instanceof Error ? error.message : String(error);
-      await this.#emitError(message, "CODEX_APP_SERVER_APPROVAL_ERROR");
+      await this.#fail(message, "CODEX_APP_SERVER_APPROVAL_ERROR");
       throw error;
     }
   }
@@ -400,6 +432,7 @@ export class CodexAppServerSession implements AgentSession {
         mode: "replace",
         done: true,
       });
+      await this.#emitTextDirectives(item.text);
       return;
     }
     await this.#emit({
@@ -409,6 +442,7 @@ export class CodexAppServerSession implements AgentSession {
       mode: "replace",
       done: true,
     });
+    await this.#emitTextDirectives(item.text);
   }
 
   async #handleTurnCompleted(notification: TurnNotification): Promise<void> {
@@ -438,7 +472,20 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
-  async #fail(message: string): Promise<void> {
+  async #emitTextDirectives(text: string): Promise<void> {
+    const directives = parseTextDirectives(text);
+    for (const draft of directives.artifacts) {
+      await this.#emit({ type: "artifact", draft });
+    }
+    for (const draft of directives.approvals) {
+      await this.#requestApproval(draft);
+    }
+  }
+
+  async #fail(
+    message: string,
+    code = "CODEX_APP_SERVER_ERROR",
+  ): Promise<void> {
     if (this.#closed) {
       return;
     }
@@ -446,7 +493,8 @@ export class CodexAppServerSession implements AgentSession {
     this.#queue.length = 0;
     this.#turnDone?.reject(new Error(message));
     this.#turnDone = undefined;
-    await this.#emitError(message);
+    this.#closeAppServer("SIGTERM");
+    await this.#emitError(message, code);
     await this.#emit({ type: "status", status: "failed" });
   }
 
@@ -475,6 +523,13 @@ export class CodexAppServerSession implements AgentSession {
   #nextOutputId(): string {
     this.#outputSequence += 1;
     return `codex-output-${this.#outputSequence}`;
+  }
+
+  #closeAppServer(signal: NodeJS.Signals): void {
+    this.#closed = true;
+    this.#queue.length = 0;
+    this.#client?.close();
+    this.#child?.kill(signal);
   }
 }
 

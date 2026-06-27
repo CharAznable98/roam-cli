@@ -76,6 +76,10 @@ export interface CommandApprovalParams {
   command?: string | null;
   cwd?: string | null;
   commandActions?: unknown[] | null;
+  additionalPermissions?: unknown;
+  availableDecisions?: unknown;
+  environmentId?: string | null;
+  networkApprovalContext?: unknown;
   proposedExecpolicyAmendment?: unknown;
   proposedNetworkPolicyAmendments?: unknown[] | null;
 }
@@ -86,6 +90,16 @@ export interface FileChangeApprovalParams {
   itemId?: string;
   reason?: string | null;
   grantRoot?: string | null;
+}
+
+export interface PermissionApprovalParams {
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  environmentId?: string | null;
+  cwd?: string | null;
+  reason?: string | null;
+  permissions?: Record<string, unknown> | null;
 }
 
 export type UserInput =

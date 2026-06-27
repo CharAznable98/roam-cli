@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -565,6 +565,296 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("completes app-server turns when start response and completion share a chunk", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-coalesced-");
+    const closedMarker = join(workspace, "closed.txt");
+    await writeAppServerScript(
+      workspace,
+      "coalesced.mjs",
+      [
+        `const closedMarker = ${JSON.stringify(closedMarker)};`,
+        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'coalesced done' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      expect(events).toContainEqual({
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        content: "coalesced done",
+        mode: "replace",
+        done: true,
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
+    });
+  });
+
+  it("fails app-server sessions cleanly when approval creation fails", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-approval-fail-");
+    await writeAppServerScript(
+      workspace,
+      "approval-fail.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 99, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        throw new Error("approval store down");
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        message: "approval store down",
+        code: "CODEX_APP_SERVER_APPROVAL_ERROR",
+      });
+      expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
+  it("passes app-server network approval context to the approval chain", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-network-");
+    await writeAppServerScript(
+      workspace,
+      "network-approval.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Allow network', networkApprovalContext: { host: 'example.com', protocol: 'https' }, proposedNetworkPolicyAmendments: [{ host: 'example.com', action: 'allow' }] } });",
+        "  }",
+        "  if (message.id === 7 && message.result) {",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "execCommand",
+          summary: "Allow network",
+          payload: expect.objectContaining({
+            networkApprovalContext: {
+              host: "example.com",
+              protocol: "https",
+            },
+            proposedNetworkPolicyAmendments: [
+              { host: "example.com", action: "allow" },
+            ],
+          }),
+        }),
+      ]);
+    });
+  });
+
+  it("handles app-server permission approval requests", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-permissions-");
+    await writeAppServerScript(
+      workspace,
+      "permissions.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 8, method: 'item/permissions/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', environmentId: 'local', cwd: process.cwd(), reason: 'Need workspace write', permissions: { fileSystem: { write: [process.cwd()] }, network: { enabled: true } } } });",
+        "  }",
+        "  if (message.id === 8 && message.result) {",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "execCommand",
+          summary: "Need workspace write",
+          payload: expect.objectContaining({
+            permissions: {
+              fileSystem: {
+                write: [
+                  expect.stringContaining(
+                    "roam-codex-app-server-permissions",
+                  ),
+                ],
+              },
+              network: { enabled: true },
+            },
+          }),
+        }),
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content?.includes('"scope":"session"') &&
+            event.content.includes('"fileSystem"'),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("emits app-server artifact directives from completed messages", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-artifact-");
+    await writeAppServerScript(
+      workspace,
+      "artifact.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_ARTIFACT: {\"type\":\"artifact\",\"path\":\"result.log\",\"kind\":\"log\",\"mimeType\":\"text/plain\"}' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "artifact",
+        draft: {
+          path: "result.log",
+          kind: "log",
+          mimeType: "text/plain",
+        },
+      });
+    });
+  });
+
   it.skipIf(process.env.ROAMCLI_RUN_CODEX_APP_SERVER_INTEGRATION !== "1")(
     "runs a real codex app-server turn when explicitly enabled",
     async () => {
@@ -722,6 +1012,39 @@ describe("codex agent plugin", () => {
 
 async function mkdirTemp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+async function writeAppServerScript(
+  workspace: string,
+  name: string,
+  bodyLines: string[],
+): Promise<string> {
+  void name;
+  const script = join(workspace, "app-server");
+  await writeFile(
+    script,
+    [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      "process.stdin.setEncoding('utf8');",
+      "let buffer = '';",
+      "let handleMessage = () => undefined;",
+      "function write(message) { process.stdout.write(`${JSON.stringify(message)}\\n`); }",
+      "process.stdin.on('data', (chunk) => {",
+      "  buffer += chunk;",
+      "  const lines = buffer.split(/\\r?\\n/);",
+      "  buffer = lines.pop() ?? '';",
+      "  for (const line of lines) {",
+      "    if (!line) continue;",
+      "    handleMessage(JSON.parse(line));",
+      "  }",
+      "});",
+      ...bodyLines,
+      "",
+    ].join("\n"),
+  );
+  await chmod(script, 0o755);
+  return script;
 }
 
 function makeSession(cwd: string): AgentSessionContext["session"] {
