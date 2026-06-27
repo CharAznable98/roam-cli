@@ -26,26 +26,20 @@ describe("capabilities", () => {
     expect(getPermissionTemplate("trusted").blockedCommands).toEqual([]);
   });
 
-  it("uses non-interactive codex exec by default", async () => {
+  it("uses codex app-server by default", async () => {
     const codex = (await loadAgentRegistry("trusted")).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex).toMatchObject({
       command: "codex",
-      args: [
-        "exec",
-        "--json",
-        "--color",
-        "never",
-        "--skip-git-repo-check",
-        "--dangerously-bypass-approvals-and-sandbox"
-      ],
-      parser: "codex-json",
+      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
+      parser: "codex-app-server",
       supportsResume: true,
       pluginName: "@roamcli/agent-codex"
     });
   });
 
-  it("supports per-agent command and args overrides", async () => {
+  it("supports legacy per-agent command and args overrides", async () => {
+    vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", "local-codex");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", "exec --sandbox \"danger full\"");
 
@@ -54,7 +48,8 @@ describe("capabilities", () => {
     expect(codex).toMatchObject({ command: "local-codex", args: ["exec", "--sandbox", "danger full"] });
   });
 
-  it("supports JSON array args overrides", async () => {
+  it("supports legacy JSON array args overrides", async () => {
+    vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", "[\"--one\",\"two words\"]");
 
     const codex = (await loadAgentRegistry("standard")).capabilities.find((capability) => capability.kind === "codex");

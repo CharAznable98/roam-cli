@@ -825,6 +825,7 @@ async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
       "console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: `codex answer: ${prompt}` } }));",
     ].join("\n"),
   );
+  vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
   vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", process.execPath);
   vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", JSON.stringify([script]));
   return (await loadAgentRegistry("standard")).agents;

@@ -105,14 +105,23 @@ Runner reads local config from `<workspace>/<data-dir>/config.json`. CLI options
 
 The Runner loads the Codex agent plugin by default. You can load additional agent plugins with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`.
 
-The Codex command and arguments can be overridden with:
+The Codex plugin uses `codex app-server --stdio` by default. The command and app-server arguments can be overridden with:
 
 ```text
 ROAMCLI_AGENT_CODEX_COMMAND
+ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS
+```
+
+`ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS` accepts either a shell-like string or a JSON string array.
+
+The legacy `codex exec --json` invocation is still available only when explicitly selected:
+
+```text
+ROAMCLI_AGENT_CODEX_MODE=exec-json
 ROAMCLI_AGENT_CODEX_ARGS
 ```
 
-`ROAMCLI_AGENT_CODEX_ARGS` accepts either a shell-like string or a JSON string array.
+`ROAMCLI_AGENT_CODEX_ARGS` applies only in `exec-json` mode and accepts either a shell-like string or a JSON string array.
 
 ## Docker Compose
 
