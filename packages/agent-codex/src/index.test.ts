@@ -915,6 +915,72 @@ describe("codex agent plugin", () => {
     expect(events).not.toContainEqual({ type: "status", status: "completed" });
   });
 
+  it("queues follow-up input until app-server thread startup completes", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-startup-input-");
+    const startupMarker = join(workspace, "startup.txt");
+    const turnsPath = join(workspace, "turns.jsonl");
+    await writeAppServerScript(
+      workspace,
+      "startup-input.mjs",
+      [
+        `const startupMarker = ${JSON.stringify(startupMarker)};`,
+        `const turnsPath = ${JSON.stringify(turnsPath)};`,
+        "let turnCount = 0;",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') {",
+        "    fs.writeFileSync(startupMarker, 'pending');",
+        "    setTimeout(() => write({ id: message.id, result: { thread: { id: 'thread-1' } } }), 100);",
+        "  }",
+        "  if (message.method === 'turn/start') {",
+        "    turnCount += 1;",
+        "    fs.appendFileSync(turnsPath, `${message.params.input[0].text}\\n`);",
+        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+        "    write({ method: 'item/completed', params: { item: { id: `item-${turnCount}`, type: 'agentMessage', text: message.params.input[0].text } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: `turn-${turnCount}`, status: 'completed' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "initial prompt",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    const started = session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(startupMarker, "utf8")).resolves.toBe("pending");
+    });
+    session.deliverInput({ content: "startup follow-up" });
+    await started;
+
+    await vi.waitFor(async () => {
+      await expect(readFile(turnsPath, "utf8")).resolves.toBe(
+        "initial prompt\nstartup follow-up\n",
+      );
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "status", status: "failed" }),
+    );
+  });
+
   it("steers delivered input into the active app-server turn", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-steer-");
     const startedMarker = join(workspace, "started.txt");
@@ -1239,6 +1305,66 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("does not fail app-server turns on retryable error notifications", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-retryable-error-");
+    await writeAppServerScript(
+      workspace,
+      "retryable-error.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'error', params: { error: { message: 'temporary upstream issue' }, willRetry: true } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'recovered' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "activity",
+        kind: "system",
+        label: "temporary upstream issue",
+      });
+      expect(events).toContainEqual({
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        content: "recovered",
+        mode: "replace",
+        done: true,
+      });
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "status", status: "failed" }),
+    );
+  });
+
   it("fails app-server sessions when the process exits before a queued turn starts", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-exit-between-turns-");
     await writeAppServerScript(
@@ -1341,6 +1467,82 @@ describe("codex agent plugin", () => {
           method: "turn/steer",
           params: expect.objectContaining({
             threadId: "thread-1",
+            expectedTurnId: "turn-1",
+            input: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  type: "approvalResponse",
+                  approvalId: "approval-1",
+                  approved: true,
+                  signedAt: "2026-06-21T00:00:00.000Z",
+                  signature: "sig",
+                }),
+                text_elements: [],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(events).toContainEqual({ type: "status", status: "completed" });
+    });
+  });
+
+  it("keeps final directive approvals alive after app-server turn completion", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-final-directive-");
+    const capturedPath = join(workspace, "approval-steer.json");
+    await writeAppServerScript(
+      workspace,
+      "final-directive.mjs",
+      [
+        `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "  if (message.method === 'turn/steer') {",
+        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
+        "    write({ id: message.id, result: {} });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      const captured = JSON.parse(await readFile(capturedPath, "utf8"));
+      expect(captured).toEqual(
+        expect.objectContaining({
+          method: "turn/steer",
+          params: expect.objectContaining({
             expectedTurnId: "turn-1",
             input: [
               {

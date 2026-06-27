@@ -77,6 +77,7 @@ export class CodexAppServerSession implements AgentSession {
     | undefined;
   readonly #streamedOutputIds = new Set<string>();
   readonly #fileChangeItems = new Map<string, unknown>();
+  readonly #pendingDirectiveApprovals = new Set<Promise<void>>();
 
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
@@ -137,7 +138,7 @@ export class CodexAppServerSession implements AgentSession {
       this.#closeAppServer("SIGTERM");
       throw error;
     }
-    this.#queue.push({
+    this.#queue.unshift({
       content: this.#context.prompt,
       ...(this.#context.attachments
         ? { attachments: this.#context.attachments }
@@ -170,7 +171,9 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     this.#queue.push({ content: input.content });
-    this.#startDrain();
+    if (this.#threadId) {
+      this.#startDrain();
+    }
   }
 
   public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
@@ -286,6 +289,7 @@ export class CodexAppServerSession implements AgentSession {
     await new Promise<void>((resolve, reject) => {
       this.#turnDone = { resolve, reject };
     });
+    await this.#awaitPendingDirectiveApprovals();
     this.#activeTurnId = undefined;
     this.#interruptRequested = false;
     this.#interruptSent = false;
@@ -325,6 +329,10 @@ export class CodexAppServerSession implements AgentSession {
     if (method === "error") {
       const message =
         errorMessageFrom(params) ?? "Codex app-server reported an error";
+      if (errorWillRetryFrom(params)) {
+        await this.#emit({ type: "activity", kind: "system", label: message });
+        return;
+      }
       this.#turnDone?.reject(new Error(message));
       this.#turnDone = undefined;
       await this.#emitError(message);
@@ -642,9 +650,9 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #handleApprovalDirective(draft: ApprovalRequestDraft): void {
-    void this.#requestApproval(draft).then(
+    const pending = this.#requestApproval(draft).then(
       (decision) => {
-        this.#sendApprovalResponse(decision);
+        return this.#sendApprovalResponse(decision);
       },
       (error: unknown) => {
         if (this.#closed) {
@@ -655,27 +663,41 @@ export class CodexAppServerSession implements AgentSession {
           `Codex app-server approval directive failed: ${message}`,
         );
       },
-    );
+    ).finally(() => {
+      this.#pendingDirectiveApprovals.delete(pending);
+    });
+    this.#pendingDirectiveApprovals.add(pending);
   }
 
-  #sendApprovalResponse(decision: ApprovalDecision): void {
+  async #sendApprovalResponse(decision: ApprovalDecision): Promise<void> {
     if (this.#closed || !this.#threadId || !this.#activeTurnId) {
       return;
     }
-    void this.#steerTurn({
-      content: JSON.stringify({
-        type: "approvalResponse",
-        approvalId: decision.approvalId,
-        approved: decision.approved,
-        signedAt: decision.signedAt,
-        signature: decision.signature,
-      }),
-    }).catch((error: unknown) => {
+    try {
+      await this.#steerTurn({
+        content: JSON.stringify({
+          type: "approvalResponse",
+          approvalId: decision.approvalId,
+          approved: decision.approved,
+          signedAt: decision.signedAt,
+          signature: decision.signature,
+        }),
+      });
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      void this.#fail(
+      await this.#fail(
         `Codex app-server approval response failed: ${message}`,
       );
-    });
+    }
+  }
+
+  async #awaitPendingDirectiveApprovals(): Promise<void> {
+    while (!this.#closed && this.#pendingDirectiveApprovals.size > 0) {
+      await Promise.race([
+        Promise.allSettled([...this.#pendingDirectiveApprovals]),
+        sleep(50),
+      ]);
+    }
   }
 
   async #fail(
@@ -824,6 +846,16 @@ function errorMessageFrom(value: unknown): string | undefined {
   return asString(value.error.message);
 }
 
+function errorWillRetryFrom(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (typeof value.willRetry === "boolean") {
+    return value.willRetry;
+  }
+  return isRecord(value.error) && value.error.willRetry === true;
+}
+
 function outputDeltaFrom(value: unknown): string | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -893,4 +925,8 @@ function mcpElicitationAction(
     return "decline";
   }
   return params.mode === "url" ? "accept" : "cancel";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
