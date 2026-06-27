@@ -38,6 +38,7 @@ interface RunnerConfigFile {
 }
 
 const DEFAULT_DATA_DIR = ".roam-runner";
+type ConfigValueSource = "cli" | "env" | "config" | "default";
 
 export interface ResolvedRunnerConfig {
   options: RunnerCliOptions;
@@ -59,7 +60,7 @@ export async function resolveRunnerConfig(
   const cli = parseRawCliArgs(argv);
   const locator = resolveConfigLocator(cli, env);
   const fileConfig = await readRunnerConfigFile(locator.configPath);
-  const options = resolveOptions(cli, env, fileConfig);
+  const options = resolveOptions(cli, env, fileConfig, locator.configPath);
   if (options.token === undefined || options.token.length === 0) {
     throw new Error(
       "Missing --token or ROAM_RUNNER_TOKEN or local config token",
@@ -88,15 +89,24 @@ export async function persistRunnerConfig(
     null,
     2,
   )}\n`;
-  await writeRunnerConfigFile(configPath, content);
-
+  const effectiveConfigPath = join(
+    options.workspace,
+    options.dataDir,
+    "config.json",
+  );
   const discoverableConfigPath = join(
     options.workspace,
     DEFAULT_DATA_DIR,
     "config.json",
   );
-  if (discoverableConfigPath !== configPath) {
-    await writeRunnerConfigFile(discoverableConfigPath, content);
+  const configPaths = new Set([
+    configPath,
+    effectiveConfigPath,
+    discoverableConfigPath,
+  ]);
+
+  for (const targetPath of configPaths) {
+    await writeRunnerConfigFile(targetPath, content);
   }
 }
 
@@ -156,33 +166,52 @@ function resolveOptions(
   cli: RawRunnerCliOptions,
   env: NodeJS.ProcessEnv,
   fileConfig: RunnerConfigFile | undefined,
+  configPath?: string,
 ): RunnerCliOptions {
+  const serverSource = valueSource(
+    cli.server,
+    env.ROAM_RUNNER_SERVER,
+    fileConfig?.server,
+  );
   const server = cli.server ?? env.ROAM_RUNNER_SERVER ?? fileConfig?.server;
   if (server === undefined || server.length === 0) {
     throw new Error(
       "Missing --server or ROAM_RUNNER_SERVER or local config server",
     );
   }
+  const normalizedServer = withConfigErrorContext(
+    serverSource,
+    configPath,
+    () => normalizeServerUrl(server),
+  );
 
   const profileValue =
     cli.profile ?? env.ROAM_RUNNER_PROFILE ?? fileConfig?.profile ?? "standard";
-  const profile = RunnerProfileSchema.parse(profileValue);
+  const profile = withConfigErrorContext(
+    valueSource(cli.profile, env.ROAM_RUNNER_PROFILE, fileConfig?.profile),
+    configPath,
+    () => RunnerProfileSchema.parse(profileValue),
+  );
   const workspace = resolve(
     cli.workspace ??
       env.ROAM_RUNNER_WORKSPACE ??
       fileConfig?.workspace ??
       process.cwd(),
   );
-  const dataDir = parseDataDir(
+  const dataDirValue =
     cli.dataDir ??
-      env.ROAM_RUNNER_DATA_DIR ??
-      fileConfig?.dataDir ??
-      ".roam-runner",
+    env.ROAM_RUNNER_DATA_DIR ??
+    fileConfig?.dataDir ??
+    DEFAULT_DATA_DIR;
+  const dataDir = withConfigErrorContext(
+    valueSource(cli.dataDir, env.ROAM_RUNNER_DATA_DIR, fileConfig?.dataDir),
+    configPath,
+    () => parseDataDir(dataDirValue),
   );
   const token = cli.token ?? env.ROAM_RUNNER_TOKEN ?? fileConfig?.token;
 
   return {
-    server: normalizeServerUrl(server),
+    server: normalizedServer,
     token,
     profile,
     runnerId:
@@ -198,6 +227,39 @@ function resolveOptions(
       fileConfig?.agentPlugins,
     ),
   };
+}
+
+function valueSource(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string | undefined,
+): ConfigValueSource {
+  if (cliValue !== undefined) {
+    return "cli";
+  }
+  if (envValue !== undefined) {
+    return "env";
+  }
+  if (configValue !== undefined) {
+    return "config";
+  }
+  return "default";
+}
+
+function withConfigErrorContext<T>(
+  source: ConfigValueSource,
+  configPath: string | undefined,
+  read: () => T,
+): T {
+  try {
+    return read();
+  } catch (error) {
+    if (source === "config" && configPath !== undefined) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid runner config at ${configPath}: ${message}`);
+    }
+    throw error;
+  }
 }
 
 export class CliHelp extends Error {
@@ -328,28 +390,7 @@ async function readRunnerConfigFile(
       result.agentPlugins = value;
     }
   }
-  validateRunnerConfigFile(configPath, result);
   return result;
-}
-
-function validateRunnerConfigFile(
-  configPath: string,
-  config: RunnerConfigFile,
-): void {
-  try {
-    if (config.server !== undefined) {
-      normalizeServerUrl(config.server);
-    }
-    if (config.profile !== undefined) {
-      RunnerProfileSchema.parse(config.profile);
-    }
-    if (config.dataDir !== undefined) {
-      parseDataDir(config.dataDir);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid runner config at ${configPath}: ${message}`);
-  }
 }
 
 function parsePluginList(

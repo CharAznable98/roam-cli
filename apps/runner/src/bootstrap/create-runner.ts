@@ -23,11 +23,11 @@ export async function createRunner(
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
   const { options: cli, configPath } = await resolveRunnerConfig(argv);
-  await persistRunnerConfig(configPath, cli);
   const registry = await loadAgentRegistry(
     cli.profile,
     cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined,
   );
+  await persistRunnerConfig(configPath, cli);
   const registration = createRunnerRegistration({
     runnerId: cli.runnerId,
     workspace: cli.workspace,

@@ -7,6 +7,7 @@ import {
   persistRunnerConfig,
   resolveRunnerConfig,
 } from "../bootstrap/cli.js";
+import { createRunner } from "../bootstrap/create-runner.js";
 
 describe("parseCliArgs", () => {
   it("parses required runner flags and normalizes https to wss", () => {
@@ -169,6 +170,53 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("keeps custom data-dir and default config copies in sync", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    const { options, configPath } = await resolveRunnerConfig(
+      [
+        "--server",
+        "https://roam.example.test/runners",
+        "--token",
+        "t1",
+        "--workspace",
+        workspace,
+        "--data-dir",
+        ".runner-state",
+      ],
+      {},
+    );
+    await persistRunnerConfig(configPath, options);
+
+    const { options: restoredOptions, configPath: restoredConfigPath } =
+      await resolveRunnerConfig(
+        [
+          "--workspace",
+          workspace,
+          "--server",
+          "https://override.example.test/runners",
+          "--token",
+          "t2",
+        ],
+        {},
+      );
+    await persistRunnerConfig(restoredConfigPath, restoredOptions);
+
+    const customConfigPath = join(workspace, ".runner-state", "config.json");
+    const defaultConfigPath = join(workspace, ".roam-runner", "config.json");
+    const expected = {
+      server: "wss://override.example.test/runners",
+      token: "t2",
+      workspace,
+      dataDir: ".runner-state",
+    };
+    expect(JSON.parse(await readFile(defaultConfigPath, "utf8"))).toMatchObject(
+      expected,
+    );
+    expect(JSON.parse(await readFile(customConfigPath, "utf8"))).toMatchObject(
+      expected,
+    );
+  });
+
   it("prefers cli over env over local config and persists overrides", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
     await writeConfig(workspace, {
@@ -261,6 +309,55 @@ describe("parseCliArgs", () => {
     await expect(
       resolveRunnerConfig(["--workspace", workspace], {}),
     ).rejects.toThrow("Invalid runner config at");
+  });
+
+  it("allows cli and env overrides to repair stale invalid config values", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    await writeConfig(workspace, {
+      server: "not a url",
+      token: "config-token",
+      profile: "loose",
+    });
+
+    const { options, configPath } = await resolveRunnerConfig(
+      ["--workspace", workspace, "--server", "https://cli.example.test"],
+      {
+        ROAM_RUNNER_PROFILE: "trusted",
+      },
+    );
+    await persistRunnerConfig(configPath, options);
+
+    expect(options).toMatchObject({
+      server: "wss://cli.example.test/",
+      token: "config-token",
+      profile: "trusted",
+      dataDir: ".roam-runner",
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      server: "wss://cli.example.test/",
+      token: "config-token",
+      profile: "trusted",
+      dataDir: ".roam-runner",
+    });
+  });
+
+  it("does not persist unvalidated agent plugin configuration", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    const configPath = join(workspace, ".roam-runner", "config.json");
+
+    await expect(
+      createRunner([
+        "--workspace",
+        workspace,
+        "--server",
+        "wss://roam.example.test/runners",
+        "--token",
+        "t1",
+        "--agent-plugin",
+        "@roamcli/missing-agent",
+      ]),
+    ).rejects.toThrow("Failed to load agent plugin @roamcli/missing-agent");
+    await expect(readFile(configPath, "utf8")).rejects.toThrow();
   });
 
   it("fails without a server or token after config resolution", async () => {
