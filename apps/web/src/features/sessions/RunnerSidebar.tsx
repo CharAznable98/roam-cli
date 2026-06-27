@@ -40,6 +40,13 @@ import {
   projectDirectoryName,
 } from "./project-directory";
 import { StatusPill } from "../../shared/components/StatusPill";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { LazyFileTree, type TreePathStates } from "../files/LazyFileTree";
 import {
   isTreeDirectoryLoaded,
@@ -64,8 +71,10 @@ type RunnerSidebarProps = {
   projects: Project[];
   runners: RunnerRegistration[];
   selectedProjectId: string;
+  runnerFilterId?: string;
   sessions: Session[];
   selectedSessionId: string;
+  onRunnerFilterChange?: (runnerId: string) => void;
   onSelectProject: (projectId: string) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateProject: (values: {
@@ -97,8 +106,10 @@ export function RunnerSidebar({
   projects,
   runners,
   selectedProjectId,
+  runnerFilterId = "all",
   sessions,
   selectedSessionId,
+  onRunnerFilterChange = () => {},
   onSelectProject,
   onSelectSession,
   onCreateProject,
@@ -124,8 +135,13 @@ export function RunnerSidebar({
     () => new Set(),
   );
   const activeProjects = useMemo(
-    () => projects.filter((project) => !project.archivedAt),
-    [projects],
+    () =>
+      projects.filter(
+        (project) =>
+          !project.archivedAt &&
+          (runnerFilterId === "all" || project.runnerId === runnerFilterId),
+      ),
+    [projects, runnerFilterId],
   );
   const sessionProject = activeProjects.find(
     (project) => project.id === sessionProjectId,
@@ -161,7 +177,30 @@ export function RunnerSidebar({
             <FolderPlus size={16} />
           </button>
         </div>
+        <div className="runner-filter-control">
+          <label htmlFor="runner-filter">Runner</label>
+          <Select value={runnerFilterId} onValueChange={onRunnerFilterChange}>
+            <SelectTrigger id="runner-filter" className="h-8 w-full">
+              <SelectValue placeholder="All runners" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All runners</SelectItem>
+              {runners.map((runner) => (
+                <SelectItem key={runner.runnerId} value={runner.runnerId}>
+                  {runner.displayName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <div className="project-tree">
+          {activeProjects.length === 0 ? (
+            <div className="empty-state compact">
+              {runnerFilterId === "all"
+                ? "No active projects."
+                : "No projects for this runner."}
+            </div>
+          ) : null}
           {activeProjects.map((project) => {
             const runner = runners.find(
               (item) => item.runnerId === project.runnerId,

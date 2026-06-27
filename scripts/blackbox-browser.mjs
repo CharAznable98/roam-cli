@@ -458,9 +458,9 @@ async function runUserJourney(browser, scenario) {
       `artifact ${artifactFileName} to be persisted`,
     );
     await openTab(page, scenario, "approvals");
-    await expectText(page, "text/plain");
-    await captureScreenshot(page, scenario, "artifact-display");
-    pass(`${scenario.name}: artifact display`);
+    await assertNoVisibleButton(page, "Artifacts");
+    await captureScreenshot(page, scenario, "artifact-persisted");
+    pass(`${scenario.name}: artifact persisted without primary UI`);
 
     const hunkId = `hunk-${scenario.name}-${Date.now()}`;
     const approvalLine = `ROAMCLI_APPROVAL: ${JSON.stringify({

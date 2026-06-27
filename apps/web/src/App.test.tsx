@@ -347,6 +347,10 @@ function openSettingsTab() {
   fireEvent.click(screen.getAllByRole("button", { name: "Settings" })[0]!);
 }
 
+function closeSettingsDrawer() {
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+}
+
 async function findSessionFile(name: RegExp) {
   const src = await screen.findByRole("treeitem", { name: /src/ });
   if (src.getAttribute("aria-expanded") !== "true") {
@@ -1211,10 +1215,9 @@ describe("App", () => {
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
-    expect(screen.getByText("changes.patch")).toBeInTheDocument();
     expect(
-      screen.getByText(/artifacts\/session-1\/changes.patch/),
-    ).toBeInTheDocument();
+      screen.queryByText(/artifacts\/session-1\/changes.patch/),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     ).toBeInTheDocument();
@@ -1232,6 +1235,35 @@ describe("App", () => {
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
       ).toEqual({ projectId: "project-1", sessionId: "session-1" });
     });
+  });
+
+  it("opens primary workspace actions from the command palette", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    fireEvent.click(
+      within(commandPalette).getByRole("option", { name: /Open Git/ }),
+    );
+
+    expect(screen.getByRole("region", { name: "Git" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const reopenedPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    fireEvent.click(
+      within(reopenedPalette).getByRole("option", { name: /Open Settings/ }),
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).toBeInTheDocument();
   });
 
   it("exposes account security from the Settings tab", async () => {
@@ -1385,7 +1417,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
     expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    closeSettingsDrawer();
     queuedAccountSecurityResponses.push(freshAccount);
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
@@ -1499,7 +1531,7 @@ describe("App", () => {
     queuedRunnerTokenResponses.push(slowRegenerate);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    closeSettingsDrawer();
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
     expect(await screen.findByText("runner-token")).toBeInTheDocument();
@@ -1851,8 +1883,8 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Approval required")).toBeInTheDocument();
     expect(
-      screen.getByText(/artifacts\/session-1\/late.patch/),
-    ).toBeInTheDocument();
+      screen.queryByText(/artifacts\/session-1\/late.patch/),
+    ).not.toBeInTheDocument();
     expect(
       fetchCalls.some(
         (call) =>

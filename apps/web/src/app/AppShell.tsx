@@ -1,5 +1,4 @@
 import { ApprovalCenter } from "../features/approvals/ApprovalCenter";
-import { ArtifactList } from "../features/approvals/ArtifactList";
 import { ChatPanel } from "../features/conversation/ChatPanel";
 import type { MarkdownFileLinkTarget } from "../features/conversation/file-links";
 import { FilePanel } from "../features/files/FilePanel";
@@ -30,6 +29,7 @@ import {
   type ApiChangePassword,
   type ApiCreateProjectPromptPreset,
   type ApiUpdateProjectPromptPreset,
+  type FileNode,
   type GitJob,
   type Project,
   type ProjectPromptPreset,
@@ -53,6 +53,8 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
+  Settings,
   ShieldCheck,
   Trash2,
   Wifi,
@@ -79,6 +81,29 @@ import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { AppNotification } from "./state";
 import type { useRoamController } from "./useRoamController";
 import type { AsyncState } from "../shared/types/async";
+import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "@/components/ui/command";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type AppShellProps = {
   controller: ReturnType<typeof useRoamController>;
@@ -135,6 +160,9 @@ async function waitForGitJob(input: {
 }
 
 export function AppShell({ controller }: AppShellProps) {
+  const [runnerFilterId, setRunnerFilterId] = useState("all");
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileProjectModalOpen, setMobileProjectModalOpen] = useState(false);
   const [mobileSessionModalOpen, setMobileSessionModalOpen] = useState(false);
   const [mobileSessionSwitcherOpen, setMobileSessionSwitcherOpen] =
@@ -299,11 +327,8 @@ export function AppShell({ controller }: AppShellProps) {
   const setActiveTab = useCallback(
     (tab: WorkspaceTab) => {
       dispatch({ type: "activeTabChanged", tab });
-      if (tab === "settings" && authView === "authenticated") {
-        requestSettingsAccountRefresh();
-      }
     },
-    [authView, dispatch, requestSettingsAccountRefresh],
+    [dispatch],
   );
   const setSelectedSessionId = useCallback(
     (sessionId: string) => {
@@ -368,20 +393,27 @@ export function AppShell({ controller }: AppShellProps) {
     );
 
   useEffect(() => {
+    const openOnShortcut = (event: globalThis.KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
+        return;
+      }
+      event.preventDefault();
+      setCommandPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", openOnShortcut);
+    return () => window.removeEventListener("keydown", openOnShortcut);
+  }, []);
+
+  useEffect(() => {
     setMobileSessionModalOpen(false);
   }, [selectedProject?.id]);
 
   useEffect(() => {
     if (authView !== "authenticated") {
       setSettingsView("home");
+      setSettingsDrawerOpen(false);
     }
   }, [authView]);
-
-  useEffect(() => {
-    if (state.activeTab !== "settings") {
-      setSettingsView("home");
-    }
-  }, [state.activeTab]);
 
   const notify = useCallback(
     (tone: AppNotification["tone"], title: string, message: string) => {
@@ -398,7 +430,7 @@ export function AppShell({ controller }: AppShellProps) {
       if (
         view === "account" &&
         authView === "authenticated" &&
-        state.activeTab === "settings"
+        settingsDrawerOpen
       ) {
         requestSettingsAccountRefresh();
       }
@@ -407,12 +439,12 @@ export function AppShell({ controller }: AppShellProps) {
       authView,
       currentProjectSettingsTargetId,
       requestSettingsAccountRefresh,
-      state.activeTab,
+      settingsDrawerOpen,
     ],
   );
 
   useEffect(() => {
-    if (authView !== "authenticated" || state.activeTab !== "settings") {
+    if (authView !== "authenticated" || !settingsDrawerOpen) {
       settingsAccountRefreshPendingRef.current = false;
       setSettingsAccountRefreshState("idle");
       return;
@@ -455,7 +487,7 @@ export function AppShell({ controller }: AppShellProps) {
     notify,
     refreshAccountSecurity,
     settingsAccountRefreshKey,
-    state.activeTab,
+    settingsDrawerOpen,
   ]);
 
   const logoutFromAccountSecurity = useCallback(async () => {
@@ -498,14 +530,30 @@ export function AppShell({ controller }: AppShellProps) {
     }
   }, [notify, regenerateRunnerToken]);
 
+  const openSettingsDrawer = useCallback(
+    (view: SettingsView = "home", projectId?: string) => {
+      setSettingsView(view);
+      if (projectId) {
+        setSettingsProjectId(projectId);
+      } else if (view === "project") {
+        setSettingsProjectId(currentProjectSettingsTargetId);
+      }
+      setSettingsDrawerOpen(true);
+      if (authView === "authenticated") {
+        requestSettingsAccountRefresh();
+      }
+    },
+    [authView, currentProjectSettingsTargetId, requestSettingsAccountRefresh],
+  );
+
   const openPromptPresetManager = useCallback(
     (projectId: string) => {
       setMobileSessionModalOpen(false);
       setSettingsProjectId(projectId);
       setSettingsView("project");
-      setActiveTab("settings");
+      openSettingsDrawer("project", projectId);
     },
-    [setActiveTab],
+    [openSettingsDrawer],
   );
 
   const openSaveMessageAsPrompt = useCallback(
@@ -596,7 +644,8 @@ export function AppShell({ controller }: AppShellProps) {
   }
 
   return (
-    <div className={`app-shell active-${state.activeTab}`}>
+    <TooltipProvider>
+      <div className={`app-shell active-${state.activeTab}`}>
       <header className="topbar">
         <div className="topbar-title">
           <p className="topbar-kicker">RoamCli</p>
@@ -606,6 +655,15 @@ export function AppShell({ controller }: AppShellProps) {
           <p className="topbar-context">{topbarContext}</p>
         </div>
         <div className="topbar-actions topbar-actions-desktop">
+          <button
+            className="command-trigger"
+            type="button"
+            onClick={() => setCommandPaletteOpen(true)}
+          >
+            <Search size={15} />
+            <span>Search or run command...</span>
+            <kbd>⌘K</kbd>
+          </button>
           <span
             className={`topbar-status ${state.connectionState === "open" ? "success" : "warning"}`}
           >
@@ -626,6 +684,20 @@ export function AppShell({ controller }: AppShellProps) {
               {state.runners.length} runners online
             </span>
           )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Settings"
+                onClick={() => openSettingsDrawer("home")}
+              >
+                <Settings size={16} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Settings</TooltipContent>
+          </Tooltip>
         </div>
         <div className="mobile-topbar-actions">
           <button
@@ -638,6 +710,36 @@ export function AppShell({ controller }: AppShellProps) {
             <CompactStatusIcon size={16} />
             <span>{compactStatus.label}</span>
           </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="mobile-topbar-icon-button"
+                aria-label="Open command palette"
+                onClick={() => setCommandPaletteOpen(true)}
+              >
+                <Search size={16} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Command palette</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="mobile-topbar-icon-button"
+                aria-label="Settings"
+                onClick={() => openSettingsDrawer("home")}
+              >
+                <Settings size={16} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Settings</TooltipContent>
+          </Tooltip>
         </div>
       </header>
 
@@ -668,8 +770,10 @@ export function AppShell({ controller }: AppShellProps) {
               projects={state.projects}
               runners={state.runners}
               selectedProjectId={selectedProject?.id ?? ""}
+              runnerFilterId={runnerFilterId}
               sessions={state.sessions}
               selectedSessionId={selectedSession?.id ?? ""}
+              onRunnerFilterChange={setRunnerFilterId}
               onSelectProject={selectProject}
               onSelectSession={setSelectedSessionId}
               onCreateProject={createProject}
@@ -867,44 +971,6 @@ export function AppShell({ controller }: AppShellProps) {
                     onApplyPatch={applyAcceptedPatch}
                     patchApplyState={state.patchApplyState}
                   />
-                  <ArtifactList
-                    artifacts={state.artifacts.filter(
-                      (artifact) =>
-                        !selectedSession ||
-                        artifact.sessionId === selectedSession.id,
-                    )}
-                  />
-                </div>
-                <div className="workspace-surface settings-surface">
-                  <SettingsPanel
-                    account={accountSecurity}
-                    accountRefreshState={settingsAccountRefreshState}
-                    runnerCommand={runnerCommand}
-                    view={settingsView}
-                    onViewChange={changeSettingsView}
-                    projects={activeProjects}
-                    currentProjectId={selectedProject?.id ?? ""}
-                    projectId={settingsProjectId}
-                    onProjectChange={setSettingsProjectId}
-                    promptPresetsByProject={projectPromptPresetsByProject}
-                    promptPresetStates={projectPromptPresetStates}
-                    promptPresetErrorsByProject={
-                      projectPromptPresetErrorsByProject
-                    }
-                    onRefreshPromptPresets={refreshProjectPromptPresets}
-                    onNewPromptPreset={(projectId) =>
-                      setPromptPresetEditor({ projectId })
-                    }
-                    onEditPromptPreset={(projectId, preset) =>
-                      setPromptPresetEditor({ projectId, preset })
-                    }
-                    onDeletePromptPreset={removePromptPreset}
-                    onReorderPromptPresets={reorderPromptPresets}
-                    onLogout={logoutFromAccountSecurity}
-                    onLogoutAll={logoutAllFromAccountSecurity}
-                    onChangePassword={changePasswordFromAccountSecurity}
-                    onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
-                  />
                 </div>
               </div>
             </aside>
@@ -1019,6 +1085,71 @@ export function AppShell({ controller }: AppShellProps) {
               onDelete={removePromptPreset}
             />
           ) : null}
+
+          <Sheet
+            open={settingsDrawerOpen}
+            onOpenChange={(open) => {
+              setSettingsDrawerOpen(open);
+              if (!open) {
+                setSettingsView("home");
+              }
+            }}
+          >
+            <SheetContent className="settings-drawer" side="right">
+              <SheetHeader>
+                <SheetTitle>Settings</SheetTitle>
+              </SheetHeader>
+              <SettingsPanel
+                account={accountSecurity}
+                accountRefreshState={settingsAccountRefreshState}
+                runnerCommand={runnerCommand}
+                view={settingsView}
+                onViewChange={changeSettingsView}
+                projects={activeProjects}
+                currentProjectId={selectedProject?.id ?? ""}
+                projectId={settingsProjectId}
+                onProjectChange={setSettingsProjectId}
+                promptPresetsByProject={projectPromptPresetsByProject}
+                promptPresetStates={projectPromptPresetStates}
+                promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
+                onRefreshPromptPresets={refreshProjectPromptPresets}
+                onNewPromptPreset={(projectId) =>
+                  setPromptPresetEditor({ projectId })
+                }
+                onEditPromptPreset={(projectId, preset) =>
+                  setPromptPresetEditor({ projectId, preset })
+                }
+                onDeletePromptPreset={removePromptPreset}
+                onReorderPromptPresets={reorderPromptPresets}
+                onLogout={logoutFromAccountSecurity}
+                onLogoutAll={logoutAllFromAccountSecurity}
+                onChangePassword={changePasswordFromAccountSecurity}
+                onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
+              />
+            </SheetContent>
+          </Sheet>
+
+          <AppCommandPalette
+            open={commandPaletteOpen}
+            onOpenChange={setCommandPaletteOpen}
+            projects={activeProjects}
+            sessions={state.sessions}
+            files={sessionFiles}
+            selectedProjectId={selectedProject?.id ?? ""}
+            selectedSessionId={selectedSession?.id ?? ""}
+            onSelectProject={selectProject}
+            onSelectSession={setSelectedSessionId}
+            onSelectFile={(path) => {
+              setActiveTab("files");
+              selectFile(path);
+            }}
+            onOpenTab={setActiveTab}
+            onOpenSettings={(view) => openSettingsDrawer(view)}
+            onNewSession={() => {
+              setMobileSessionModalOpen(true);
+              setCommandPaletteOpen(false);
+            }}
+          />
         </>
       ) : null}
 
@@ -1037,7 +1168,8 @@ export function AppShell({ controller }: AppShellProps) {
           />
         </SidebarModal>
       ) : null}
-    </div>
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -1058,6 +1190,193 @@ function ApiConnectionBanner({
       </button>
     </div>
   );
+}
+
+type CommandPaletteFile = {
+  path: string;
+  name: string;
+};
+
+function AppCommandPalette({
+  open,
+  onOpenChange,
+  projects,
+  sessions,
+  files,
+  selectedProjectId,
+  selectedSessionId,
+  onSelectProject,
+  onSelectSession,
+  onSelectFile,
+  onOpenTab,
+  onOpenSettings,
+  onNewSession,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  projects: Project[];
+  sessions: Session[];
+  files: FileNode[];
+  selectedProjectId: string;
+  selectedSessionId: string;
+  onSelectProject: (projectId: string) => void;
+  onSelectSession: (sessionId: string) => void;
+  onSelectFile: (path: string) => void;
+  onOpenTab: (tab: WorkspaceTab) => void;
+  onOpenSettings: (view?: SettingsView) => void;
+  onNewSession: () => void;
+}) {
+  const visibleSessions = sessions.filter((session) => !session.archivedAt);
+  const fileItems = useMemo(() => flattenCommandFiles(files).slice(0, 40), [
+    files,
+  ]);
+  const close = () => onOpenChange(false);
+
+  return (
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Command Palette"
+      description="Search projects, sessions, files, and actions."
+      className="command-palette-dialog"
+      showCloseButton
+    >
+      <Command shouldFilter>
+        <CommandInput placeholder="Search or run command..." />
+        <CommandList>
+          <CommandEmpty>No command found.</CommandEmpty>
+          <CommandGroup heading="Projects">
+            {projects.map((project) => (
+              <CommandItem
+                key={project.id}
+                value={`project ${project.name} ${project.directory}`}
+                onSelect={() => {
+                  onSelectProject(project.id);
+                  close();
+                }}
+              >
+                <FolderOpen />
+                <span>{project.name}</span>
+                {project.id === selectedProjectId ? (
+                  <span className="command-item-meta">Current</span>
+                ) : null}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+          <CommandSeparator />
+          <CommandGroup heading="Sessions">
+            {visibleSessions.slice(0, 40).map((session) => (
+              <CommandItem
+                key={session.id}
+                value={`session ${session.title} ${session.cwd}`}
+                onSelect={() => {
+                  onSelectSession(session.id);
+                  onOpenTab("chat");
+                  close();
+                }}
+              >
+                <BookOpen />
+                <span>{session.title}</span>
+                {session.id === selectedSessionId ? (
+                  <span className="command-item-meta">Current</span>
+                ) : null}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+          {fileItems.length > 0 ? (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Files">
+                {fileItems.map((file) => (
+                  <CommandItem
+                    key={file.path}
+                    value={`file ${file.path}`}
+                    onSelect={() => {
+                      onSelectFile(file.path);
+                      close();
+                    }}
+                  >
+                    <FolderOpen />
+                    <span>{file.name}</span>
+                    <span className="command-item-meta">{file.path}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          ) : null}
+          <CommandSeparator />
+          <CommandGroup heading="Actions">
+            <CommandItem
+              value="new session create session"
+              onSelect={() => {
+                onNewSession();
+                close();
+              }}
+            >
+              <Plus />
+              <span>New Session</span>
+            </CommandItem>
+            <CommandItem
+              value="open files panel"
+              onSelect={() => {
+                onOpenTab("files");
+                close();
+              }}
+            >
+              <FolderOpen />
+              <span>Open Files</span>
+            </CommandItem>
+            <CommandItem
+              value="open git panel"
+              onSelect={() => {
+                onOpenTab("git");
+                close();
+              }}
+            >
+              <RefreshCw />
+              <span>Open Git</span>
+            </CommandItem>
+            <CommandItem
+              value="open approvals panel"
+              onSelect={() => {
+                onOpenTab("approvals");
+                close();
+              }}
+            >
+              <ShieldCheck />
+              <span>Open Approvals</span>
+            </CommandItem>
+            <CommandItem
+              value="settings account security"
+              onSelect={() => {
+                onOpenSettings("home");
+                close();
+              }}
+            >
+              <Settings />
+              <span>Open Settings</span>
+            </CommandItem>
+          </CommandGroup>
+        </CommandList>
+      </Command>
+    </CommandDialog>
+  );
+}
+
+function flattenCommandFiles(nodes: FileNode[]): CommandPaletteFile[] {
+  const files: CommandPaletteFile[] = [];
+  const visit = (items: FileNode[]) => {
+    for (const item of items) {
+      if (item.type === "file") {
+        files.push({ path: item.path, name: item.name });
+      }
+      if (item.children) {
+        visit(item.children);
+      }
+    }
+  };
+  visit(nodes);
+  return files;
 }
 
 function AuthGate({
