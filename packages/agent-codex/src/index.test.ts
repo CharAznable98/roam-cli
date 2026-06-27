@@ -770,7 +770,6 @@ describe("codex agent plugin", () => {
           method: "thread/start",
           params: expect.objectContaining({
             approvalPolicy: "never",
-            sandbox: "danger-full-access",
           }),
         }),
         expect.objectContaining({
@@ -781,6 +780,10 @@ describe("codex agent plugin", () => {
           }),
         }),
       ]);
+      const threadStart = messages.find(
+        (message) => message.method === "thread/start",
+      );
+      expect(threadStart.params).not.toHaveProperty("sandbox");
     });
   });
 
@@ -1023,6 +1026,79 @@ describe("codex agent plugin", () => {
         code: "CODEX_APP_SERVER_ERROR",
       });
       expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
+  });
+
+  it("steers app-server approval directive decisions back to Codex", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-approval-directive-");
+    const capturedPath = join(workspace, "approval-steer.json");
+    await writeAppServerScript(
+      workspace,
+      "approval-directive.mjs",
+      [
+        `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
+        "  }",
+        "  if (message.method === 'turn/steer') {",
+        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
+        "    write({ id: message.id, result: {} });",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      const captured = JSON.parse(await readFile(capturedPath, "utf8"));
+      expect(captured).toEqual(
+        expect.objectContaining({
+          method: "turn/steer",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+            expectedTurnId: "turn-1",
+            input: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  type: "approvalResponse",
+                  approvalId: "approval-1",
+                  approved: true,
+                  signedAt: "2026-06-21T00:00:00.000Z",
+                  signature: "sig",
+                }),
+                text_elements: [],
+              },
+            ],
+          }),
+        }),
+      );
     });
   });
 

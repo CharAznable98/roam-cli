@@ -24,7 +24,6 @@ import type {
   McpServerElicitationRequestParams,
   PermissionApprovalParams,
   SandboxPolicy,
-  ThreadSandboxMode,
   ThreadResponse,
   ToolRequestUserInputParams,
   TurnNotification,
@@ -33,6 +32,13 @@ import type {
 } from "./app-server-protocol.js";
 import { asString, isRecord } from "./app-server-protocol.js";
 import { parseTextDirectives } from "./directives.js";
+
+interface ApprovalDecision {
+  approvalId: string;
+  approved: boolean;
+  signedAt: string;
+  signature: string;
+}
 
 interface CodexAppServerSessionOptions {
   command: string;
@@ -608,8 +614,24 @@ export class CodexAppServerSession implements AgentSession {
       await this.#emit({ type: "artifact", draft });
     }
     for (const draft of directives.approvals) {
-      await this.#requestApproval(draft);
+      const decision = await this.#requestApproval(draft);
+      await this.#sendApprovalResponse(decision);
     }
+  }
+
+  async #sendApprovalResponse(decision: ApprovalDecision): Promise<void> {
+    if (!this.#threadId || !this.#activeTurnId) {
+      return;
+    }
+    await this.#steerTurn({
+      content: JSON.stringify({
+        type: "approvalResponse",
+        approvalId: decision.approvalId,
+        approved: decision.approved,
+        signedAt: decision.signedAt,
+        signature: decision.signature,
+      }),
+    });
   }
 
   async #fail(
@@ -682,24 +704,15 @@ function threadStartParamsForProfile(
   profile: RunnerProfile,
 ): {
   approvalPolicy: AskForApproval;
-  sandbox: ThreadSandboxMode;
   permissions?: never;
 } {
   if (profile === "trusted") {
     return {
       approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    };
-  }
-  if (profile === "strict") {
-    return {
-      approvalPolicy: "on-request",
-      sandbox: "read-only",
     };
   }
   return {
     approvalPolicy: "on-request",
-    sandbox: "workspace-write",
   };
 }
 
