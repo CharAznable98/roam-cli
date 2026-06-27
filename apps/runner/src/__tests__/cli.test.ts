@@ -122,6 +122,53 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("keeps custom data-dir configs discoverable from the default locator", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    const { options, configPath } = await resolveRunnerConfig(
+      [
+        "--server",
+        "https://roam.example.test/runners",
+        "--token",
+        "t1",
+        "--workspace",
+        workspace,
+        "--data-dir",
+        ".runner-state",
+      ],
+      {},
+    );
+
+    await persistRunnerConfig(configPath, options);
+
+    const customConfigPath = join(workspace, ".runner-state", "config.json");
+    const defaultConfigPath = join(workspace, ".roam-runner", "config.json");
+    expect(configPath).toBe(customConfigPath);
+    expect(JSON.parse(await readFile(customConfigPath, "utf8"))).toMatchObject({
+      server: "wss://roam.example.test/runners",
+      token: "t1",
+      workspace,
+      dataDir: ".runner-state",
+    });
+    expect(JSON.parse(await readFile(defaultConfigPath, "utf8"))).toMatchObject(
+      {
+        server: "wss://roam.example.test/runners",
+        token: "t1",
+        workspace,
+        dataDir: ".runner-state",
+      },
+    );
+
+    const { options: restoredOptions, configPath: restoredConfigPath } =
+      await resolveRunnerConfig(["--workspace", workspace], {});
+    expect(restoredConfigPath).toBe(defaultConfigPath);
+    expect(restoredOptions).toMatchObject({
+      server: "wss://roam.example.test/runners",
+      token: "t1",
+      workspace,
+      dataDir: ".runner-state",
+    });
+  });
+
   it("prefers cli over env over local config and persists overrides", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
     await writeConfig(workspace, {

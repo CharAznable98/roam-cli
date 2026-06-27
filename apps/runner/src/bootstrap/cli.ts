@@ -37,6 +37,8 @@ interface RunnerConfigFile {
   agentPlugins?: string[];
 }
 
+const DEFAULT_DATA_DIR = ".roam-runner";
+
 export interface ResolvedRunnerConfig {
   options: RunnerCliOptions;
   configPath: string;
@@ -59,7 +61,9 @@ export async function resolveRunnerConfig(
   const fileConfig = await readRunnerConfigFile(locator.configPath);
   const options = resolveOptions(cli, env, fileConfig);
   if (options.token === undefined || options.token.length === 0) {
-    throw new Error("Missing --token or ROAM_RUNNER_TOKEN or local config token");
+    throw new Error(
+      "Missing --token or ROAM_RUNNER_TOKEN or local config token",
+    );
   }
   return {
     options,
@@ -71,24 +75,37 @@ export async function persistRunnerConfig(
   configPath: string,
   options: RunnerCliOptions,
 ): Promise<void> {
-  await mkdir(dirname(configPath), { recursive: true });
-  await writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        server: options.server,
-        token: options.token,
-        profile: options.profile,
-        runnerId: options.runnerId,
-        workspace: options.workspace,
-        dataDir: options.dataDir,
-        agentPlugins: options.agentPlugins,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
+  const content = `${JSON.stringify(
+    {
+      server: options.server,
+      token: options.token,
+      profile: options.profile,
+      runnerId: options.runnerId,
+      workspace: options.workspace,
+      dataDir: options.dataDir,
+      agentPlugins: options.agentPlugins,
+    },
+    null,
+    2,
+  )}\n`;
+  await writeRunnerConfigFile(configPath, content);
+
+  const discoverableConfigPath = join(
+    options.workspace,
+    DEFAULT_DATA_DIR,
+    "config.json",
   );
+  if (discoverableConfigPath !== configPath) {
+    await writeRunnerConfigFile(discoverableConfigPath, content);
+  }
+}
+
+async function writeRunnerConfigFile(
+  configPath: string,
+  content: string,
+): Promise<void> {
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, content, "utf8");
 }
 
 function parseRawCliArgs(argv: readonly string[]): RawRunnerCliOptions {
@@ -229,7 +246,7 @@ function resolveConfigLocator(
     cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? process.cwd(),
   );
   const dataDir = parseDataDir(
-    cli.dataDir ?? env.ROAM_RUNNER_DATA_DIR ?? ".roam-runner",
+    cli.dataDir ?? env.ROAM_RUNNER_DATA_DIR ?? DEFAULT_DATA_DIR,
   );
   return {
     workspace,
