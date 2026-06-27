@@ -29,7 +29,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "--stdio"],
+      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -619,6 +619,94 @@ describe("codex agent plugin", () => {
       expect(events).toContainEqual({ type: "status", status: "completed" });
       await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
     });
+  });
+
+  it("closes app-server when thread startup fails", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-startup-fail-");
+    const closedMarker = join(workspace, "closed.txt");
+    await writeAppServerScript(
+      workspace,
+      "startup-fail.mjs",
+      [
+        `const closedMarker = ${JSON.stringify(closedMarker)};`,
+        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, error: { code: -32000, message: 'thread missing' } });",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await expect(session.start()).rejects.toThrow(
+      /Codex app-server thread\/start failed/,
+    );
+    await vi.waitFor(async () => {
+      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
+    });
+  });
+
+  it("preserves stopped status when app-server startup is cancelled", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-startup-stop-");
+    const initializedMarker = join(workspace, "initialized.txt");
+    await writeAppServerScript(
+      workspace,
+      "startup-stop.mjs",
+      [
+        `const initializedMarker = ${JSON.stringify(initializedMarker)};`,
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') fs.writeFileSync(initializedMarker, 'initialized');",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    const startPromise = session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(initializedMarker, "utf8")).resolves.toBe(
+        "initialized",
+      );
+    });
+    await session.control("stop");
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(events).toContainEqual({ type: "status", status: "stopped" });
+    expect(events).not.toContainEqual({ type: "status", status: "failed" });
   });
 
   it("passes trusted runner permissions to app-server turns", async () => {

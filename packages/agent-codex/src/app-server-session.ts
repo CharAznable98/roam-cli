@@ -112,8 +112,16 @@ export class CodexAppServerSession implements AgentSession {
       onParseError: (error) => this.#emitError(error.message),
     });
 
-    await this.#initialize();
-    await this.#openThread();
+    try {
+      await this.#initialize();
+      await this.#openThread();
+    } catch (error) {
+      if (this.#closed || this.#stopRequested) {
+        return;
+      }
+      this.#closeAppServer("SIGTERM");
+      throw error;
+    }
     this.#queue.push({
       content: this.#context.prompt,
       ...(this.#context.attachments
