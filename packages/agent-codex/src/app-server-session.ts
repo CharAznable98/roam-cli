@@ -473,12 +473,15 @@ export class CodexAppServerSession implements AgentSession {
         questions: params.questions,
       },
     });
-    this.#client?.respond(request.id, { answers: {} });
+    this.#client?.reject(
+      request.id,
+      "RoamCli does not support structured Codex tool user input yet",
+    );
   }
 
   async #handleMcpElicitation(request: JsonRpcRequest): Promise<void> {
     const params = request.params as McpServerElicitationRequestParams;
-    const decision = await this.#requestApproval({
+    await this.#requestApproval({
       kind: "execCommand",
       summary: params.message ?? "Codex tool requested user input",
       payload: {
@@ -495,7 +498,7 @@ export class CodexAppServerSession implements AgentSession {
       },
     });
     this.#client?.respond(request.id, {
-      action: decision.approved ? "accept" : "cancel",
+      action: "cancel",
       content: null,
       _meta: null,
     });

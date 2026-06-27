@@ -1039,8 +1039,8 @@ describe("codex agent plugin", () => {
         "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
         "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
         "  }",
-        "  if (message.id === 12 && message.result) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+        "  if (message.id === 12 && message.error) {",
+        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.error) } } });",
         "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
         "  }",
         "};",
@@ -1092,7 +1092,8 @@ describe("codex agent plugin", () => {
         events.some(
           (event) =>
             event.type === "assistantOutput" &&
-            event.content === '{"answers":{}}',
+            typeof event.content === "string" &&
+            event.content.includes("structured Codex tool user input"),
         ),
       ).toBe(true);
     });
@@ -1135,7 +1136,7 @@ describe("codex agent plugin", () => {
         approvals.push(draft);
         return {
           approvalId: "approval-1",
-          approved: false,
+          approved: true,
           signedAt: "2026-06-21T00:00:00.000Z",
           signature: "sig",
         };
