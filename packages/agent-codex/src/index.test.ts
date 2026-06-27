@@ -719,7 +719,10 @@ describe("codex agent plugin", () => {
         `const capturedPath = ${JSON.stringify(capturedPath)};`,
         "function capture(message) { fs.appendFileSync(capturedPath, `${JSON.stringify(message)}\\n`); }",
         "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'initialize') {",
+        "    capture(message);",
+        "    write({ id: message.id, result: {} });",
+        "  }",
         "  if (message.method === 'thread/start') {",
         "    capture(message);",
         "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
@@ -757,6 +760,12 @@ describe("codex agent plugin", () => {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(messages).toEqual([
+        expect.objectContaining({
+          method: "initialize",
+          params: expect.objectContaining({
+            capabilities: { experimentalApi: true },
+          }),
+        }),
         expect.objectContaining({
           method: "thread/start",
           params: expect.objectContaining({
@@ -828,6 +837,112 @@ describe("codex agent plugin", () => {
       expect(events).toContainEqual({ type: "status", status: "stopped" });
     });
     expect(events).not.toContainEqual({ type: "status", status: "completed" });
+  });
+
+  it("does not block app-server interrupts behind pending approval prompts", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-approval-interrupt-");
+    const approvalMarker = join(workspace, "approval.txt");
+    await writeAppServerScript(
+      workspace,
+      "approval-interrupt.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
+        "  }",
+        "  if (message.method === 'turn/interrupt') {",
+        "    write({ id: message.id, result: {} });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => {
+        await writeFile(approvalMarker, "pending");
+        return new Promise(() => undefined);
+      },
+    });
+
+    await session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(approvalMarker, "utf8")).resolves.toBe("pending");
+    });
+
+    await expect(
+      Promise.race([
+        Promise.resolve(session.control("interrupt")).then(() => "interrupted"),
+        new Promise((resolve) => setTimeout(() => resolve("timed out"), 500)),
+      ]),
+    ).resolves.toBe("interrupted");
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "status", status: "stopped" });
+    });
+  });
+
+  it("fails app-server sessions when the process exits before a queued turn starts", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-exit-between-turns-");
+    await writeAppServerScript(
+      workspace,
+      "exit-before-turn.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') {",
+        "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "    process.exit(0);",
+        "  }",
+        "};",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "error",
+        message: expect.stringContaining(
+          "Codex app-server exited before the next turn started",
+        ),
+        code: "CODEX_APP_SERVER_ERROR",
+      });
+      expect(events).toContainEqual({ type: "status", status: "failed" });
+    });
   });
 
   it("fails app-server sessions cleanly when approval creation fails", async () => {

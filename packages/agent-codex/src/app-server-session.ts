@@ -83,11 +83,16 @@ export class CodexAppServerSession implements AgentSession {
     this.#child.on("close", (code, signal) => {
       const client = this.#client;
       client?.close(new Error(`Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`));
-      if (this.#closed || this.#stopRequested || this.#activeTurnId === undefined) {
+      if (this.#closed || this.#stopRequested) {
+        return;
+      }
+      if (this.#activeTurnId === undefined && this.#threadId === undefined) {
         return;
       }
       this.#fail(
-        `Codex app-server exited before the active turn completed: code=${code ?? "null"} signal=${signal ?? "null"}`,
+        this.#activeTurnId === undefined
+          ? `Codex app-server exited before the next turn started: code=${code ?? "null"} signal=${signal ?? "null"}`
+          : `Codex app-server exited before the active turn completed: code=${code ?? "null"} signal=${signal ?? "null"}`,
       );
     });
     this.#child.on("error", (error) => {
@@ -182,7 +187,9 @@ export class CodexAppServerSession implements AgentSession {
         name: "@roamcli/agent-codex",
         version: "1.1.0",
       },
-      capabilities: null,
+      capabilities: {
+        experimentalApi: true,
+      },
     });
     this.#client?.notify("initialized");
   }
@@ -310,18 +317,18 @@ export class CodexAppServerSession implements AgentSession {
       request.method === "item/commandExecution/requestApproval" ||
       request.method === "execCommandApproval"
     ) {
-      await this.#handleCommandApproval(request);
+      this.#deferRequest(request, () => this.#handleCommandApproval(request));
       return;
     }
     if (
       request.method === "item/fileChange/requestApproval" ||
       request.method === "applyPatchApproval"
     ) {
-      await this.#handleFileApproval(request);
+      this.#deferRequest(request, () => this.#handleFileApproval(request));
       return;
     }
     if (request.method === "item/permissions/requestApproval") {
-      await this.#handlePermissionApproval(request);
+      this.#deferRequest(request, () => this.#handlePermissionApproval(request));
       return;
     }
     this.#client?.reject(
@@ -329,6 +336,16 @@ export class CodexAppServerSession implements AgentSession {
       `Unsupported Codex app-server request: ${request.method}`,
       -32601,
     );
+  }
+
+  #deferRequest(
+    request: JsonRpcRequest,
+    handle: () => Promise<void>,
+  ): void {
+    void handle().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.#client?.reject(request.id, message);
+    });
   }
 
   async #handleCommandApproval(request: JsonRpcRequest): Promise<void> {
