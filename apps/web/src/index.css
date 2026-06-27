@@ -3541,6 +3541,7 @@
 
   .runner-command-copy {
     justify-self: start;
+    min-height: 44px;
   }
 
   .app-error-state {
