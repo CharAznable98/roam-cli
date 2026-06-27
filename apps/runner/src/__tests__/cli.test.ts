@@ -123,6 +123,35 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("loads no-arg config from the package manager invocation directory", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    const { options, configPath } = await resolveRunnerConfig(
+      [
+        "--server",
+        "https://roam.example.test/runners",
+        "--token",
+        "t1",
+        "--workspace",
+        workspace,
+      ],
+      {},
+    );
+    await persistRunnerConfig(configPath, options);
+
+    const { options: restoredOptions, configPath: restoredConfigPath } =
+      await resolveRunnerConfig([], { INIT_CWD: workspace });
+
+    expect(restoredConfigPath).toBe(
+      join(workspace, ".roam-runner", "config.json"),
+    );
+    expect(restoredOptions).toMatchObject({
+      server: "wss://roam.example.test/runners",
+      token: "t1",
+      workspace,
+      dataDir: ".roam-runner",
+    });
+  });
+
   it("keeps custom data-dir configs discoverable from the default locator", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
     const { options, configPath } = await resolveRunnerConfig(

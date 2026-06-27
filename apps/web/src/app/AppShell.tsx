@@ -435,6 +435,9 @@ export function AppShell({ controller }: AppShellProps) {
     );
   }
 
+  const workspaceActiveTab =
+    state.activeTab === "chat" ? "files" : state.activeTab;
+
   return (
     <div className={`app-shell active-${state.activeTab}`}>
       <header className="topbar">
@@ -609,7 +612,7 @@ export function AppShell({ controller }: AppShellProps) {
                   <WorkspaceTabButton
                     key={tab.id}
                     tab={tab}
-                    activeTab={state.activeTab}
+                    activeTab={workspaceActiveTab}
                     onChange={setActiveTab}
                   />
                 ))}

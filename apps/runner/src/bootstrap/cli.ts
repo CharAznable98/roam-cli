@@ -196,7 +196,7 @@ function resolveOptions(
     cli.workspace ??
       env.ROAM_RUNNER_WORKSPACE ??
       fileConfig?.workspace ??
-      process.cwd(),
+      defaultWorkspace(env),
   );
   const dataDirValue =
     cli.dataDir ??
@@ -294,7 +294,7 @@ function helpText(): string {
     "  --token       Runner token used during websocket registration.",
     "  --profile     Permission profile: strict, standard, trusted. Default: standard.",
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
-    "  --workspace   Workspace root exposed to sessions. Default: cwd.",
+    "  --workspace   Workspace root exposed to sessions. Default: package invocation cwd or cwd.",
     "  --data-dir    Relative runner state directory under workspace. Default: .roam-runner.",
     "  --agent-plugin Agent plugin package to load. Repeatable. Default: built-in first-party agents.",
   ].join("\n");
@@ -305,7 +305,7 @@ function resolveConfigLocator(
   env: NodeJS.ProcessEnv,
 ): { workspace: string; dataDir: string; configPath: string } {
   const workspace = resolve(
-    cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? process.cwd(),
+    cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? defaultWorkspace(env),
   );
   const dataDir = parseDataDir(
     cli.dataDir ?? env.ROAM_RUNNER_DATA_DIR ?? DEFAULT_DATA_DIR,
@@ -332,6 +332,10 @@ function parseDataDir(value: string): string {
     throw new Error("--data-dir cannot resolve to the workspace root");
   }
   return normalized;
+}
+
+function defaultWorkspace(env: NodeJS.ProcessEnv): string {
+  return env.INIT_CWD && env.INIT_CWD.length > 0 ? env.INIT_CWD : process.cwd();
 }
 
 async function readRunnerConfigFile(
