@@ -1629,10 +1629,9 @@ async function openTab(page, scenario, tab) {
   }
   if (tab === "chat") {
     await page
-      .getByRole("navigation", { name: "Tablet workspace tabs" })
+      .getByRole("navigation", { name: "Tool tabs" })
       .getByRole("button", { name: "Conversation" })
-      .click()
-      .catch(() => undefined);
+      .click();
     return;
   }
   await page

@@ -587,7 +587,7 @@ export function AppShell({ controller }: AppShellProps) {
                             : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
                       </p>
                       {state.runners.length === 0 && !hasWorkspaceData ? (
-                        <pre>{runnerCommand}</pre>
+                        <RunnerCommandDisplay command={runnerCommand} />
                       ) : (
                         <button
                           className="small-button"
@@ -605,18 +605,14 @@ export function AppShell({ controller }: AppShellProps) {
             )}
             <aside className="workspace-column" aria-label="Workspace tools">
               <nav className="workspace-tabs" aria-label="Tool tabs">
-                {workspaceTabs
-                  .filter((tab) => tab.id !== "chat")
-                  .map((tab) => (
-                    <WorkspaceTabButton
-                      key={tab.id}
-                      tab={tab}
-                      activeTab={
-                        state.activeTab === "chat" ? "files" : state.activeTab
-                      }
-                      onChange={setActiveTab}
-                    />
-                  ))}
+                {workspaceTabs.map((tab) => (
+                  <WorkspaceTabButton
+                    key={tab.id}
+                    tab={tab}
+                    activeTab={state.activeTab}
+                    onChange={setActiveTab}
+                  />
+                ))}
               </nav>
               <div className="workspace-scroll">
                 <div className="workspace-surface files-surface">
@@ -809,6 +805,26 @@ export function AppShell({ controller }: AppShellProps) {
           />
         </SidebarModal>
       ) : null}
+    </div>
+  );
+}
+
+function RunnerCommandDisplay({ command }: { command: string }) {
+  const copy = () => {
+    void navigator.clipboard?.writeText(command);
+  };
+
+  return (
+    <div className="runner-command-display">
+      <pre>{command}</pre>
+      <button
+        className="small-button runner-command-copy"
+        type="button"
+        onClick={copy}
+      >
+        <Copy size={14} />
+        Copy command
+      </button>
     </div>
   );
 }

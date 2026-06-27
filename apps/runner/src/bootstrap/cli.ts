@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import {
   RunnerProfileSchema,
   type RunnerProfile,
@@ -16,12 +17,82 @@ export interface RunnerCliOptions {
   agentPlugins: string[];
 }
 
+type RawRunnerCliOptions = Partial<{
+  server: string;
+  token: string;
+  profile: string;
+  runnerId: string;
+  workspace: string;
+  dataDir: string;
+  agentPlugins: string;
+}>;
+
+interface RunnerConfigFile {
+  server?: string;
+  token?: string;
+  profile?: string;
+  runnerId?: string;
+  workspace?: string;
+  dataDir?: string;
+  agentPlugins?: string[];
+}
+
+export interface ResolvedRunnerConfig {
+  options: RunnerCliOptions;
+  configPath: string;
+}
+
 export function parseCliArgs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): RunnerCliOptions {
-  const values = new Map<string, string>();
+  const values = parseRawCliArgs(argv);
+  return resolveOptions(values, env, undefined);
+}
 
+export async function resolveRunnerConfig(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResolvedRunnerConfig> {
+  const cli = parseRawCliArgs(argv);
+  const locator = resolveConfigLocator(cli, env);
+  const fileConfig = await readRunnerConfigFile(locator.configPath);
+  const options = resolveOptions(cli, env, fileConfig);
+  if (options.token === undefined || options.token.length === 0) {
+    throw new Error("Missing --token or ROAM_RUNNER_TOKEN or local config token");
+  }
+  return {
+    options,
+    configPath: locator.configPath,
+  };
+}
+
+export async function persistRunnerConfig(
+  configPath: string,
+  options: RunnerCliOptions,
+): Promise<void> {
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        server: options.server,
+        token: options.token,
+        profile: options.profile,
+        runnerId: options.runnerId,
+        workspace: options.workspace,
+        dataDir: options.dataDir,
+        agentPlugins: options.agentPlugins,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function parseRawCliArgs(argv: readonly string[]): RawRunnerCliOptions {
+  const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === undefined) {
@@ -53,33 +124,61 @@ export function parseCliArgs(
     }
   }
 
-  const server = values.get("server") ?? env.ROAM_RUNNER_SERVER;
+  const raw: RawRunnerCliOptions = {};
+  setIfDefined(raw, "server", values.get("server"));
+  setIfDefined(raw, "token", values.get("token"));
+  setIfDefined(raw, "profile", values.get("profile"));
+  setIfDefined(raw, "runnerId", values.get("runner-id"));
+  setIfDefined(raw, "workspace", values.get("workspace"));
+  setIfDefined(raw, "dataDir", values.get("data-dir"));
+  setIfDefined(raw, "agentPlugins", values.get("agent-plugin"));
+  return raw;
+}
+
+function resolveOptions(
+  cli: RawRunnerCliOptions,
+  env: NodeJS.ProcessEnv,
+  fileConfig: RunnerConfigFile | undefined,
+): RunnerCliOptions {
+  const server = cli.server ?? env.ROAM_RUNNER_SERVER ?? fileConfig?.server;
   if (server === undefined || server.length === 0) {
-    throw new Error("Missing --server or ROAM_RUNNER_SERVER");
+    throw new Error(
+      "Missing --server or ROAM_RUNNER_SERVER or local config server",
+    );
   }
 
   const profileValue =
-    values.get("profile") ?? env.ROAM_RUNNER_PROFILE ?? "standard";
+    cli.profile ?? env.ROAM_RUNNER_PROFILE ?? fileConfig?.profile ?? "standard";
   const profile = RunnerProfileSchema.parse(profileValue);
   const workspace = resolve(
-    values.get("workspace") ?? env.ROAM_RUNNER_WORKSPACE ?? process.cwd(),
+    cli.workspace ??
+      env.ROAM_RUNNER_WORKSPACE ??
+      fileConfig?.workspace ??
+      process.cwd(),
   );
   const dataDir = parseDataDir(
-    values.get("data-dir") ?? env.ROAM_RUNNER_DATA_DIR ?? ".roam-runner",
+    cli.dataDir ??
+      env.ROAM_RUNNER_DATA_DIR ??
+      fileConfig?.dataDir ??
+      ".roam-runner",
   );
+  const token = cli.token ?? env.ROAM_RUNNER_TOKEN ?? fileConfig?.token;
 
   return {
     server: normalizeServerUrl(server),
-    token: values.get("token") ?? env.ROAM_RUNNER_TOKEN,
+    token,
     profile,
     runnerId:
-      values.get("runner-id") ??
+      cli.runnerId ??
       env.ROAM_RUNNER_ID ??
+      fileConfig?.runnerId ??
       `${hostname()}-${randomUUID()}`,
     workspace,
     dataDir,
     agentPlugins: parsePluginList(
-      values.get("agent-plugin") ?? env.ROAMCLI_AGENT_PLUGINS,
+      cli.agentPlugins,
+      env.ROAMCLI_AGENT_PLUGINS,
+      fileConfig?.agentPlugins,
     ),
   };
 }
@@ -108,6 +207,9 @@ function helpText(): string {
   return [
     "Usage: roam-runner --server <wss-url> [options]",
     "",
+    "Runner reads and writes local config at <workspace>/<data-dir>/config.json.",
+    "CLI options and environment variables override local config and are persisted.",
+    "",
     "Options:",
     "  --server      Server websocket URL. http/https are converted to ws/wss.",
     "  --token       Runner token used during websocket registration.",
@@ -117,6 +219,23 @@ function helpText(): string {
     "  --data-dir    Relative runner state directory under workspace. Default: .roam-runner.",
     "  --agent-plugin Agent plugin package to load. Repeatable. Default: built-in first-party agents.",
   ].join("\n");
+}
+
+function resolveConfigLocator(
+  cli: RawRunnerCliOptions,
+  env: NodeJS.ProcessEnv,
+): { workspace: string; dataDir: string; configPath: string } {
+  const workspace = resolve(
+    cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? process.cwd(),
+  );
+  const dataDir = parseDataDir(
+    cli.dataDir ?? env.ROAM_RUNNER_DATA_DIR ?? ".roam-runner",
+  );
+  return {
+    workspace,
+    dataDir,
+    configPath: join(workspace, dataDir, "config.json"),
+  };
 }
 
 function parseDataDir(value: string): string {
@@ -136,12 +255,120 @@ function parseDataDir(value: string): string {
   return normalized;
 }
 
-function parsePluginList(value: string | undefined): string[] {
-  if (value === undefined || value.trim().length === 0) {
+async function readRunnerConfigFile(
+  configPath: string,
+): Promise<RunnerConfigFile | undefined> {
+  let content: string;
+  try {
+    content = await readFile(configPath, "utf8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid runner config at ${configPath}: ${message}`);
+  }
+
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Invalid runner config at ${configPath}: expected object`);
+  }
+
+  const config = parsed as Record<string, unknown>;
+  const result: RunnerConfigFile = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (
+      key === "server" ||
+      key === "token" ||
+      key === "profile" ||
+      key === "runnerId" ||
+      key === "workspace" ||
+      key === "dataDir"
+    ) {
+      if (typeof value !== "string") {
+        throw new Error(
+          `Invalid runner config at ${configPath}: ${key} must be a string`,
+        );
+      }
+      result[key] = value;
+      continue;
+    }
+    if (key === "agentPlugins") {
+      if (
+        !Array.isArray(value) ||
+        !value.every((item) => typeof item === "string")
+      ) {
+        throw new Error(
+          `Invalid runner config at ${configPath}: agentPlugins must be an array of strings`,
+        );
+      }
+      result.agentPlugins = value;
+    }
+  }
+  validateRunnerConfigFile(configPath, result);
+  return result;
+}
+
+function validateRunnerConfigFile(
+  configPath: string,
+  config: RunnerConfigFile,
+): void {
+  try {
+    if (config.server !== undefined) {
+      normalizeServerUrl(config.server);
+    }
+    if (config.profile !== undefined) {
+      RunnerProfileSchema.parse(config.profile);
+    }
+    if (config.dataDir !== undefined) {
+      parseDataDir(config.dataDir);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid runner config at ${configPath}: ${message}`);
+  }
+}
+
+function parsePluginList(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string[] | undefined,
+): string[] {
+  if (cliValue !== undefined) {
+    return parsePluginListValue(cliValue);
+  }
+  if (envValue !== undefined) {
+    return parsePluginListValue(envValue);
+  }
+  return configValue ?? [];
+}
+
+function parsePluginListValue(value: string): string[] {
+  if (value.trim().length === 0) {
     return [];
   }
   return value
     .split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function setIfDefined<K extends keyof RawRunnerCliOptions>(
+  target: RawRunnerCliOptions,
+  key: K,
+  value: RawRunnerCliOptions[K] | undefined,
+): void {
+  if (value !== undefined) {
+    target[key] = value;
+  }
 }

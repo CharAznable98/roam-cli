@@ -54,6 +54,12 @@ pnpm --filter @roamcli/runner dev \
   --profile trusted
 ```
 
+The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit the persisted options:
+
+```bash
+pnpm --filter @roamcli/runner dev
+```
+
 Open the Web UI:
 
 ```text
@@ -82,6 +88,8 @@ http://127.0.0.1:8787
 | `ROAMCLI_RESET_OWNER`   | Set to `1` on startup to clear owner credentials and Web sessions, then generate a new setup token. Runner tokens and project/session data are left intact. | unset                                         |
 
 ## Runner Configuration
+
+Runner reads local config from `<workspace>/<data-dir>/config.json`. CLI options and environment variables override local config and are written back before the Runner connects.
 
 | CLI option       | Environment variable    | Description                                                                                                                                                       |
 | ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -125,6 +133,12 @@ pnpm --filter @roamcli/runner dev \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted
+```
+
+Subsequent starts from the same workspace can use the persisted local config:
+
+```bash
+pnpm --filter @roamcli/runner dev
 ```
 
 ## Repository Layout

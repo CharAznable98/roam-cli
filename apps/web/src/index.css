@@ -3513,16 +3513,34 @@
     line-height: 1.45;
   }
 
-  .empty-state pre {
+  .runner-command-display {
+    display: grid;
+    width: min(100%, 560px);
+    justify-items: start;
+    gap: 8px;
     margin: 12px auto 0;
+  }
+
+  .runner-command-display pre {
+    width: 100%;
+    margin: 0;
     max-width: 100%;
-    overflow: auto;
+    overflow-x: hidden;
     border-radius: 7px;
     background: #1f2937;
     color: #f8fafc;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
     padding: 10px 12px;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     text-align: left;
+  }
+
+  .runner-command-copy {
+    justify-self: start;
   }
 
   .app-error-state {
@@ -4094,9 +4112,16 @@
     padding: 12px;
   }
 
+  .active-files .app-grid,
+  .active-git .app-grid,
+  .active-approvals .app-grid,
+  .active-settings .app-grid {
+    grid-template-columns: 18rem minmax(34rem, 1fr) clamp(20rem, 24vw, 26rem);
+  }
+
   .active-git .app-grid,
   .active-settings .app-grid {
-    grid-template-columns: 20rem minmax(16rem, 0.45fr) minmax(51rem, 1.55fr);
+    grid-template-columns: 18rem minmax(34rem, 1fr) clamp(20rem, 24vw, 26rem);
   }
 
   .active-git .notification-stack,
@@ -4110,9 +4135,33 @@
     display: flex;
   }
 
+  .active-files .chat-column,
+  .active-git .chat-column,
+  .active-approvals .chat-column,
+  .active-settings .chat-column {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .active-files .workspace-column,
+  .active-git .workspace-column,
+  .active-approvals .workspace-column,
+  .active-settings .workspace-column {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .active-chat .app-grid {
+    grid-template-columns: 22rem minmax(32rem, 1fr) clamp(24rem, 30vw, 32rem);
+  }
+
+  .active-chat .chat-column {
+    display: flex;
+  }
+
   .workspace-tabs {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 8px;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--surface-muted);
