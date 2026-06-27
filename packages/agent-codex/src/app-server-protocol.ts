@@ -37,6 +37,28 @@ export interface ThreadResponse {
   };
 }
 
+export type AskForApproval =
+  | "untrusted"
+  | "on-failure"
+  | "on-request"
+  | "never";
+
+export type SandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly"; networkAccess: boolean }
+  | {
+      type: "workspaceWrite";
+      writableRoots: string[];
+      networkAccess: boolean;
+      excludeTmpdirEnvVar: boolean;
+      excludeSlashTmp: boolean;
+    };
+
+export type ThreadSandboxMode =
+  | "read-only"
+  | "workspace-write"
+  | "danger-full-access";
+
 export interface TurnStartResponse {
   turn?: {
     id?: string;
@@ -64,6 +86,17 @@ export interface ItemCompletedNotification {
     id?: string;
     type?: string;
     text?: string;
+  };
+}
+
+export interface ItemStartedNotification {
+  threadId?: string;
+  turnId?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    changes?: unknown;
+    status?: string;
   };
 }
 

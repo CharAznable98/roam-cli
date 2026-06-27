@@ -11,14 +11,19 @@ import type {
   AgentSessionContext,
   ApprovalRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
+import type { RunnerProfile } from "@roamcli/shared/protocol";
 import { CodexAppServerClient } from "./app-server-client.js";
 import type {
+  AskForApproval,
   AgentMessageDeltaNotification,
   CommandApprovalParams,
   FileChangeApprovalParams,
+  ItemStartedNotification,
   ItemCompletedNotification,
   JsonRpcRequest,
   PermissionApprovalParams,
+  SandboxPolicy,
+  ThreadSandboxMode,
   ThreadResponse,
   TurnNotification,
   TurnStartResponse,
@@ -53,6 +58,7 @@ export class CodexAppServerSession implements AgentSession {
   #closed = false;
   #draining = false;
   #stopRequested = false;
+  #interruptRequested = false;
   #turnDone:
     | {
         resolve: () => void;
@@ -60,6 +66,7 @@ export class CodexAppServerSession implements AgentSession {
       }
     | undefined;
   readonly #streamedOutputIds = new Set<string>();
+  readonly #fileChangeItems = new Map<string, unknown>();
 
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
@@ -129,6 +136,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (signal === "interrupt" && this.#threadId && this.#activeTurnId) {
+      this.#interruptRequested = true;
       await this.#client?.request("turn/interrupt", {
         threadId: this.#threadId,
         turnId: this.#activeTurnId,
@@ -177,7 +185,7 @@ export class CodexAppServerSession implements AgentSession {
       {
         ...(this.#context.resumeThreadId
           ? { threadId: this.#context.resumeThreadId }
-          : {}),
+          : threadStartParamsForProfile(this.#context.profile)),
         cwd: this.#context.cwd,
       },
     )) as ThreadResponse;
@@ -224,11 +232,13 @@ export class CodexAppServerSession implements AgentSession {
       throw new Error("Cannot start a Codex turn before the thread is ready");
     }
     this.#turnSequence += 1;
+    this.#interruptRequested = false;
     this.#streamedOutputIds.clear();
     const response = (await this.#request("turn/start", {
       threadId,
       cwd: this.#context.cwd,
       input: userInputFor(input),
+      ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
     })) as TurnStartResponse;
     this.#activeTurnId = response.turn?.id ?? undefined;
     await new Promise<void>((resolve, reject) => {
@@ -253,6 +263,10 @@ export class CodexAppServerSession implements AgentSession {
     }
     if (method === "item/agentMessage/delta") {
       await this.#handleMessageDelta(params as AgentMessageDeltaNotification);
+      return;
+    }
+    if (method === "item/started") {
+      this.#handleItemStarted(params as ItemStartedNotification);
       return;
     }
     if (method === "item/completed") {
@@ -354,6 +368,7 @@ export class CodexAppServerSession implements AgentSession {
         turnId: params.turnId,
         itemId: params.itemId,
         grantRoot: params.grantRoot,
+        fileChange: this.#fileChangeItems.get(params.itemId ?? ""),
       },
     });
     this.#client?.respond(request.id, {
@@ -381,7 +396,7 @@ export class CodexAppServerSession implements AgentSession {
       },
     });
     this.#client?.respond(request.id, {
-      scope: decision.approved ? "session" : "turn",
+      scope: "turn",
       permissions: decision.approved ? requestedPermissions : {},
     });
   }
@@ -414,6 +429,14 @@ export class CodexAppServerSession implements AgentSession {
     ) {
       this.#streamedOutputIds.add(outputId);
     }
+  }
+
+  #handleItemStarted(notification: ItemStartedNotification): void {
+    const item = notification.item;
+    if (item?.type !== "fileChange" || !item.id) {
+      return;
+    }
+    this.#fileChangeItems.set(item.id, item);
   }
 
   async #handleItemCompleted(
@@ -456,8 +479,12 @@ export class CodexAppServerSession implements AgentSession {
       await this.#emitError(message);
       return;
     }
-    if (status === "interrupted" && this.#stopRequested) {
+    if (status === "interrupted" && (this.#stopRequested || this.#interruptRequested)) {
+      this.#closed = true;
+      this.#queue.length = 0;
+      this.#closeAppServer("SIGTERM");
       done?.resolve();
+      await this.#emit({ type: "status", status: "stopped" });
       return;
     }
     done?.resolve();
@@ -546,6 +573,63 @@ function userInputFor(input: QueuedInput): UserInput[] {
         : [],
     ),
   ];
+}
+
+function threadStartParamsForProfile(
+  profile: RunnerProfile,
+): {
+  approvalPolicy: AskForApproval;
+  sandbox: ThreadSandboxMode;
+  permissions?: never;
+} {
+  if (profile === "trusted") {
+    return {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    };
+  }
+  if (profile === "strict") {
+    return {
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+    };
+  }
+  return {
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+  };
+}
+
+function turnStartParamsForProfile(
+  profile: RunnerProfile,
+  cwd: string,
+): {
+  approvalPolicy: AskForApproval;
+  sandboxPolicy: SandboxPolicy;
+  permissions?: never;
+} {
+  if (profile === "trusted") {
+    return {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    };
+  }
+  if (profile === "strict") {
+    return {
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    };
+  }
+  return {
+    approvalPolicy: "on-request",
+    sandboxPolicy: {
+      type: "workspaceWrite",
+      writableRoots: [cwd],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    },
+  };
 }
 
 function threadIdFrom(value: unknown): string | undefined {

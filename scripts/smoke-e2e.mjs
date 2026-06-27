@@ -249,6 +249,7 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_PROFILE: "trusted",
+      ROAMCLI_AGENT_CODEX_MODE: "exec-json",
       ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
       ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([fakeCodex]),
     },

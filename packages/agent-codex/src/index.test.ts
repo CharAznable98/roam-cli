@@ -621,6 +621,127 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("passes trusted runner permissions to app-server turns", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-profile-");
+    const capturedPath = join(workspace, "captured.jsonl");
+    await writeAppServerScript(
+      workspace,
+      "profile.mjs",
+      [
+        `const capturedPath = ${JSON.stringify(capturedPath)};`,
+        "function capture(message) { fs.appendFileSync(capturedPath, `${JSON.stringify(message)}\\n`); }",
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') {",
+        "    capture(message);",
+        "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  }",
+        "  if (message.method === 'turn/start') {",
+        "    capture(message);",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const session = codexAgent.createSession({
+      profile: "trusted",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      const messages = (await readFile(capturedPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(messages).toEqual([
+        expect.objectContaining({
+          method: "thread/start",
+          params: expect.objectContaining({
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+          }),
+        }),
+        expect.objectContaining({
+          method: "turn/start",
+          params: expect.objectContaining({
+            approvalPolicy: "never",
+            sandboxPolicy: { type: "dangerFullAccess" },
+          }),
+        }),
+      ]);
+    });
+  });
+
+  it("maps app-server interrupted turns to stopped status", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-interrupt-");
+    const startedMarker = join(workspace, "started.txt");
+    await writeAppServerScript(
+      workspace,
+      "interrupt.mjs",
+      [
+        `const startedMarker = ${JSON.stringify(startedMarker)};`,
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    fs.writeFileSync(startedMarker, 'started');",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "  }",
+        "  if (message.method === 'turn/interrupt') {",
+        "    write({ id: message.id, result: {} });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+        "  }",
+        "};",
+        "setInterval(() => undefined, 1000);",
+      ],
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(startedMarker, "utf8")).resolves.toBe("started");
+    });
+    await session.control("interrupt");
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({ type: "status", status: "stopped" });
+    });
+    expect(events).not.toContainEqual({ type: "status", status: "completed" });
+  });
+
   it("fails app-server sessions cleanly when approval creation fails", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-approval-fail-");
     await writeAppServerScript(
@@ -728,6 +849,70 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("passes app-server file change details to the approval chain", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-file-change-");
+    await writeAppServerScript(
+      workspace,
+      "file-change.mjs",
+      [
+        "handleMessage = (message) => {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'fileChange', changes: [{ path: 'src/app.ts', kind: 'update', diff: '@@ -1 +1 @@' }], status: 'pending' }, startedAtMs: Date.now() } });",
+        "    write({ id: 11, method: 'item/fileChange/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Apply patch' } });",
+        "  }",
+        "  if (message.id === 11 && message.result) {",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "  }",
+        "};",
+      ],
+    );
+    const approvals: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async (draft) => {
+        approvals.push(draft);
+        return {
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        };
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(approvals).toEqual([
+        expect.objectContaining({
+          kind: "applyPatch",
+          summary: "Apply patch",
+          payload: expect.objectContaining({
+            itemId: "item-1",
+            fileChange: {
+              id: "item-1",
+              type: "fileChange",
+              changes: [
+                { path: "src/app.ts", kind: "update", diff: "@@ -1 +1 @@" },
+              ],
+              status: "pending",
+            },
+          }),
+        }),
+      ]);
+    });
+  });
+
   it("handles app-server permission approval requests", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-permissions-");
     await writeAppServerScript(
@@ -797,7 +982,7 @@ describe("codex agent plugin", () => {
         events.some(
           (event) =>
             event.type === "assistantOutput" &&
-            event.content?.includes('"scope":"session"') &&
+            event.content?.includes('"scope":"turn"') &&
             event.content.includes('"fileSystem"'),
         ),
       ).toBe(true);
