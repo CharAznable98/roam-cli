@@ -11,7 +11,7 @@ import {
   RunnerConnection,
   type WebSocketFactory,
 } from "../transport/connection.js";
-import { parseCliArgs } from "./cli.js";
+import { persistRunnerConfig, resolveRunnerConfig } from "./cli.js";
 import { createRunnerRegistration, runnerStateDir } from "./registration.js";
 
 export interface CreateRunnerOptions {
@@ -22,14 +22,12 @@ export async function createRunner(
   argv: readonly string[],
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
-  const cli = parseCliArgs(argv);
-  if (!cli.token) {
-    throw new Error("Missing --token or ROAM_RUNNER_TOKEN");
-  }
+  const { options: cli, configPath } = await resolveRunnerConfig(argv);
   const registry = await loadAgentRegistry(
     cli.profile,
     cli.agentPlugins.length > 0 ? cli.agentPlugins : undefined,
   );
+  await persistRunnerConfig(configPath, cli);
   const registration = createRunnerRegistration({
     runnerId: cli.runnerId,
     workspace: cli.workspace,

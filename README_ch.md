@@ -54,6 +54,12 @@ pnpm --filter @roamcli/runner dev \
   --profile trusted
 ```
 
+Runner 会把最终生效的启动配置写入 `<workspace>/<data-dir>/config.json`，默认是 workspace 下的 `.roam-runner/config.json`。之后在同一 workspace 启动时可以省略已持久化的参数：
+
+```bash
+pnpm --filter @roamcli/runner dev
+```
+
 打开 Web UI：
 
 ```text
@@ -83,14 +89,17 @@ http://127.0.0.1:8787
 
 ## Runner 配置
 
-| CLI 参数         | 环境变量                | 说明                                                                   |
-| ---------------- | ----------------------- | ---------------------------------------------------------------------- |
-| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。       |
-| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                             |
-| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                      |
-| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。           |
-| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。 |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 要加载的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。            |
+Runner 会从 `<workspace>/<data-dir>/config.json` 读取本地配置。CLI 参数和环境变量会覆盖本地配置，并在 Runner 连接前写回。
+
+| CLI 参数         | 环境变量                | 说明                                                                                                           |
+| ---------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。                                               |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                                                                     |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                                                              |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。                                                   |
+| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | workspace 下的相对 Runner 数据目录，用于状态和 session worktree。默认 `.roam-runner`，拒绝绝对路径和父级跳转。 |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。                                         |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 要加载的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。                                                    |
 
 ## Agent 插件
 
@@ -124,6 +133,12 @@ pnpm --filter @roamcli/runner dev \
   --runner-id local-dev \
   --workspace "$PWD" \
   --profile trusted
+```
+
+之后在同一 workspace 启动时可以使用已持久化的本地配置：
+
+```bash
+pnpm --filter @roamcli/runner dev
 ```
 
 ## 仓库结构

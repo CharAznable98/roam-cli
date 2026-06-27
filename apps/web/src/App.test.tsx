@@ -1227,6 +1227,15 @@ describe("App", () => {
     expect(
       screen.getByRole("complementary", { name: "Workspace tools" }),
     ).toBeInTheDocument();
+    const toolTabs = within(
+      screen.getByRole("navigation", { name: "Tool tabs" }),
+    );
+    expect(toolTabs.getByRole("button", { name: "Files" })).toHaveClass(
+      "is-active",
+    );
+    expect(
+      toolTabs.getByRole("button", { name: "Conversation" }),
+    ).not.toHaveClass("is-active");
     await waitFor(() => {
       expect(
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
