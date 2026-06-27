@@ -29,6 +29,27 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
+      args: ["app-server", "--stdio"],
+      parser: "codex-app-server",
+      supportsResume: true,
+      supportsImages: true,
+      supportedImageMimeTypes: ["image/png", "image/jpeg"],
+      maxImagesPerTurn: 5,
+      maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+      pluginName: "@roamcli/agent-codex",
+    });
+  });
+
+  it("builds the legacy codex exec capability when explicitly selected", () => {
+    expect(
+      codexAgent.buildCapability({
+        profile: "trusted",
+        env: { ROAMCLI_AGENT_CODEX_MODE: "exec-json" },
+      }),
+    ).toMatchObject({
+      kind: "codex",
+      label: "Codex",
+      command: "codex",
       args: [
         "exec",
         "--json",
@@ -241,6 +262,7 @@ describe("codex agent plugin", () => {
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
@@ -287,6 +309,7 @@ describe("codex agent plugin", () => {
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
@@ -340,6 +363,7 @@ describe("codex agent plugin", () => {
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
@@ -378,6 +402,7 @@ describe("codex agent plugin", () => {
       const session = codexAgent.createSession({
         profile: "standard",
         env: {
+          ROAMCLI_AGENT_CODEX_MODE: "exec-json",
           ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
           ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
         },
@@ -431,6 +456,7 @@ describe("codex agent plugin", () => {
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([
           script,
@@ -507,6 +533,7 @@ describe("codex agent plugin", () => {
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
@@ -537,6 +564,49 @@ describe("codex agent plugin", () => {
       expect(events).toContainEqual({ type: "status", status: "completed" });
     });
   });
+
+  it.skipIf(process.env.ROAMCLI_RUN_CODEX_APP_SERVER_INTEGRATION !== "1")(
+    "runs a real codex app-server turn when explicitly enabled",
+    async () => {
+      const workspace = await mkdirTemp("roam-codex-real-app-server-");
+      const events: AgentRuntimeEvent[] = [];
+      const session = codexAgent.createSession({
+        profile: "standard",
+        env: process.env,
+        session: makeSession(workspace),
+        cwd: workspace,
+        prompt: "Reply with exactly: ROAMCLI_OK",
+        emit: async (event) => {
+          events.push(event);
+        },
+        requestApproval: async () => ({
+          approvalId: "approval-1",
+          approved: false,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        }),
+      });
+
+      await session.start();
+
+      await vi.waitFor(
+        () => {
+          expect(events.some((event) => event.type === "thread")).toBe(true);
+          expect(
+            events.some(
+              (event) =>
+                event.type === "assistantOutput" &&
+                typeof event.content === "string" &&
+                event.content.includes("ROAMCLI_OK"),
+            ),
+          ).toBe(true);
+          expect(events).toContainEqual({ type: "status", status: "completed" });
+        },
+        { timeout: 120_000 },
+      );
+    },
+    130_000,
+  );
 
   it("supports JSON array and shell-like args overrides", () => {
     expect(parseArgs('["--one","two words"]')).toEqual(["--one", "two words"]);

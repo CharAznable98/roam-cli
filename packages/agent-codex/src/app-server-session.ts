@@ -1,0 +1,536 @@
+import {
+  spawn as spawnChild,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { randomUUID } from "node:crypto";
+import type {
+  AgentInput,
+  AgentLaunchAttachment,
+  AgentRuntimeEvent,
+  AgentSession,
+  AgentSessionContext,
+  ApprovalRequestDraft,
+} from "@roamcli/agent-plugin-sdk";
+import { CodexAppServerClient } from "./app-server-client.js";
+import type {
+  AgentMessageDeltaNotification,
+  CommandApprovalParams,
+  FileChangeApprovalParams,
+  ItemCompletedNotification,
+  JsonRpcRequest,
+  ThreadResponse,
+  TurnNotification,
+  TurnStartResponse,
+  UserInput,
+} from "./app-server-protocol.js";
+import { asString, isRecord } from "./app-server-protocol.js";
+
+interface CodexAppServerSessionOptions {
+  command: string;
+  args: readonly string[];
+  context: AgentSessionContext;
+}
+
+interface QueuedInput {
+  content: string;
+  attachments?: readonly AgentLaunchAttachment[];
+}
+
+export class CodexAppServerSession implements AgentSession {
+  readonly #command: string;
+  readonly #args: readonly string[];
+  readonly #context: AgentSessionContext;
+  readonly #queue: QueuedInput[] = [];
+  readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
+  #child: ChildProcessWithoutNullStreams | undefined;
+  #client: CodexAppServerClient | undefined;
+  #threadId: string | undefined;
+  #activeTurnId: string | undefined;
+  #turnSequence = 0;
+  #outputSequence = 0;
+  #closed = false;
+  #draining = false;
+  #stopRequested = false;
+  #turnDone:
+    | {
+        resolve: () => void;
+        reject: (error: Error) => void;
+      }
+    | undefined;
+  readonly #streamedOutputIds = new Set<string>();
+
+  public constructor(options: CodexAppServerSessionOptions) {
+    this.#command = options.command;
+    this.#args = options.args;
+    this.#context = options.context;
+  }
+
+  public async start(): Promise<void> {
+    this.#child = spawnChild(this.#command, [...this.#args], {
+      cwd: this.#context.cwd,
+      env: this.#context.env,
+      stdio: "pipe",
+    });
+    this.#child.on("close", (code, signal) => {
+      const client = this.#client;
+      client?.close(new Error(`Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`));
+      if (this.#closed || this.#stopRequested || this.#activeTurnId === undefined) {
+        return;
+      }
+      this.#fail(
+        `Codex app-server exited before the active turn completed: code=${code ?? "null"} signal=${signal ?? "null"}`,
+      );
+    });
+    this.#child.on("error", (error) => {
+      this.#fail(error.message);
+    });
+    this.#child.stderr.on("data", (chunk) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      if (text.trim().length > 0) {
+        void this.#emit({
+          type: "activity",
+          kind: "system",
+          label: text.trim(),
+        });
+      }
+    });
+
+    this.#client = new CodexAppServerClient({
+      child: this.#child,
+      onNotification: (notification) =>
+        this.#handleNotification(notification.method, notification.params),
+      onRequest: (request) => this.#handleRequest(request),
+      onParseError: (error) => this.#emitError(error.message),
+    });
+
+    await this.#initialize();
+    await this.#openThread();
+    this.#queue.push({
+      content: this.#context.prompt,
+      ...(this.#context.attachments
+        ? { attachments: this.#context.attachments }
+        : {}),
+    });
+    this.#startDrain();
+  }
+
+  public deliverInput(input: AgentInput): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#queue.push({ content: input.content });
+    this.#startDrain();
+  }
+
+  public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
+    if (signal === "resume") {
+      return;
+    }
+    if (signal === "interrupt" && this.#threadId && this.#activeTurnId) {
+      await this.#client?.request("turn/interrupt", {
+        threadId: this.#threadId,
+        turnId: this.#activeTurnId,
+      });
+      return;
+    }
+    if (signal === "stop") {
+      this.#stopRequested = true;
+      this.#closed = true;
+      this.#queue.length = 0;
+      if (this.#threadId && this.#activeTurnId) {
+        await this.#client
+          ?.request("turn/interrupt", {
+            threadId: this.#threadId,
+            turnId: this.#activeTurnId,
+          })
+          .catch(() => undefined);
+      }
+      this.#child?.kill("SIGTERM");
+      this.#client?.close();
+      await this.#emit({ type: "status", status: "stopped" });
+    }
+  }
+
+  public close(): void {
+    this.#closed = true;
+    this.#queue.length = 0;
+    this.#client?.close();
+    this.#child?.kill("SIGKILL");
+  }
+
+  async #initialize(): Promise<void> {
+    await this.#request("initialize", {
+      clientInfo: {
+        name: "@roamcli/agent-codex",
+        version: "1.1.0",
+      },
+      capabilities: null,
+    });
+    this.#client?.notify("initialized");
+  }
+
+  async #openThread(): Promise<void> {
+    const response = (await this.#request(
+      this.#context.resumeThreadId ? "thread/resume" : "thread/start",
+      {
+        ...(this.#context.resumeThreadId
+          ? { threadId: this.#context.resumeThreadId }
+          : {}),
+        cwd: this.#context.cwd,
+      },
+    )) as ThreadResponse;
+    const threadId = response.thread?.id;
+    if (!threadId) {
+      throw new Error("Codex app-server did not return a thread id");
+    }
+    this.#threadId = threadId;
+    await this.#emit({ type: "thread", threadId });
+  }
+
+  #startDrain(): void {
+    if (this.#draining) {
+      return;
+    }
+    this.#draining = true;
+    void this.#drain()
+      .catch((error: unknown) => {
+        this.#fail(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        this.#draining = false;
+        if (!this.#closed && this.#queue.length > 0) {
+          this.#startDrain();
+        }
+      });
+  }
+
+  async #drain(): Promise<void> {
+    while (!this.#closed) {
+      const input = this.#queue.shift();
+      if (input === undefined) {
+        await this.#emit({ type: "status", status: "completed" });
+        return;
+      }
+      await this.#runTurn(input);
+    }
+  }
+
+  async #runTurn(input: QueuedInput): Promise<void> {
+    const threadId = this.#threadId;
+    if (!threadId) {
+      throw new Error("Cannot start a Codex turn before the thread is ready");
+    }
+    this.#turnSequence += 1;
+    this.#streamedOutputIds.clear();
+    const response = (await this.#request("turn/start", {
+      threadId,
+      cwd: this.#context.cwd,
+      input: userInputFor(input),
+    })) as TurnStartResponse;
+    this.#activeTurnId = response.turn?.id ?? undefined;
+    await new Promise<void>((resolve, reject) => {
+      this.#turnDone = { resolve, reject };
+    });
+    this.#activeTurnId = undefined;
+  }
+
+  async #handleNotification(method: string, params: unknown): Promise<void> {
+    if (method === "thread/started") {
+      const threadId = threadIdFrom(params);
+      if (threadId) {
+        this.#threadId = threadId;
+        await this.#emit({ type: "thread", threadId });
+      }
+      return;
+    }
+    if (method === "turn/started") {
+      const notification = params as TurnNotification;
+      this.#activeTurnId = notification.turn?.id ?? this.#activeTurnId;
+      return;
+    }
+    if (method === "item/agentMessage/delta") {
+      await this.#handleMessageDelta(params as AgentMessageDeltaNotification);
+      return;
+    }
+    if (method === "item/completed") {
+      await this.#handleItemCompleted(params as ItemCompletedNotification);
+      return;
+    }
+    if (method === "turn/completed") {
+      await this.#handleTurnCompleted(params as TurnNotification);
+      return;
+    }
+    if (method === "error") {
+      const message =
+        errorMessageFrom(params) ?? "Codex app-server reported an error";
+      this.#turnDone?.reject(new Error(message));
+      this.#turnDone = undefined;
+      await this.#emitError(message);
+      return;
+    }
+    if (
+      method === "command/exec/outputDelta" ||
+      method === "item/commandExecution/outputDelta" ||
+      method === "process/outputDelta"
+    ) {
+      const text = outputDeltaFrom(params);
+      if (text) {
+        await this.#emit({ type: "activity", kind: "tool", label: text });
+      }
+    }
+  }
+
+  async #handleRequest(request: JsonRpcRequest): Promise<void> {
+    if (
+      request.method === "item/commandExecution/requestApproval" ||
+      request.method === "execCommandApproval"
+    ) {
+      await this.#handleCommandApproval(request);
+      return;
+    }
+    if (
+      request.method === "item/fileChange/requestApproval" ||
+      request.method === "applyPatchApproval"
+    ) {
+      await this.#handleFileApproval(request);
+      return;
+    }
+    this.#client?.reject(
+      request.id,
+      `Unsupported Codex app-server request: ${request.method}`,
+      -32601,
+    );
+  }
+
+  async #handleCommandApproval(request: JsonRpcRequest): Promise<void> {
+    const params = request.params as CommandApprovalParams;
+    const summary =
+      params.reason ??
+      (params.command ? `Run: ${params.command}` : "Codex wants to run a command");
+    const decision = await this.#requestApproval({
+      kind: "execCommand",
+      summary,
+      payload: {
+        source: "codex-app-server",
+        method: request.method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        approvalId: params.approvalId,
+        command: params.command,
+        cwd: params.cwd,
+        commandActions: params.commandActions,
+        proposedExecpolicyAmendment: params.proposedExecpolicyAmendment,
+        proposedNetworkPolicyAmendments: params.proposedNetworkPolicyAmendments,
+      },
+    });
+    this.#client?.respond(request.id, {
+      decision: decision.approved
+        ? commandApprovalAcceptDecision(request.method)
+        : commandApprovalDeclineDecision(request.method),
+    });
+  }
+
+  async #handleFileApproval(request: JsonRpcRequest): Promise<void> {
+    const params = request.params as FileChangeApprovalParams;
+    const decision = await this.#requestApproval({
+      kind: "applyPatch",
+      summary: params.reason ?? "Codex wants to apply file changes",
+      payload: {
+        source: "codex-app-server",
+        method: request.method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        grantRoot: params.grantRoot,
+      },
+    });
+    this.#client?.respond(request.id, {
+      decision: decision.approved
+        ? fileApprovalAcceptDecision(request.method)
+        : fileApprovalDeclineDecision(request.method),
+    });
+  }
+
+  async #requestApproval(draft: ApprovalRequestDraft) {
+    try {
+      return await this.#context.requestApproval(draft);
+    } catch (error: unknown) {
+      this.#closed = true;
+      this.#child?.kill("SIGTERM");
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emitError(message, "CODEX_APP_SERVER_APPROVAL_ERROR");
+      throw error;
+    }
+  }
+
+  async #handleMessageDelta(
+    notification: AgentMessageDeltaNotification,
+  ): Promise<void> {
+    if (!notification.delta) {
+      return;
+    }
+    const outputId = this.#outputId(notification.itemId);
+    if (
+      await this.#emit({
+        type: "assistantOutput",
+        outputId,
+        content: notification.delta,
+        mode: "append",
+        done: false,
+      })
+    ) {
+      this.#streamedOutputIds.add(outputId);
+    }
+  }
+
+  async #handleItemCompleted(
+    notification: ItemCompletedNotification,
+  ): Promise<void> {
+    const item = notification.item;
+    if (item?.type !== "agentMessage" || !item.text) {
+      return;
+    }
+    const outputId = this.#outputId(item.id);
+    if (this.#streamedOutputIds.has(outputId)) {
+      await this.#emit({
+        type: "assistantOutput",
+        outputId,
+        content: item.text,
+        mode: "replace",
+        done: true,
+      });
+      return;
+    }
+    await this.#emit({
+      type: "assistantOutput",
+      outputId,
+      content: item.text,
+      mode: "replace",
+      done: true,
+    });
+  }
+
+  async #handleTurnCompleted(notification: TurnNotification): Promise<void> {
+    const status = notification.turn?.status;
+    const done = this.#turnDone;
+    this.#turnDone = undefined;
+    if (status === "failed") {
+      const message =
+        notification.turn?.error?.message ?? "Codex app-server turn failed";
+      done?.reject(new Error(message));
+      await this.#emitError(message);
+      return;
+    }
+    if (status === "interrupted" && this.#stopRequested) {
+      done?.resolve();
+      return;
+    }
+    done?.resolve();
+  }
+
+  async #request(method: string, params?: unknown): Promise<unknown> {
+    try {
+      return await this.#client?.request(method, params);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Codex app-server ${method} failed: ${message}`);
+    }
+  }
+
+  async #fail(message: string): Promise<void> {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    this.#queue.length = 0;
+    this.#turnDone?.reject(new Error(message));
+    this.#turnDone = undefined;
+    await this.#emitError(message);
+    await this.#emit({ type: "status", status: "failed" });
+  }
+
+  async #emitError(
+    message: string,
+    code = "CODEX_APP_SERVER_ERROR",
+  ): Promise<void> {
+    await this.#emit({ type: "error", message, code });
+  }
+
+  async #emit(event: AgentRuntimeEvent): Promise<boolean> {
+    try {
+      await this.#context.emit(event);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #outputId(itemId: string | undefined): string {
+    return `${this.#outputPrefix}-${this.#turnSequence}:${
+      itemId ?? this.#nextOutputId()
+    }`;
+  }
+
+  #nextOutputId(): string {
+    this.#outputSequence += 1;
+    return `codex-output-${this.#outputSequence}`;
+  }
+}
+
+function userInputFor(input: QueuedInput): UserInput[] {
+  return [
+    {
+      type: "text",
+      text: input.content,
+      text_elements: [],
+    },
+    ...(input.attachments ?? []).flatMap((attachment): UserInput[] =>
+      attachment.kind === "image"
+        ? [{ type: "localImage", path: attachment.localPath, detail: "auto" }]
+        : [],
+    ),
+  ];
+}
+
+function threadIdFrom(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.thread)) {
+    return undefined;
+  }
+  return asString(value.thread.id);
+}
+
+function errorMessageFrom(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.error)) {
+    return undefined;
+  }
+  return asString(value.error.message);
+}
+
+function outputDeltaFrom(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return (
+    asString(value.delta) ??
+    asString(value.output) ??
+    asString(value.text) ??
+    undefined
+  );
+}
+
+function commandApprovalAcceptDecision(method: string): string {
+  return method === "execCommandApproval" ? "approved" : "accept";
+}
+
+function commandApprovalDeclineDecision(method: string): string {
+  return method === "execCommandApproval" ? "denied" : "decline";
+}
+
+function fileApprovalAcceptDecision(method: string): string {
+  return method === "applyPatchApproval" ? "approved" : "accept";
+}
+
+function fileApprovalDeclineDecision(method: string): string {
+  return method === "applyPatchApproval" ? "denied" : "decline";
+}

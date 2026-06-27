@@ -27,12 +27,14 @@ import {
   DEFAULT_MAX_IMAGES_PER_TURN,
   type RunnerCapability,
 } from "@roamcli/shared/protocol";
+import { CodexAppServerSession } from "./app-server-session.js";
 
 const execFileAsync = promisify(execFile);
 const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
+const DEFAULT_APP_SERVER_ARGS = ["app-server", "--stdio"];
 const DEFAULT_ARGS = [
   "exec",
   "--json",
@@ -50,8 +52,14 @@ export const codexAgent: AgentDefinition = {
       kind: KIND,
       label: "Codex",
       command: commandFor(KIND, context.env),
-      args: argsFor(KIND, context.env),
-      parser: "codex-json",
+      args:
+        modeFor(KIND, context.env) === "exec-json"
+          ? argsFor(KIND, context.env)
+          : appServerArgsFor(KIND, context.env),
+      parser:
+        modeFor(KIND, context.env) === "exec-json"
+          ? "codex-json"
+          : "codex-app-server",
       supportsResume: true,
       supportsImages: true,
       supportedImageMimeTypes: SUPPORTED_IMAGE_MIME_TYPES,
@@ -62,6 +70,13 @@ export const codexAgent: AgentDefinition = {
     };
   },
   createSession(context: AgentSessionContext): AgentSession {
+    if (modeFor(KIND, context.env) === "app-server") {
+      return new CodexAppServerSession({
+        command: commandFor(KIND, context.env),
+        args: appServerArgsFor(KIND, context.env),
+        context,
+      });
+    }
     return new CodexProcessSession({
       command: commandFor(KIND, context.env),
       args: codexJsonArgs(
@@ -635,6 +650,24 @@ function argsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
     return parseArgs(override);
   }
   return [...DEFAULT_ARGS];
+}
+
+function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
+  const override = env[`ROAMCLI_AGENT_${envKey(kind)}_APP_SERVER_ARGS`];
+  return ["app-server", "--stdio", ...parseArgs(override ?? "")];
+}
+
+function modeFor(kind: string, env: NodeJS.ProcessEnv): "app-server" | "exec-json" {
+  const mode = env[`ROAMCLI_AGENT_${envKey(kind)}_MODE`]?.trim();
+  if (mode === undefined || mode.length === 0 || mode === "app-server") {
+    return "app-server";
+  }
+  if (mode === "exec-json") {
+    return "exec-json";
+  }
+  throw new Error(
+    `Unsupported Codex agent mode: ${mode}. Expected app-server or exec-json`,
+  );
 }
 
 function envKey(kind: string): string {
