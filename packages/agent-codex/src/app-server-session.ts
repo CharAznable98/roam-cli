@@ -67,6 +67,7 @@ export class CodexAppServerSession implements AgentSession {
   #draining = false;
   #stopRequested = false;
   #interruptRequested = false;
+  #interruptSent = false;
   #stoppedEmitted = false;
   #turnDone:
     | {
@@ -176,12 +177,9 @@ export class CodexAppServerSession implements AgentSession {
     if (signal === "resume") {
       return;
     }
-    if (signal === "interrupt" && this.#threadId && this.#activeTurnId) {
+    if (signal === "interrupt") {
       this.#interruptRequested = true;
-      await this.#client?.request("turn/interrupt", {
-        threadId: this.#threadId,
-        turnId: this.#activeTurnId,
-      });
+      await this.#requestInterrupt();
       return;
     }
     if (signal === "stop") {
@@ -275,7 +273,7 @@ export class CodexAppServerSession implements AgentSession {
       throw new Error("Cannot start a Codex turn before the thread is ready");
     }
     this.#turnSequence += 1;
-    this.#interruptRequested = false;
+    this.#interruptSent = false;
     this.#streamedOutputIds.clear();
     const response = (await this.#request("turn/start", {
       threadId,
@@ -284,10 +282,13 @@ export class CodexAppServerSession implements AgentSession {
       ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
     })) as TurnStartResponse;
     this.#activeTurnId = response.turn?.id ?? undefined;
+    this.#sendPendingInterrupt();
     await new Promise<void>((resolve, reject) => {
       this.#turnDone = { resolve, reject };
     });
     this.#activeTurnId = undefined;
+    this.#interruptRequested = false;
+    this.#interruptSent = false;
   }
 
   async #handleNotification(method: string, params: unknown): Promise<void> {
@@ -302,6 +303,7 @@ export class CodexAppServerSession implements AgentSession {
     if (method === "turn/started") {
       const notification = params as TurnNotification;
       this.#activeTurnId = notification.turn?.id ?? this.#activeTurnId;
+      this.#sendPendingInterrupt();
       return;
     }
     if (method === "item/agentMessage/delta") {
@@ -359,7 +361,10 @@ export class CodexAppServerSession implements AgentSession {
       this.#deferRequest(request, () => this.#handlePermissionApproval(request));
       return;
     }
-    if (request.method === "item/tool/requestUserInput") {
+    if (
+      request.method === "item/tool/requestUserInput" ||
+      request.method === "tool/requestUserInput"
+    ) {
       this.#deferRequest(request, () => this.#handleToolUserInput(request));
       return;
     }
@@ -425,7 +430,7 @@ export class CodexAppServerSession implements AgentSession {
     });
     this.#client?.respond(request.id, {
       decision: decision.approved
-        ? commandApprovalAcceptDecision(request.method)
+        ? commandApprovalAcceptDecision(request.method, params)
         : commandApprovalDeclineDecision(request.method),
     });
   }
@@ -497,7 +502,7 @@ export class CodexAppServerSession implements AgentSession {
 
   async #handleMcpElicitation(request: JsonRpcRequest): Promise<void> {
     const params = request.params as McpServerElicitationRequestParams;
-    await this.#requestApproval({
+    const decision = await this.#requestApproval({
       kind: "execCommand",
       summary: params.message ?? "Codex tool requested user input",
       payload: {
@@ -514,7 +519,7 @@ export class CodexAppServerSession implements AgentSession {
       },
     });
     this.#client?.respond(request.id, {
-      action: "cancel",
+      action: mcpElicitationAction(params, decision),
       content: null,
       _meta: null,
     });
@@ -632,13 +637,29 @@ export class CodexAppServerSession implements AgentSession {
       await this.#emit({ type: "artifact", draft });
     }
     for (const draft of directives.approvals) {
-      const decision = await this.#requestApproval(draft);
-      this.#sendApprovalResponse(decision);
+      this.#handleApprovalDirective(draft);
     }
   }
 
+  #handleApprovalDirective(draft: ApprovalRequestDraft): void {
+    void this.#requestApproval(draft).then(
+      (decision) => {
+        this.#sendApprovalResponse(decision);
+      },
+      (error: unknown) => {
+        if (this.#closed) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        void this.#fail(
+          `Codex app-server approval directive failed: ${message}`,
+        );
+      },
+    );
+  }
+
   #sendApprovalResponse(decision: ApprovalDecision): void {
-    if (!this.#threadId || !this.#activeTurnId) {
+    if (this.#closed || !this.#threadId || !this.#activeTurnId) {
       return;
     }
     void this.#steerTurn({
@@ -698,6 +719,24 @@ export class CodexAppServerSession implements AgentSession {
   #nextOutputId(): string {
     this.#outputSequence += 1;
     return `codex-output-${this.#outputSequence}`;
+  }
+
+  async #requestInterrupt(): Promise<void> {
+    if (!this.#threadId || !this.#activeTurnId || this.#interruptSent) {
+      return;
+    }
+    this.#interruptSent = true;
+    await this.#client?.request("turn/interrupt", {
+      threadId: this.#threadId,
+      turnId: this.#activeTurnId,
+    });
+  }
+
+  #sendPendingInterrupt(): void {
+    if (!this.#interruptRequested) {
+      return;
+    }
+    void this.#requestInterrupt().catch(() => undefined);
   }
 
   #closeAppServer(signal: NodeJS.Signals): void {
@@ -804,8 +843,24 @@ function toolUserInputSummary(params: ToolRequestUserInputParams): string {
   return question ?? "Codex tool requested user input";
 }
 
-function commandApprovalAcceptDecision(method: string): string {
-  return method === "execCommandApproval" ? "approved" : "accept";
+function commandApprovalAcceptDecision(
+  method: string,
+  params: CommandApprovalParams,
+): unknown {
+  if (method === "execCommandApproval") {
+    return "approved";
+  }
+  const decisions = Array.isArray(params.availableDecisions)
+    ? params.availableDecisions
+    : [];
+  const amendmentDecision = decisions.find(isCommandPolicyAmendmentDecision);
+  if (amendmentDecision) {
+    return amendmentDecision;
+  }
+  if (decisions.includes("accept")) {
+    return "accept";
+  }
+  return decisions[0] ?? "accept";
 }
 
 function commandApprovalDeclineDecision(method: string): string {
@@ -818,4 +873,24 @@ function fileApprovalAcceptDecision(method: string): string {
 
 function fileApprovalDeclineDecision(method: string): string {
   return method === "applyPatchApproval" ? "denied" : "decline";
+}
+
+function isCommandPolicyAmendmentDecision(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    "acceptWithExecpolicyAmendment" in value ||
+    "applyNetworkPolicyAmendment" in value
+  );
+}
+
+function mcpElicitationAction(
+  params: McpServerElicitationRequestParams,
+  decision: ApprovalDecision,
+): "accept" | "decline" | "cancel" {
+  if (!decision.approved) {
+    return "decline";
+  }
+  return params.mode === "url" ? "accept" : "cancel";
 }
