@@ -1,4 +1,4 @@
-import { Bell, Files, GitBranch, MessageSquare, Settings } from "lucide-react";
+import { Bell, Files, GitBranch, MessageSquare } from "lucide-react";
 import type { WorkspaceTab } from "./navigation";
 
 const tabs: Array<{
@@ -10,7 +10,6 @@ const tabs: Array<{
   { id: "files", label: "Files", icon: Files },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "approvals", label: "Approvals", icon: Bell },
-  { id: "settings", label: "Settings", icon: Settings },
 ];
 
 export function BottomTabs({

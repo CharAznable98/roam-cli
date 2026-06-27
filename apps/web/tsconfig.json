@@ -12,6 +12,12 @@
     "types": ["vitest/globals"],
     "baseUrl": ".",
     "paths": {
+      "@/*": ["./src/*"],
+      "components/*": ["./src/components/*"],
+      "ui/*": ["./src/components/ui/*"],
+      "lib/*": ["./src/lib/*"],
+      "hooks/*": ["./src/hooks/*"],
+      "utils/*": ["./src/lib/*"],
       "@roamcli/shared/protocol": ["../../packages/shared/src/protocol/index.ts"]
     }
   },

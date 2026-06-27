@@ -1,3 +1,5 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -29,16 +31,50 @@
     --font-mono:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
       "Courier New", monospace;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.56 0.13 225);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.62 0.12 225);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
   }
 
   * {
     box-sizing: border-box;
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring), transparent 50%);
   }
 
   html {
     height: 100%;
     min-width: 320px;
     background: var(--surface-canvas);
+    @apply font-sans;
   }
 
   body {
@@ -56,6 +92,7 @@
     letter-spacing: 0;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+    @apply bg-background text-foreground;
   }
 
   #root {
@@ -82,6 +119,43 @@
   :focus-visible {
     outline: 2px solid rgba(19, 143, 189, 0.55);
     outline-offset: 2px;
+  }
+  .theme {
+    --font-heading: var(--font-sans);
+    --font-sans: var(--font-ui);
+  }
+  .dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
   }
 }
 
@@ -150,7 +224,7 @@
   .topbar-actions {
     display: none;
     min-width: 0;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(220px, 360px) auto auto auto;
     align-items: center;
     gap: 8px;
   }
@@ -218,6 +292,91 @@
 
   .topbar-status-button:hover {
     box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.08);
+  }
+
+  .command-trigger {
+    display: inline-grid;
+    min-width: 0;
+    height: 34px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: rgba(255, 255, 255, 0.8);
+    color: var(--text-muted);
+    padding: 0 8px;
+    text-align: left;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.78) inset;
+  }
+
+  .command-trigger:hover {
+    border-color: rgba(19, 143, 189, 0.35);
+    background: var(--surface-panel-strong);
+    color: var(--text-main);
+  }
+
+  .command-trigger span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .command-trigger kbd {
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-muted);
+    color: var(--text-faint);
+    padding: 1px 5px;
+    font-size: 11px;
+    font-weight: 750;
+  }
+
+  .runner-filter-control {
+    display: grid;
+    gap: 6px;
+  }
+
+  .runner-filter-control label {
+    color: var(--text-faint);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  .settings-drawer {
+    width: min(560px, calc(100vw - 20px)) !important;
+    max-width: min(560px, calc(100vw - 20px)) !important;
+    gap: 0;
+    background: var(--surface-panel-strong);
+  }
+
+  .settings-drawer .settings-panel {
+    min-height: 0;
+    flex: 1;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .settings-drawer .settings-list,
+  .settings-drawer .settings-detail {
+    max-height: none;
+  }
+
+  .command-palette-dialog {
+    width: min(720px, calc(100vw - 28px));
+  }
+
+  .command-item-meta {
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--text-faint);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .topbar-status.success {
@@ -3859,11 +4018,12 @@
     left: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100vw;
     border-top: 1px solid var(--border-subtle);
     background: rgba(251, 253, 255, 0.96);
     box-shadow: 0 -14px 30px rgba(30, 42, 59, 0.1);
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
     backdrop-filter: blur(12px);
   }
 
@@ -3885,7 +4045,9 @@
   }
 
   .bottom-tabs button {
+    width: 100%;
     flex-direction: column;
+    justify-self: stretch;
     min-height: 54px;
   }
 
@@ -4053,6 +4215,20 @@
   .compact-status-button {
     min-height: 44px;
     padding: 8px 11px;
+  }
+
+  .mobile-topbar-actions button[aria-label="Open command palette"],
+  .mobile-topbar-actions button[aria-label="Settings"] {
+    min-height: 44px;
+    min-width: 44px;
+    height: 44px;
+    width: 44px;
+    flex: 0 0 44px;
+  }
+
+  .mobile-topbar-actions .mobile-topbar-icon-button {
+    height: 44px !important;
+    width: 44px !important;
   }
 
   .chat-header,
@@ -4495,7 +4671,7 @@
   .topbar-actions {
     display: grid;
     width: auto;
-    grid-template-columns: auto auto;
+    grid-template-columns: minmax(220px, 360px) auto auto auto;
   }
 
   .mobile-topbar-actions {

@@ -370,6 +370,76 @@ describe("ProjectForm", () => {
 });
 
 describe("RunnerSidebar", () => {
+  it("filters the Project-first tree by runner", () => {
+    const runnerTwoProject = {
+      ...makeProject("project-2"),
+      runnerId: "runner-2",
+      directory: "/backup/project-2",
+    };
+
+    render(
+      <RunnerSidebar
+        projects={[makeProject("project-1"), runnerTwoProject]}
+        runners={runners}
+        runnerFilterId="runner-2"
+        selectedProjectId="project-1"
+        sessions={[
+          makeSession("session-1", "project-1", "First session"),
+          {
+            ...makeSession("session-2", "project-2", "Second session"),
+            runnerId: "runner-2",
+          },
+        ]}
+        selectedSessionId="session-1"
+        onSelectProject={vi.fn()}
+        onSelectSession={vi.fn()}
+        onRunnerFilterChange={vi.fn()}
+        onCreateProject={vi.fn()}
+        onFetchRunnerDirectoryTree={vi.fn(async () => [])}
+        onCreateRunnerDirectory={vi.fn(async () => ({
+          requestId: "directory-create-test",
+          path: "test",
+          node: directoryNode("test", "test"),
+        }))}
+        onArchiveProject={vi.fn()}
+        onCreateSession={vi.fn()}
+        onListAgentSkills={vi.fn(async () => ({
+          requestId: "agent-skills-test",
+          agent: "codex",
+          basePath: "/workspace/project-1",
+          queriedAt: "2026-06-05T00:00:00.000Z",
+          skills: [],
+        }))}
+        onSearchWorkspacePaths={vi.fn(async () => ({
+          requestId: "path-search-test",
+          basePath: "/workspace/project-1",
+          query: "",
+          entries: [],
+        }))}
+        onFetchGitStatus={vi.fn(async (context) => ({
+          kind: "repository" as const,
+          requestId: "git-status-test",
+          context,
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          clean: true,
+          unborn: false,
+          groups: [],
+        }))}
+        onFetchGitBranches={vi.fn(async (context) => ({
+          requestId: "git-branches-test",
+          context,
+          branches: [],
+        }))}
+      />,
+    );
+
+    expect(screen.queryByText("project-1")).not.toBeInTheDocument();
+    expect(screen.getByText("project-2")).toBeInTheDocument();
+    expect(screen.getByLabelText("Runner")).toHaveTextContent("Runner Two");
+  });
+
   it("closes the new-session modal before opening prompt preset management", async () => {
     const onManagePromptPresets = vi.fn();
 

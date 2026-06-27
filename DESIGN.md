@@ -3,648 +3,335 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-06-26
+- Last refreshed: 2026-06-27
 - Primary product surfaces:
-  - RoamCli web shell: project/session navigation, conversation, files, approvals, and the planned Git tab.
-  - Settings tab: account settings, web push settings, and project-level prompt preset configuration.
-  - Prompt composer surfaces in active chat sessions and new session creation.
-  - Server API and runner RPC contracts that route workspace and Git operations to the owning runner.
-  - Runner execution model for direct sessions and Git worktree sessions.
+  - RoamCli web control plane for AI coding agent sessions.
+  - Desktop three-pane workbench: project/session tree, agent run console, and contextual tools.
+  - Mobile workbench with degraded single-surface navigation.
+  - Authentication, owner setup, empty states, settings, command palette, and creation/editing flows.
 - Evidence reviewed:
-  - `CONTEXT.md`: Project, Runner, Session, execution folder, direct mode, managed worktree, archive, and project-directory vocabulary.
-  - `README.md` / `README_ch.md`: Server + Runner + Web architecture, runner workspace, and Git prerequisite.
-  - `docs/adr/0004-project-directories-use-runner-paths.md`: project directories are interpreted from the runner filesystem perspective.
-  - `docs/prd-todo-list.md`: current product implementation status and planned Monaco/file editing work.
-  - `docs/implementation-plan.md`: shared contracts, server, runner, and web implementation tracks.
-  - `packages/shared/src/protocol/index.ts`: current schema and event boundaries.
-  - `apps/server/src/modules/workspace/workspace-service.ts`: current HTTP-to-runner workspace RPC pattern.
-  - `apps/runner/src/sessions/manager.ts`: current direct and managed worktree execution behavior.
-  - `apps/runner/src/bootstrap/cli.ts` and `apps/runner/src/bootstrap/registration.ts`: runner workspace and `.roam-runner` state directory behavior.
-  - `apps/web/src/app/AppShell.tsx`, `apps/web/src/app/navigation.ts`, and `apps/web/src/app/BottomTabs.tsx`: current workspace tab model.
-  - `apps/web/src/features/sessions/NewSessionForm.tsx`: current direct / managed worktree session creation UI.
-  - `apps/web/src/features/files/FilePanel.tsx`: current lightweight file tree and text editor surface.
-  - `apps/web/src/features/git/GitPanel.tsx`: current Monaco diff preview surface.
-  - `apps/web/src/features/conversation/MarkdownMessage.tsx`: current Markdown rendering implementation and safe raw-HTML boundary.
-  - `apps/web/src/App.test.tsx` and `scripts/blackbox-browser.mjs`: current file preview/edit/save and Git diff smoke coverage.
-  - `apps/web/src/index.css` and `apps/web/tailwind.config.ts`: responsive shell, restrained operational palette, and component styling.
-  - 2026-06-21 Web redesign pass: `apps/web/src/app/AppShell.tsx` and `apps/web/src/index.css` reviewed for shell hierarchy, panel rhythm, mobile touch targets, and operational status visibility.
-  - 2026-06-23 file preview optimization design interview: read-only default preview, explicit edit entry, app-level fullscreen, button-driven save state, Markdown read-only rendering, and Git diff edit routing.
-  - `packages/agent-claude-code/src/index.ts`: Claude Code SDK system task/status messages are currently summarized as plain assistant messages.
-  - `apps/runner/src/sessions/manager.ts`: agent runtime `message` events are translated into persisted `assistantMessage` runner events.
-  - `apps/server/src/modules/runners/runner-event-service.ts`: `assistantMessage` events are stored as normal assistant `Message` records.
-  - `apps/web/src/features/conversation/model.ts` and `apps/web/src/features/conversation/ChatPanel.tsx`: current conversation display items, intermediate output grouping, and collapsible message rendering.
-  - 2026-06-26 prompt preset design interview: project-scoped Server product state, Settings-tab project selector, composer picker, user-message action menu, prompt editor dialog, drag-handle ordering, manual refresh, and dnd-kit allowance.
-  - `apps/web/src/features/conversation/PromptComposer.tsx`: current `$` / `/` skill completion and `@` path completion behavior.
-  - `apps/web/src/app/AppShell.tsx` and `apps/web/src/app/navigation.ts`: current Settings tab and settings-detail navigation model.
-  - `apps/web/src/features/sessions/NewSessionForm.tsx`: current reuse of `PromptComposer` for new session prompts.
-  - `apps/server/src/infra/sqlite-store.ts`: current Server-owned Project persistence model.
+  - `README.md`: RoamCli is a self-hosted web control plane for AI coding agents, runners, projects, sessions, files, approvals, and patches.
+  - `CONTEXT.md`: canonical product language for Project, Runner, Session, Execution Folder, Managed Worktree, Agent, Task, and rendered messages.
+  - `apps/web/package.json`: React 19, Vite, Tailwind, lucide-react, Monaco, dnd-kit, markdown rendering, and no current shadcn/ui dependency.
+  - `apps/web/tailwind.config.ts`: existing ink and signal color tokens.
+  - `apps/web/src/index.css`: current light operational shell, CSS variables, pane rhythm, settings styles, and responsive behavior.
+  - `apps/web/src/app/AppShell.tsx`: current shell composition, settings flow, project/session state, and tool panels.
+  - `apps/web/src/app/navigation.ts`: current workspace tabs include Conversation, Files, Git, Approvals, and Settings.
+  - `apps/web/src/features/sessions/RunnerSidebar.tsx`: current Project-first project/session tree.
+  - `apps/web/src/features/conversation/ChatPanel.tsx`: current conversation, composer, session actions, activity/message surfaces, and prompt tools.
+  - `apps/web/src/features/files/FilePanel.tsx`: current file tree/editor tool surface.
+  - `apps/web/src/features/git/GitPanel.tsx`: current Git status/diff/history tool surface.
+  - `apps/web/src/features/approvals/ApprovalCenter.tsx`: current approval action surface.
+  - `apps/web/src/features/approvals/ArtifactList.tsx`: current artifact list exists, but this design removes it as a standalone product entry.
+  - User design decisions from 2026-06-27 interview: shadcn/ui, professional control console, light-first theme, three-pane workbench, Project-first tree with Runner filter, Agent Run Console, Files/Git/Approvals tools, Settings Drawer, full first-version Command Palette.
 
 ## Brand
 
 - Personality:
-  - Quiet, operational, precise, and developer-focused.
-  - The UI should feel like a control surface for real development machines, not a marketing application.
+  - Professional control console / Developer Cockpit.
+  - Quiet, precise, operational, and built for long-running development supervision.
+  - Modern and designed, but not decorative, playful, or marketing-led.
 - Trust signals:
-  - Explicit operation scope before side effects.
-  - Clear Git context labels.
-  - Direct Git failure output with copy support.
-  - Minimal server-side persistence and runner-local credential usage.
+  - Current Project, Session, Runner, execution folder, Git context, and approval scope are visible before side effects.
+  - Running agent state is legible without turning the transcript into a status log.
+  - Settings and security actions are clearly separated from session tools.
+  - Git remains the preferred source of truth for generated work and code changes.
 - Avoid:
-  - Decorative visual noise.
-  - Hidden platform magic.
-  - Ambiguous Git actions whose target repo, branch, worktree, or file is unclear.
-  - GitHub/GitLab/Bitbucket platform features in the Git tab scope.
-  - Marketing-page visual devices in the product shell, including hero copy, decorative image panels, logo walls, and ornamental gradients.
+  - Native ad hoc UI for common controls once shadcn/ui primitives are available.
+  - Large decorative gradients, bokeh/orbs, marketing hero sections, oversized cards, and one-note color palettes.
+  - Hiding important operational state behind hover-only controls.
+  - Treating Artifacts as a primary navigation concept.
+  - Putting global Settings inside the session tool tab set.
 
 ## Product goals
 
 - Goals:
-  - Keep agent execution activity visible without polluting the user-readable conversation.
-  - Represent Claude Code task/status progress as non-message `AgentActivity` events instead of assistant text.
-  - Add a Project-bound Git tab that manages local Git capabilities for the selected Project.
-  - Keep all Git, GitLens-like inspection, diff, branch, remote, stash, merge, rebase, and worktree controls inside the Git tab.
-  - Support Session creation in two modes: local mode and worktree mode.
-  - Make worktree mode create a new branch-backed Git worktree for the session.
-  - Provide VS Code-like Source Control and GitLens-like local inspection without implementing provider APIs.
-  - Use Monaco as the Git tab file/diff inspection foundation.
-  - Store the minimum product data needed for identity, session-worktree association, job audit, and session Git artifacts.
-  - Support Project-scoped prompt presets as editable Server-owned product configuration.
-  - Let users insert Project prompt presets into both active chat composer and new session prompt composer.
-  - Let users copy text from user messages and save user-message text into Project prompt presets through a message action menu.
+  - Introduce a component-library-driven frontend based on shadcn/ui, Radix UI, Tailwind, and lucide-react.
+  - Redesign the whole frontend as a cohesive light-first professional console before implementation.
+  - Preserve the product's Project -> Session -> Agent execution model while making the shell more refined and easier to scan.
+  - Keep the center panel focused on the Agent Run Console.
+  - Keep right-side tools focused on Files, Git, and Approvals.
+  - Add a complete first-version Command Palette for project/session switching, file search, common actions, and settings access.
+  - Move Settings to a global top-right entry that opens a right-side Drawer.
+  - Support Runner filtering in the Project-first tree with All runners and single-runner modes.
 - Non-goals:
-  - Do not show provider lifecycle strings such as `Claude Code task progress:` as assistant/user conversation messages.
-  - Do not make activity groups the primary approval action surface.
-  - No PR, issue, CI, review comment, provider login, or provider token management.
-  - No automatic nested repository discovery under the Project directory.
-  - No strong preflight blocking for destructive Git actions beyond clear user confirmation.
-  - No long-term persistence of full diff, blame, commit graph, file history, stdout, or stderr.
-  - No Git credential storage in Server or Web.
-  - No prompt preset storage in repository files, runner files, or browser-only local state.
-  - No prompt preset input trigger syntax now or later; presets are selected only through explicit UI.
-  - No prompt variables, categories, favorites, pinning, version history, prompt permissions, or duplicate prevention in the MVP.
-  - No realtime prompt preset synchronization between browser windows; refresh after operations and provide manual refresh.
-  - No saving assistant messages or image attachments as prompt presets in the MVP.
+  - No marketing landing page treatment for the product shell.
+  - No full IDE clone with unrestricted pane docking in the first redesign.
+  - No standalone Artifacts tab or primary Artifacts feature.
+  - No dark-theme implementation requirement in the first pass, though tokens must leave room for it.
+  - No new animation library for the redesign.
+  - No visual dependency that fights Tailwind or the current React/Vite stack.
 - Success signals:
-  - Users can see the latest running agent action without the chat transcript turning into a status log.
-  - Historical agent activity is available through collapsed groups but does not compete with normal messages.
-  - Users can understand which Project/session/worktree the Git tab is operating on.
-  - Worktree sessions are branch-backed and can commit, push, and be cleaned up predictably.
-  - Diff, blame, history, and commit inspection feel responsive on desktop and usable on mobile.
-  - Git actions route through the runner and respect runner filesystem boundaries.
-  - A browser refresh or reconnect can recover job status and essential audit state without storing large Git data.
-  - Users can create, edit, delete, drag-sort, refresh, and insert Project prompt presets without changing repository files.
-  - Users can save a prior user message as a Project prompt preset with a prefilled editor dialog.
-  - Prompt preset insertion never overwrites existing composer text unless the user edits it manually.
+  - A first-time user can identify Projects, Sessions, Runner filter, current run state, Files, Git, Approvals, Settings, and Command Palette quickly.
+  - A daily user can supervise a running agent and inspect files/Git/approvals without losing context.
+  - The interface feels intentionally designed while remaining dense enough for repeated professional use.
+  - Settings no longer competes with session tools.
+  - Artifact-related data, when relevant, is discoverable through Git, Files, or message context rather than a standalone tab.
 
 ## Personas and jobs
 
 - Primary personas:
-  - Developer supervising AI coding sessions in one or more projects.
+  - Developer supervising one or more AI coding sessions.
   - Developer reviewing and committing agent-generated changes.
-  - Developer managing branch/worktree isolation for parallel session work.
-  - Developer reusing project-specific agent instruction patterns across sessions.
+  - Developer managing local and worktree session execution through one or more runners.
+  - Developer configuring account, notifications, runner tokens, and project-level behavior.
 - User jobs:
-  - Create an isolated branch worktree for a new session.
-  - Review working tree changes and stage files, hunks, or ranges.
-  - Inspect blame, file history, line history, and commit details.
-  - Commit staged changes and push/pull/fetch using the runner machine's Git credentials.
-  - Archive a session and decide whether to delete its associated worktree.
-  - Copy clear Git failure output and paste it to an agent for diagnosis.
-  - Build and maintain a Project prompt preset list.
-  - Insert a prompt preset into a new session or active session without memorizing trigger syntax.
-  - Promote a useful prior user message into an editable Project prompt preset.
+  - Filter Projects by All runners or one Runner.
+  - Select a Project and Session quickly.
+  - Start, stop, resume, and monitor an agent task.
+  - Read the user/assistant conversation without operational noise.
+  - Expand assistant-run details only when needed.
+  - Inspect files, Git changes/history, and approvals in the right tool area.
+  - Open Settings without leaving the active session.
+  - Use Command Palette to switch context, find files, run common actions, and open settings.
 - Key contexts of use:
-  - Desktop review and commit work with side-by-side diff.
-  - Tablet inspection with inline diff and secondary panes.
-  - Mobile status/review flows with single-column inline diff.
-  - Offline runner states where historical product associations remain visible but live Git data is unavailable.
+  - Desktop supervision with three-pane layout.
+  - Laptop review with a narrower but still persistent tool panel.
+  - Mobile status checks with layout degraded into task-focused tabs/sheets.
+  - Offline or unavailable runner states where historical context remains visible and live actions degrade clearly.
 
 ## Information architecture
 
 - Primary navigation:
-  - Add a top-level workspace tab named `Git`.
-  - Git capabilities must not be split across Files, Approvals, or Chat.
-  - Bottom/mobile navigation adds the same Git tab.
-- Settings tab:
-  - Add `Project Settings` to the Settings home.
-  - `Project Settings` contains an active-project selector inside Settings, independent of the global selected Project.
-  - The selector lists only active Projects and highlights the global current Project with a `Current` badge.
-  - Switching the Settings project selector changes only the Project being configured; it does not switch global chat/session context.
-  - `Prompt presets` lives inside Project Settings, not as a top-level workspace tab.
-- Prompt preset composer entry:
-  - Active chat composer and new session prompt composer both expose the same prompt preset picker.
-  - The picker is opened through an explicit composer tool button, not by typing a trigger token.
-  - The picker supports search and insertion only.
-  - The picker provides a `Manage prompts` action that routes to Settings -> Project Settings -> Prompt presets for the relevant Project.
-- User message actions:
-  - Only normal user messages show a message action menu.
-  - User messages render a persistent low-emphasis `...` button at the top right of the message body.
-  - The menu contains `Copy` and `Save as prompt`.
-  - Assistant messages, tool messages, thought messages, and activity groups do not get this MVP action menu.
-- Conversation activity timeline:
-  - Normal conversation messages are only user-visible user and assistant content.
-  - `tool`, `thought`, `system`, `approval`, and provider status/progress events are auxiliary activity, not normal message boundaries.
-  - Frontend display merges `Message` records and `AgentActivity` records by timestamp.
-  - Consecutive auxiliary events between two normal messages collapse into one `activityGroup`.
-  - Each `activityGroup` renders immediately above the next normal message.
-  - If the latest activity has no following normal message yet, its group renders at the end of the message list.
-  - Only the latest `activityGroup` shows the latest short action in its collapsed row.
-  - Historical `activityGroup` rows show only `Activity (N)`.
-  - When a following normal message appears, the previous latest `activityGroup` automatically becomes historical and collapses.
-  - If an `Intermediate output` group collapses a span of non-final output, any `activityGroup` inside that span collapses inside the same intermediate group.
-- Git tab top-level structure:
-  - Header: Project repo identity, active Git context, selected session context label, branch/upstream/ahead-behind status, dirty count, and sync state.
-  - Context selector: Project repository and current Project session worktrees only.
-  - Main Git views:
-    - `Changes`: Source Control groups, commit box, staging controls, sync status.
-    - `History`: commit history, commit graph, file history, line history, blame entry points, commit details.
-    - `Branches`: branch, tag, ref, compare, merge, rebase, cherry-pick, revert controls.
-    - `Worktrees`: session worktrees, worktree removal, worktree path, branch, base ref, and association to sessions.
-    - `Remotes`: remotes, fetch, pull, push, sync, upstream, incoming/outgoing.
-    - `Stashes`: stash list, create/apply/pop/drop, stash diff.
-  - Detail surface:
-    - Monaco diff/file viewer for selected change, commit, blame, history, stash, or compare item.
-- Git context rules:
-  - Git tab is Project-bound.
-  - Local session context is the Project directory repository.
-  - Worktree session context is the session-created branch worktree.
-  - Switching selected Session automatically switches Git context back to that session's context.
-  - There is no pinned context mode.
-  - The selected Session context must be visibly marked.
-  - Users may temporarily switch to another Project context, but session changes reset the active context.
-- Non-Git Project:
-  - If Project directory itself is not a Git repo, show a Git empty state with `Initialize Git repository`.
-  - Worktree session creation is disabled until the Project has a Git repo and at least one commit.
-  - Local session creation remains available.
-- Nested repositories:
-  - Do not scan subdirectories for nested repos.
-  - Do not open submodules as child contexts.
-  - Parent repo Git status may show submodule status as a parent repo change.
+  - Desktop uses a three-pane workbench:
+    - Left: Project-first tree and Runner filter.
+    - Center: Agent Run Console.
+    - Right: session tools.
+  - Right-side session tool tabs are `Files`, `Git`, and `Approvals`.
+  - `Settings` is not a session tool tab.
+  - `Artifacts` is not a session tool tab.
+- Left pane:
+  - Project-first tree is the primary navigation.
+  - Sessions are nested under Projects.
+  - Runner is a filter dimension, not the top-level tree dimension.
+  - Runner filter lives at the top of the left pane.
+  - Runner filter supports `All runners` and a single selected Runner.
+  - Use shadcn `Select` initially; upgrade to Command/Combobox when Runner count makes search useful.
+- Center pane:
+  - The center pane is the Agent Run Console, not a generic chat app.
+  - It contains compact session context, running state, message stream, assistant activity affordances, and composer.
+  - Assistant run activity is attached under each assistant message as a collapsible area.
+  - All activity groups are collapsed by default.
+  - While a run is active, show only the latest activity item for the current assistant turn.
+  - Historical activity stays accessible but visually quiet.
+- Right pane:
+  - Fixed role as contextual tools for the active Project/Session.
+  - Primary tabs: `Files`, `Git`, `Approvals`.
+  - Use badges for counts/status, such as changed files and pending approvals.
+  - Right pane is width-adjustable on desktop.
+- Settings:
+  - Top-right global Settings menu is the primary entry.
+  - Project row overflow menu may deep-link to Project Settings.
+  - Settings opens in a right-side shadcn Sheet/Drawer.
+  - Global settings include account/security, notifications, runner token/security, and logout.
+  - Project Settings includes project-scoped settings such as prompt presets.
+- Creation and editing flows:
+  - Short flows, such as New Project and New Session, use focused Dialogs.
+  - Longer flows, such as prompt preset management and settings detail pages, use Sheets/Drawers.
+- Command Palette:
+  - First version is fully designed and implemented as a core console affordance.
+  - Top bar contains a compact command trigger.
+  - Keyboard shortcut: Cmd+K on macOS, Ctrl+K elsewhere.
+  - Supports project/session switching, file search, common actions, and settings entry.
+  - Mobile keeps a search/command button without showing shortcut hints.
+- Authentication, owner setup, and empty states:
+  - Included in the same design system.
+  - Use light, focused, narrow forms.
+  - Do not use marketing hero layouts.
 
 ## Design principles
 
-- Principle 1: Scope is visible before action.
-  - Every Git action must show the active context and target branch/file/ref before execution.
-- Principle 2: Git is the source of truth.
-  - Status, diff, blame, graph, remote, stash, and branch data are queried from Git on demand.
-  - Server stores product associations and audit metadata, not a second Git index.
-- Principle 3: Runner owns filesystem and Git execution.
-  - Web never sends arbitrary paths.
-  - Web sends `GitContextRef`; Server resolves it to Project/session identity; Runner executes in the resolved path.
-- Principle 4: Isolation is explicit and visible.
-  - New sessions default to local/direct mode to match the existing Project default.
-  - Worktree mode is explicit when the user wants new-branch isolation.
-- Principle 5: Simple default UI, complete advanced surface.
-  - Default commit UI stays small.
-  - Advanced actions live in menus or contextual actions.
-- Principle 6: Activity explains execution, messages carry conversation.
-  - Agent lifecycle and tool/task progress must be available as operational context.
-  - They must not be persisted as assistant prose or rendered as assistant prose.
-  - The visible transcript remains readable without expanding activity groups.
-- Principle 7: Prompt presets are Project state, not repository state.
-  - Prompt presets are stored by Server against `projectId`.
-  - Saving or editing a prompt preset must not dirty the user's repository or worktree.
-  - Runner offline state must not prevent prompt preset management or insertion.
-- Principle 8: Explicit controls beat hidden interaction for message reuse.
-  - User-message actions use a visible `...` menu instead of hover-only buttons.
-  - The menu stays visually quiet but reachable on desktop, mobile, touch, and keyboard.
+- Principle 1: Work context stays visible.
+  - Current Project, Session, Runner filter, run status, and active tool should be visible without modal hunting.
+- Principle 2: Git is the useful artifact surface.
+  - Generated code and patches should be inspected through Git and Files.
+  - Do not add a primary Artifacts area unless future non-Git outputs become a real user job.
+- Principle 3: Conversation stays readable.
+  - User and assistant prose should remain the main transcript.
+  - Tool calls, command output, status events, and approvals are operational context and should be collapsible.
+- Principle 4: Tools belong to the right pane; settings do not.
+  - Files, Git, and Approvals are current-session tools.
+  - Account, security, notifications, and project configuration are global or management concerns and open through Settings Drawer.
+- Principle 5: Component library first.
+  - Prefer shadcn/ui primitives and variants over ad hoc HTML/CSS for buttons, menus, dialogs, sheets, tabs, forms, toasts, command palette, tooltips, and resizable panels.
+- Principle 6: Dense but breathable.
+  - Preserve high information density while using consistent spacing, hierarchy, and component states to avoid visual fatigue.
 - Tradeoffs:
-  - The platform warns before dangerous actions but does not strongly block them.
-  - Full command output is copyable for active jobs but not persisted long term.
-  - Monaco is heavier than simple diff HTML, but better matches the desired end-state diff and inspection experience.
+  - shadcn/ui provides ownership and visual flexibility, but the team owns local component quality and consistency.
+  - A complete Command Palette increases first-pass complexity, but it is appropriate for a professional console.
+  - Dark theme is token-aware but not part of the initial implementation acceptance.
 
 ## Visual language
 
 - Color:
-  - Continue the existing muted operational palette from `tailwind.config.ts`: ink neutrals plus signal green/amber/red/cyan.
-  - Avoid one-hue surfaces and large decorative gradients.
-  - Web shell redesign uses a light operational theme with cool neutral surfaces, one cyan accent, semantic green/amber/red states, and no mid-page theme inversion.
-  - Git statuses use concise, consistent signal tones:
-    - clean/success: signal green
-    - warning/diverged/conflict risk: signal amber
-    - destructive/error/conflict: signal red
-    - informational/sync/remote: signal cyan
+  - Light-first theme.
+  - Backgrounds use cool neutral gray-blue surfaces.
+  - Primary accent uses blue-cyan, extending the existing cyan direction.
+  - Semantic states use green, amber, red, and cyan consistently.
+  - Avoid broad purple/blue AI gradients and decorative one-hue themes.
 - Typography:
-  - Continue system sans-serif with compact operational hierarchy.
-  - Use monospace only for code, refs, SHAs, paths, and command output.
-  - Prefer system UI over a branded display face; this is a repeated-use control plane, not a landing page.
+  - System sans-serif for product UI.
+  - Monospace only for paths, commands, SHAs, refs, logs, code, and terminal-like output.
+  - Use compact hierarchy; reserve large display text for empty/login/setup pages only when needed.
 - Spacing/layout rhythm:
-  - Dense but readable. Git views are work surfaces, not marketing panels.
-  - Keep fixed toolbar and row heights where possible to prevent diff/status reflow.
-  - Desktop shell uses framed work panes with small gutters; mobile keeps full-width panes and bottom navigation.
+  - High-density but breathable.
+  - Prefer 8px-based spacing.
+  - Keep toolbar, row, tab, and badge heights stable.
+  - Avoid nested cards; repeated list items may use card-like surfaces only when they represent independent objects.
 - Shape/radius/elevation:
-  - Match existing restrained 7-8px radius and light panel shadows.
-  - Do not nest decorative cards inside cards.
-  - Radius system: 8px controls, 10px work panes, full-pill badges only.
+  - Controls: 8px radius.
+  - Work panes: 8-10px radius.
+  - Badges/pills may be full radius.
+  - Elevation is subtle and functional; Drawer/Dialog elevation may be stronger than panes.
 - Motion:
-  - Use minimal motion for loading/progress only.
-  - Respect reduced-motion preference.
+  - Restrained micro-interactions only.
+  - 120-180ms transitions for Drawer/Dialog, dropdowns, command palette, hover/focus, and expand/collapse.
+  - Respect reduced-motion preferences.
+  - Do not add an animation library for the first redesign.
 - Imagery/iconography:
-  - Use lucide icons for toolbar and tab actions where available.
-  - Prefer icons for common commands: refresh, stage, unstage, commit, pull, push, branch, tag, history, diff, trash.
-  - Prompt preset controls should use familiar small icons: library/list for picker, grip for drag handle, more-horizontal for message actions, copy for copy, save/bookmark-like action for saving as prompt, refresh for manual reload.
+  - Use lucide-react icons through shadcn-compatible components.
+  - Use familiar icons for tool tabs, command trigger, settings, runner state, project/session actions, Git actions, approvals, upload, send, stop, resume, copy, refresh, and overflow menus.
+  - No decorative illustrations are required for the workbench.
 
 ## Components
 
-- Existing components to reuse:
-  - `AppShell` workspace tab frame.
-  - `BottomTabs` mobile navigation pattern.
-  - `StatusPill` for compact state indicators.
-  - Notification stack for request errors.
-  - Form and button patterns from session creation and file editing.
-  - `PromptComposer` for both chat composer and new session prompt input.
-  - Settings list/detail pattern from `SettingsPanel`.
-  - Existing `details` / `summary` collapsible-message styling for low-emphasis expandable activity groups.
+- Existing components to reuse or migrate:
+  - `AppShell` as shell orchestration, while changing the IA.
+  - `RunnerSidebar` as the Project-first tree foundation.
+  - `ChatPanel` as the Agent Run Console foundation.
+  - `PromptComposer` for active and new-session prompts.
+  - `FilePanel`, `GitPanel`, and `ApprovalCenter` as right-pane tool foundations.
+  - `StatusPill` behavior can inform shadcn Badge variants.
+  - Existing notification behavior can inform shadcn Toast usage.
 - New/changed components:
-  - `AgentActivityGroup`: collapsed non-message activity segment between normal messages.
-  - `AgentActivityItem`: short action row shown only when a group is expanded.
-  - `ConversationDisplayItem`: extend the display model to interleave `message`, `activityGroup`, and `intermediateGroup` items.
-  - `GitPanel`: root Git tab container.
-  - `GitContextHeader`: active context, selected session marker, branch/upstream/sync state.
-  - `GitContextSelector`: Project repo and session worktree switcher.
-  - `GitChangesView`: grouped status, staging controls, commit box.
-  - `GitCommitBox`: message, Stage All, Unstage All, Commit, and overflow menu.
-  - `GitDiffViewer`: Monaco wrapper for structured content diff.
-  - `GitHistoryView`: paginated history and graph container.
-  - `GitBlameOverlay`: Monaco line/range decorations and hover data.
-  - `GitWorktreesView`: session worktree list and removal action.
-  - `GitJobOutput`: active job failure/output panel with copy button.
-  - `GitEmptyState`: non-Git repo init state.
-  - `ProjectSettingsPanel`: Settings detail surface with active-project selector and Project configuration sections.
-  - `PromptPresetList`: searchable, refreshable Project prompt preset management list.
-  - `PromptPresetRow`: title/content preview row with drag handle, edit affordance, and row action menu.
-  - `PromptPresetEditorDialog`: shared create/edit/save-from-message dialog with title and content fields.
-  - `PromptPresetPicker`: lightweight composer panel for search and insertion.
-  - `UserMessageActionMenu`: persistent low-emphasis `...` menu on user messages.
+  - `ui/*` shadcn component layer: Button, Badge, Card where justified, Dialog, Sheet, DropdownMenu, Select, Command, Tabs, Tooltip, Toast/Sonner equivalent, Input, Textarea, Label, Separator, ScrollArea, Resizable, Skeleton, Alert.
+  - `RunnerFilterSelect`: All runners / single runner filter.
+  - `CommandPalette`: global command center with grouped results/actions.
+  - `TopBar`: context summary, command trigger, global status, settings/account menu.
+  - `SettingsDrawer`: global settings shell and detail routes.
+  - `ProjectTree`: shadcn-styled Project-first tree with overflow menus.
+  - `AgentRunHeader`: compact current session and run state.
+  - `AssistantActivityDisclosure`: collapsed assistant-run details under assistant messages.
+  - `ToolTabs`: Files/Git/Approvals tab surface with badges.
+- Removed or demoted components:
+  - Standalone `ArtifactList` should not appear as a primary tab.
+  - Existing Settings workspace tab should be replaced by the global menu + Drawer model.
 - Variants and states:
-  - Agent activity group: latest/running, historical, inside intermediate output.
-  - Agent activity kind: status, task_started, task_progress, task_notification, approval, tool, system, thought.
-  - Git context: project, selected session local, selected session worktree, other session worktree.
-  - Repo state: clean, dirty, conflict, unborn, detached HEAD, remote-diverged, runner-offline.
-  - Diff state: loading, ready, too large, binary, read-only, editable current side.
-  - Job state: queued, running, succeeded, failed, cancelled.
-  - Worktree state: active, archived-session-linked, deleted, unavailable.
-  - Prompt preset list state: loading, ready, refreshing, empty, error, dirty reorder, saving reorder.
-  - Prompt preset editor mode: create blank, edit existing, create from user message.
-  - Prompt preset source message state: text message, text plus attachments, attachments-only.
+  - Buttons: primary, secondary, ghost, destructive, icon-only, compact.
+  - Badges: neutral, success, warning, error, info, count.
+  - Panels: active, inactive, loading, unavailable/offline, empty, error.
+  - Activity disclosure: collapsed historical, collapsed active with latest item, expanded.
+  - Runner filter: all, selected runner, offline runner, no runners.
 - Token/component ownership:
-  - Extend existing Tailwind theme and component CSS.
-  - Do not introduce a second design-system framework.
+  - Tailwind tokens remain the source for colors, spacing, radius, and elevation.
+  - shadcn components should be themed through CSS variables and Tailwind config.
+  - New components should live under the existing frontend component organization and avoid introducing a second styling system.
 
 ## Accessibility
 
 - Target standard:
-  - WCAG 2.1 AA for core Git flows.
+  - WCAG 2.2 AA for core flows.
 - Keyboard/focus behavior:
-  - Git tab must be keyboard navigable.
-  - Changes list supports arrow navigation, Enter to open diff, Space for selection where applicable.
-  - Commit message supports normal textarea behavior.
-  - Destructive confirmations must trap focus and return focus to the invoking control.
-  - Monaco shortcuts must not trap users without visible alternatives.
-  - User-message `...` buttons must be keyboard focusable with accessible labels.
-  - Prompt preset menus and dialogs must return focus to the invoking control when closed.
-  - Prompt preset drag handles must expose keyboard-accessible sorting behavior when using the chosen DnD library.
+  - Command Palette opens with Cmd+K/Ctrl+K and traps focus while open.
+  - Dialogs and Drawers trap focus and restore focus on close.
+  - Project tree, tabs, menus, selects, and disclosures are keyboard reachable.
+  - Icon-only controls must have accessible names and tooltips where needed.
 - Contrast/readability:
-  - Status badges and diff line states must not rely on color only.
-  - Use icons/text labels for staged, unstaged, conflict, and deleted states.
+  - Text, badges, borders, and selected states must meet contrast expectations on light gray-blue surfaces.
+  - Status colors must not rely on color alone.
 - Screen-reader semantics:
-  - Resource groups use headings and list semantics.
-  - Diff viewer has accessible file/path/ref labels.
-  - Job progress and failure output use live-region updates where appropriate.
-  - Prompt preset rows announce title, short content preview, and current position in the ordered list.
-  - Manual refresh announces loading and error states without moving focus.
+  - Use semantic regions for left navigation, main Agent Run Console, right tools, and Settings Drawer.
+  - Activity disclosures should expose expanded/collapsed state.
+  - Counts and pending states should have readable labels.
 - Reduced motion and sensory considerations:
-  - Avoid animated graph effects.
-  - Progress indicators should be subtle and non-flashing.
+  - Respect `prefers-reduced-motion`.
+  - Avoid flashing, pulsing, or attention-grabbing decorative motion.
 
 ## Responsive behavior
 
 - Supported breakpoints/devices:
-  - Mobile: single-column tab flow.
-  - Tablet: two-pane where space allows, inline diff default.
-  - Desktop: multi-pane Git workbench with side-by-side diff default.
-- Layout adaptations:
-  - Desktop:
-    - Left: Git view navigation and resource lists.
-    - Right: Monaco detail/diff surface.
-    - Side-by-side diff default.
-  - Tablet:
-    - Inline diff default.
-    - Navigation and detail can stack or collapse.
-  - Mobile:
-    - Fixed inline diff only.
-    - File/change list first, selected item opens a single-detail view.
-    - Top controls: back, stage/unstage, next/previous hunk, copy output.
-    - No side-by-side toggle.
+  - Desktop is the primary design target.
+  - Tablet and mobile remain functionally complete through layout degradation.
+- Desktop:
+  - Left pane is narrow and stable.
+  - Center pane is flexible and primary.
+  - Right tool pane is resizable.
+  - Top bar contains context, command trigger, global status, and settings/account menu.
+- Mobile:
+  - Do not compress three panes side by side.
+  - Use bottom or top task switching for Chat, Files, Git, and Approvals.
+  - Project/session navigation opens in a Sheet.
+  - Settings opens in a full-height Sheet/Drawer.
+  - Command entry is button-first; shortcut hint is hidden.
 - Touch/hover differences:
-  - Hover blame details must also be available by tap/click.
-  - Context menus need accessible button alternatives.
-  - User-message actions do not depend on hover; the `...` button is persistent.
-  - Prompt preset ordering uses the same drag handle on desktop and mobile.
-  - Drag handles must be large enough for touch without making the whole row draggable.
-- Monaco behavior:
-  - Lazy-load Monaco when entering Git tab or opening a diff.
-  - Dispose Monaco models on context/file changes and when leaving the Git tab.
-  - Large diff/file handling must avoid loading entire repository diffs into Monaco.
+  - Do not rely on hover to reveal essential actions.
+  - Overflow menus and disclosure controls must be touch-sized.
 
 ## Interaction states
 
 - Loading:
-  - Status refresh shows lightweight inline progress.
-  - Long Git operations create a Git job and progress state.
-  - Latest agent activity group shows one short current action plus step count.
-  - Activity groups never stream as normal message text.
-  - Prompt preset refresh shows lightweight inline loading and keeps the last usable list visible when possible.
+  - Use Skeletons for panels and lists.
+  - Use inline spinners only for local actions.
+  - Preserve layout dimensions while loading.
 - Empty:
-  - No Git repo: show init repo action.
-  - Clean working tree: show clean state, branch/upstream, and sync actions.
-  - No history for file/query: show scoped empty state.
-  - No prompt presets: show an empty state with `New prompt`.
+  - No projects: guide the user to create/import a Project.
+  - No sessions: prompt for New Session within the selected Project.
+  - No files/Git/approvals: show compact, task-specific empty states.
+  - No Git repo: Git panel should offer repository initialization where supported.
 - Error:
-  - Show direct, clear Git failure information.
-  - Provide `Copy error` for operation, context, branch/ref/file, exit code, stdout/stderr currently available.
-  - Do not persist complete stdout/stderr long term.
-  - Prompt preset load/save/delete/reorder failures use the existing notification path and keep the user on the same surface for retry.
+  - Show the failed operation, target context, and recovery action.
+  - Git and runner errors should expose copyable technical output when useful.
 - Success:
-  - Job success updates status and displays concise completion feedback.
-  - When a normal message arrives after activity, the preceding latest group becomes historical and collapses to `Activity (N)`.
-  - Copy and prompt preset save success use existing toast/notification feedback.
+  - Use restrained toast/status feedback.
+  - Do not interrupt the user's workspace for routine success states.
 - Disabled:
-  - Worktree mode disabled for non-Git and unborn repos.
-  - Commit disabled when there are no staged changes.
-  - Operations disabled while a conflicting write job runs in the same context.
-  - `Save as prompt` is disabled or omitted for user messages whose trimmed text content is empty.
-  - Prompt preset save is disabled when trimmed title or content is empty or over the configured length.
+  - Disabled actions must explain the missing prerequisite through tooltip or inline copy.
 - Offline/slow network:
-  - Runner offline keeps Project/Session records visible.
-  - Live Git status/diff/history unavailable until runner returns.
-  - Existing minimal audit/job state remains visible.
-  - Persisted agent activity reloads with session detail after refresh or reconnect.
-  - Runner offline does not disable prompt preset management or insertion.
-  - Server/API unavailable disables prompt preset load/save and surfaces retry/manual refresh.
+  - Offline Runner state should keep historical Project/Session data visible.
+  - Live filesystem, Git, and new session actions degrade clearly.
 
 ## Content voice
 
 - Tone:
-  - Direct, factual, and operational.
-  - Avoid playful or decorative copy.
+  - Direct, operational, concise.
+  - Prefer concrete labels over playful copy.
 - Terminology:
-  - Use repo, branch, worktree, staged, changes, conflicts, commit, remote, stash.
-  - Use Project, Session, Runner, Project directory, execution folder per `CONTEXT.md`.
-  - Avoid `workspace` when referring to product Project concepts, except for Runner workspace root.
+  - Use `Project`, `Runner`, `Session`, `Execution Folder`, `Managed Worktree`, `Agent`, `Task`, `Files`, `Git`, `Approvals`, and `Settings` consistently with `CONTEXT.md`.
+  - Avoid `workspace` as the user-facing primary navigation dimension when `Project` is meant.
+  - Avoid `Artifacts` as primary IA terminology.
 - Microcopy rules:
-  - Before destructive actions, name the object and consequence.
-  - Keep confirmations short; no type-to-confirm requirement.
-  - Do not over-explain Git errors; show copyable output for agent diagnosis.
-  - Agent activity copy is productized into short actions such as `Starting task`, `Exploring file preview component`, `Reading apps/web/src/app/useRoamController.ts`, `Waiting for approval`, and `Task completed`.
-  - Do not expose provider prefixes such as `Claude Code status:` or `Claude Code task progress:` in default UI.
-
-## Feature design: Project prompt presets
-
-- Scope and ownership:
-  - Prompt presets are Server-owned Project configuration bound to `projectId`.
-  - Prompt presets are not written to repository files, runner-local files, or browser-only local state.
-  - Prompt presets remain manageable and insertable while the Project runner is offline.
-  - Archived Projects are not listed in the Settings Project selector; restore a Project before managing its presets.
-- Preset model:
-  - Fields: `id`, `projectId`, `title`, `content`, `order`, `createdAt`, `updatedAt`.
-  - `title` is required after trim and limited to 1-80 characters.
-  - `content` is required after outer trim and limited to 1-20,000 characters.
-  - Internal newlines, indentation, code blocks, and spacing are preserved.
-  - Duplicate titles and duplicate content are allowed; users manage duplicates themselves.
-- Settings management:
-  - Settings home includes `Project Settings`.
-  - Project Settings includes an active-project selector and highlights the global current Project with `Current`.
-  - The selected Settings project is local to the Settings surface and does not change global project/session selection.
-  - `Prompt presets` shows a searchable list, `New prompt`, manual refresh, and drag-handle ordering.
-  - Desktop and mobile both use drag handles for sorting; the whole row is not draggable.
-  - New prompt presets default to the top of the ordered list.
-  - Editing a prompt preset does not change its order.
-  - Deleting a prompt preset requires confirmation and is not recoverable.
-- Prompt editor dialog:
-  - Create, edit, and save-from-message all use the same editor dialog.
-  - The dialog contains title and content fields, read-only Project context, Save, Cancel, and destructive Delete where applicable.
-  - Save-from-message opens the dialog instead of immediately creating a preset.
-  - Save-from-message pre-fills title from the first non-empty message line, trimmed and truncated to 48 characters, falling back to `Prompt from message`.
-  - Save-from-message pre-fills content from trimmed user-message text and does not include image attachments.
-- Composer picker:
-  - Active chat composer and new session prompt composer both expose a prompt preset picker.
-  - The picker opens from an explicit composer tool button.
-  - Prompt presets must not have input trigger syntax now or later.
-  - The picker supports search by title/content and insertion only.
-  - Selecting a preset inserts its content at the current caret position.
-  - If the composer is empty, insertion simply fills the composer.
-  - If the composer already has content, insertion preserves the existing draft and inserts at the caret with spacing that avoids accidental word joining.
-  - The picker includes `Manage prompts`, which opens Settings -> Project Settings -> Prompt presets for the relevant Project.
-- User-message actions:
-  - Only normal user messages show message actions.
-  - A persistent low-emphasis `...` button sits at the top right of the user message body.
-  - The action menu contains `Copy` and `Save as prompt`.
-  - `Copy` copies trimmed message text while preserving internal formatting.
-  - `Save as prompt` is disabled or absent when trimmed message text is empty.
-  - User-message image attachments are not copied or saved into presets in the MVP.
-  - Operation feedback uses existing toast/notification behavior: `Copied`, `Copy failed`, `Prompt saved`, and save failure errors.
-- Refresh and consistency:
-  - Prompt presets do not require realtime WebSocket synchronization.
-  - After create, edit, delete, or reorder operations, the affected Project prompt preset list refreshes.
-  - A manual refresh button is available in Project Settings.
-  - If multiple browser windows edit the same Project, Server state wins on refresh; no conflict merge UI is required in the MVP.
-- Acceptance criteria:
-  - A user can create, edit, delete with confirmation, manually refresh, and drag-sort prompt presets in Settings -> Project Settings.
-  - Settings Project selector lists active Projects, highlights the global current Project, and does not change global selection when switched.
-  - A user can insert a prompt preset into both active chat composer and new session prompt composer without typing a trigger.
-  - Choosing a preset inserts at the caret and does not overwrite existing draft text.
-  - A user message has a persistent `...` menu with Copy and Save as prompt.
-  - Save as prompt opens the shared editor dialog with prefilled title/content and fixed target Project.
-  - Copy and Save as prompt trim only outer whitespace and preserve internal formatting.
-  - Prompt preset operations do not require the Project runner to be online.
-
-## Feature design: File preview optimization
-
-- Default mode:
-  - Opening any file starts in read-only preview mode.
-  - Editable text files show an `Edit` button in read-only mode.
-  - Unsupported files do not show edit or save controls.
-  - Editable means runner-returned text content that is not truncated. Filesystem write permission is discovered on save failure, not preflighted in Web.
-- Edit mode:
-  - Clicking `Edit` switches the current file into source edit mode.
-  - Edit mode shows `Cancel` and `Save`.
-  - `Save` is visible only in edit mode.
-  - `Save` is disabled when content is clean or a save is in progress.
-  - `Save` is enabled when the edited buffer differs from the loaded file content.
-  - Save success keeps the user in edit mode and disables `Save` until the next change.
-  - Save failure keeps the user in edit mode, reports through the existing notification path, and allows retry.
-  - `Cancel` exits edit mode. If the buffer is dirty, confirm before discarding changes.
-  - Switching files or closing edit/fullscreen while dirty must also confirm before discarding changes.
-- Status expression:
-  - Remove persistent `Editable`, `Read-only`, `Saved`, and `Unsaved` badges from the file preview header.
-  - Express state through button visibility, disabled state, and loading state rather than status copy.
-- Markdown files:
-  - In read-only mode, `.md` files default to rendered Markdown.
-  - Read-only Markdown view provides a rendered/source toggle.
-  - The Markdown rendered/source preference is page-session scoped and not persisted; first open after refresh defaults to rendered Markdown.
-  - Edit mode for Markdown is always source editing in Monaco, not WYSIWYG editing.
-  - Markdown rendering must reuse the safe message-rendering boundary: no raw HTML insertion into the DOM.
-- Fullscreen:
-  - Fullscreen is an app-level overlay, not the browser Fullscreen API.
-  - Fullscreen expands only the current preview/editor/diff surface, not the file tree.
-  - Fullscreen retains file name, mode controls, Markdown toggle, `Edit`, `Cancel`, and `Save` where applicable.
-  - `Esc` and a visible close control exit fullscreen.
-  - Monaco-based views must relayout after entering and exiting fullscreen.
-- Git diff preview:
-  - Git diff preview remains read-only.
-  - Only working tree, unstaged, text, non-binary, non-too-large, non-deleted diffs show `Edit`.
-  - Git diff `Edit` opens the same path in the Files panel directly in edit mode.
-  - Staged diffs, commit/history diffs, deleted files, binary diffs, and too-large diffs do not show `Edit`.
-  - Git diff preview also supports the same app-level fullscreen behavior for the current diff surface.
-- Acceptance criteria:
-  - Selecting a text file shows read-only preview first, with `Edit` but no `Save`.
-  - Clicking `Edit` shows `Cancel` and `Save`; clean content disables `Save`; dirty content enables `Save`.
-  - Image, binary, and truncated files never show `Edit` or `Save`.
-  - `.md` read-only preview defaults to rendered Markdown and can switch to source preview.
-  - `.md` edit mode always opens source editing.
-  - Dirty cancel/file switch/fullscreen close prompts before discarding edits.
-  - App-level fullscreen works for ordinary file preview/editing and Git diff preview.
-  - Working tree eligible diff `Edit` routes to Files edit mode; ineligible diffs have no edit control.
+  - Action labels should name the operation and target where needed.
+  - Empty states should tell users what is missing and the next action.
+  - Dangerous actions should name the scope and consequence.
 
 ## Implementation constraints
 
 - Framework/styling system:
-  - React 19 + Vite + Tailwind.
-  - Use existing reducer/controller state pattern before adding a new state library.
-  - Use lucide icons for common Git actions.
-- Project prompt presets:
-  - Store prompt presets in Server persistence, not runner persistence.
-  - Suggested table: `project_prompt_presets` with `id`, `project_id`, `title`, `content`, `sort_order`, `created_at`, `updated_at`.
-  - Suggested API shape:
-    - `GET /v1/projects/:id/prompt-presets`
-    - `POST /v1/projects/:id/prompt-presets`
-    - `PATCH /v1/projects/:id/prompt-presets/:presetId`
-    - `DELETE /v1/projects/:id/prompt-presets/:presetId`
-    - `PUT /v1/projects/:id/prompt-presets/order`
-  - Prompt preset APIs do not call runner RPC and must work while the runner is offline.
-  - Prompt preset create/update validation trims outer whitespace and enforces title/content required plus length caps.
-  - Prompt preset order is explicit and separate from `updatedAt`.
-  - Do not add prompt preset WebSocket broadcast events in the MVP; refresh after write and provide manual refresh.
-  - Web state can cache prompt presets by Project, but Server is the source of truth.
-  - Use a dedicated drag-and-drop library such as dnd-kit for cross-device drag-handle sorting rather than hand-written touch sorting.
-  - Tests should cover protocol validation, Server CRUD/reorder persistence, Web Settings management, composer insertion, user-message actions, and manual refresh behavior.
-- Agent activity protocol:
-  - Use a generic `AgentActivity` model rather than a Claude Code-specific protocol.
-  - First implementation may emit activities only from Claude Code.
-  - Persist agent activities separately from `Message` records so they reload with session detail but do not enter conversation history or transcript exports.
-  - Suggested minimum fields: `id`, `sessionId`, `agent`, `kind`, `label`, `createdAt`.
-  - Frontend must not parse provider-formatted prose to detect activity; runner/plugin code emits structured activity with a productized `label`.
-  - Approval requests remain actionable through the existing Approvals surface; activity only records short status such as `Waiting for approval`.
-  - WebSocket updates broadcast activity creation separately from `message:created`.
-  - Reducer/display tests must cover latest-group live summary, historical collapse, reload persistence, and intermediate output containment.
-- Git execution:
-  - Runner executes all Git operations.
-  - Use `simple-git` for common Git commands and native `git` fallback for advanced commands.
-  - Server and Web never store Git CLI credentials.
-  - `fetch`, `pull`, `push`, and `sync` use the runner machine's system Git credentials.
-  - Provider platform APIs are out of scope.
-- Git context addressing:
-  - Web sends structured refs only:
-
-```ts
-type GitContextRef =
-  | { kind: "project"; projectId: string }
-  | { kind: "session_worktree"; sessionId: string };
-```
-
-- Web must not send arbitrary filesystem paths for Git operations.
-- Session creation:
-  - New sessions default to local/direct mode.
-  - Worktree mode remains explicit.
-  - Worktree mode creates a new branch and a worktree.
-  - Worktree base ref selector defaults to the Project current branch.
-  - Detached HEAD is allowed as a base by resolving and displaying the base SHA.
-  - Unborn repos cannot create worktree sessions.
-  - Branch names are auto-generated and editable.
-  - Default branch name: `roam/<date>-<session-slug>-<short-id>`.
-  - Existing branch name collisions are errors; do not overwrite.
-- Worktree storage:
-  - Reuse current runner-local state pattern.
-  - `--data-dir` is relative to the runner workspace root and defaults to `.roam-runner`.
-  - Reject absolute paths, `~`, `..`, and normalized escapes.
-  - Worktree path: `<runnerWorkspaceRoot>/<dataDir>/worktrees/<projectId>/<sessionId>`.
-  - Do not special-case `.roam-runner` if the runner workspace root is also a Git repo.
-- Worktree lifecycle:
-  - Session and worktree/branch are independent resources.
-  - Archiving a session linked to a worktree asks whether to delete the worktree.
-  - Deleting a worktree never deletes the branch.
-  - Before deleting a worktree, show expectation-setting warning only; do not run dirty/unpushed/merged preflight blockers.
-  - Use force removal behavior after user confirmation if needed.
-- Git API shape:
-  - Lightweight read operations may use request/response RPC.
-  - Long or mutating operations use Git jobs with status/progress/result.
-  - Writes are serialized per Git context; reads can run concurrently with debounce.
-  - Different contexts can run independently.
-- Status model:
-  - Runner parses porcelain and returns resource groups.
-  - Frontend does not parse Git porcelain.
-  - Groups include staged, changes, conflicts, untracked, ignored, and submodules.
-- Diff model:
-  - Expose one canonical diff API: structured content diff for Monaco.
-  - Do not expose raw patch as the main protocol.
-  - Frontend may derive unified/copy/export text from old/new content.
-  - Runner remains responsible for Git semantic operations.
-- Staging model:
-  - Stage/unstage files, hunks, and selected ranges.
-  - Frontend sends selected ranges for line/hunk staging.
-  - Runner converts selection into safe Git operations.
-- Blame model:
-  - Return compressed blame ranges and de-duplicated commit metadata.
-- History/graph model:
-  - Load commit history/graph incrementally with cursors and filters.
-  - Do not fetch or persist full graph data at once.
-- Commit UI:
-  - Default commit box: message, Stage All, Unstage All, Commit.
-  - Commit operates on staged changes only.
-  - Advanced options live in overflow menus.
-- Dangerous operations:
-  - Prompt clearly before discard, clean, reset, force push, and worktree deletion.
-  - Do not strongly block after confirmation.
-  - Display the exact object/ref/file affected.
-- Persistence constraints:
-  - Store only:
-    - existing Project and Session identity data,
-    - session Git branch name,
-    - session base ref,
-    - session base SHA,
-    - worktree deletion timestamp,
-    - Git job audit metadata,
-    - session Git artifact links such as commit SHA or local Git artifact refs.
-  - Do not store:
-    - full diff,
-    - blame results,
-    - commit graph,
-    - file history,
-    - branch/remote/stash lists,
-    - full stdout/stderr,
-    - Monaco models,
-    - active context UI state.
+  - React 19, Vite, TypeScript, Tailwind.
+  - Introduce shadcn/ui with Radix UI primitives and lucide-react icons.
+  - Keep Tailwind as the styling foundation.
+- Design-token constraints:
+  - Define light-first CSS variables for background, foreground, muted, accent, border, ring, destructive, success, warning, info, radius, and elevation.
+  - Prepare dark theme variables but do not require dark theme completion in the first pass.
+  - Preserve existing semantic signal intent from `tailwind.config.ts`.
 - Performance constraints:
-  - Lazy-load Monaco.
-  - Page history/graph.
-  - Load diffs per selected file.
-  - Add size caps and binary/too-large states.
-  - Debounce status refresh.
+  - Keep Monaco-loaded surfaces lazy or scoped to panels that need them.
+  - Command Palette search must remain responsive on normal project/session/file counts.
+  - Avoid layout shifts in panes, toolbars, tabs, rows, and command results.
 - Compatibility constraints:
-  - System Git is required on the runner.
-  - Git LFS and submodule behavior are mediated through system Git.
-  - LFS is not separately managed; errors are surfaced from Git.
-  - Submodule status can appear in the parent repo, but no child repo context is opened.
+  - Do not break existing runner/server contracts while redesigning UI surfaces.
+  - Component migration should be incremental and testable.
+  - Avoid adding dependencies beyond those needed for shadcn/Radix unless explicitly justified.
 - Test/screenshot expectations:
-  - Shared protocol tests for Git schemas.
-  - Runner tests using temporary Git repos for status, diff, branch worktree, commit, stash, and error handling.
-  - Server tests for context resolution, job persistence, runner routing, and minimal persistence.
-  - Web reducer/component tests for context switching, status groups, commit box, dangerous confirmations, and responsive Git tab states.
-  - Web tests for default read-only file preview, edit/cancel/save button states, dirty discard confirmation, Markdown rendered/source toggle, fullscreen overlay, and Git diff edit routing.
-  - Playwright or browser smoke tests for desktop/tablet/mobile Git tab layout once implemented.
+  - Update unit/component tests for IA changes, especially Settings removal from workspace tabs and Runner filtering.
+  - Add tests for Command Palette opening, keyboard shortcut, search groups, and action dispatch.
+  - Add tests for assistant activity collapse/default-active behavior.
+  - Run `pnpm --filter @roamcli/web typecheck` and targeted tests after implementation.
+  - For frontend implementation, verify desktop and mobile screenshots with Browser/Playwright before completion.
 
 ## Open questions
 
-- [ ] Confirm whether `Git` tab label should be English-only or localized with the existing mixed Chinese/English mobile labels.
-- [ ] Decide whether Git job stdout/stderr copy buffer should survive only while the page is open or also across WebSocket reconnects without DB persistence.
+- [ ] Exact shadcn installation strategy and component list should be finalized during implementation after checking current official shadcn/ui docs.
+- [ ] Whether Settings Drawer uses internal detail routing or nested views inside one component needs implementation design.
+- [ ] Command Palette action list should be enumerated from current supported operations before coding.
+- [ ] Whether dark mode is scheduled for a later milestone or only token-prepared remains a product decision.

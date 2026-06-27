@@ -19,7 +19,9 @@ import type {
   GitJob,
   Message,
   MessageAttachment,
+  Project,
   ProjectPromptPreset,
+  Session,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
@@ -347,6 +349,10 @@ function openSettingsTab() {
   fireEvent.click(screen.getAllByRole("button", { name: "Settings" })[0]!);
 }
 
+function closeSettingsDrawer() {
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+}
+
 async function findSessionFile(name: RegExp) {
   const src = await screen.findByRole("treeitem", { name: /src/ });
   if (src.getAttribute("aria-expanded") !== "true") {
@@ -484,6 +490,19 @@ describe("App", () => {
   let sessionDetailAttachments: MessageAttachment[];
   let sessionDetailApprovals: Approval[];
   let sessionDetailArtifacts: Artifact[];
+  let extraProjects: Project[];
+  let extraSessions: Session[];
+  let fileTreeRoot: {
+    path: string;
+    name: string;
+    type: "directory";
+    children?: Array<{
+      path: string;
+      name: string;
+      type: "directory" | "file";
+      size?: number;
+    }>;
+  };
 
   beforeEach(() => {
     fetchRequests = [];
@@ -616,6 +635,20 @@ describe("App", () => {
     sessionDetailAttachments = [];
     sessionDetailApprovals = [patchApproval];
     sessionDetailArtifacts = [patchArtifact];
+    extraProjects = [];
+    extraSessions = [];
+    fileTreeRoot = {
+      path: ".",
+      name: "workspace",
+      type: "directory",
+      children: [
+        {
+          path: "src",
+          name: "src",
+          type: "directory",
+        },
+      ],
+    };
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -709,7 +742,10 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({
-            projects: defaultProjectVisible ? [project] : [],
+            projects: [
+              ...(defaultProjectVisible ? [project] : []),
+              ...extraProjects,
+            ],
           });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/archive") {
@@ -776,23 +812,28 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({
-            sessions: defaultSessionVisible
-              ? [
-                  {
-                    ...session,
-                    title: remoteSessionTitle,
-                    status: remoteSessionStatus,
-                    executionMode: remoteSessionExecutionMode,
-                    executionFolder: remoteSessionExecutionFolder,
-                    ...(remoteSessionArchivedAt === undefined
-                      ? {}
-                      : { archivedAt: remoteSessionArchivedAt }),
-                    ...(remoteSessionWorktreeDeletedAt === undefined
-                      ? {}
-                      : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
-                  },
-                ]
-              : [],
+            sessions: [
+              ...(defaultSessionVisible
+                ? [
+                    {
+                      ...session,
+                      title: remoteSessionTitle,
+                      status: remoteSessionStatus,
+                      executionMode: remoteSessionExecutionMode,
+                      executionFolder: remoteSessionExecutionFolder,
+                      ...(remoteSessionArchivedAt === undefined
+                        ? {}
+                        : { archivedAt: remoteSessionArchivedAt }),
+                      ...(remoteSessionWorktreeDeletedAt === undefined
+                        ? {}
+                        : {
+                            worktreeDeletedAt: remoteSessionWorktreeDeletedAt,
+                          }),
+                    },
+                  ]
+                : []),
+              ...extraSessions,
+            ],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
@@ -884,6 +925,19 @@ describe("App", () => {
             artifacts: sessionDetailArtifacts,
           });
         }
+        const extraSession = extraSessions.find(
+          (candidate) =>
+            requestUrl.pathname === `/v1/sessions/${candidate.id}`,
+        );
+        if (extraSession) {
+          return jsonResponse({
+            session: extraSession,
+            messages: [],
+            attachments: [],
+            approvals: [],
+            artifacts: [],
+          });
+        }
         if (
           requestUrl.pathname === "/v1/sessions/session-1/status/check" &&
           init?.method === "POST"
@@ -967,20 +1021,7 @@ describe("App", () => {
               },
             });
           }
-          return jsonResponse({
-            root: {
-              path: ".",
-              name: "workspace",
-              type: "directory",
-              children: [
-                {
-                  path: "src",
-                  name: "src",
-                  type: "directory",
-                },
-              ],
-            },
-          });
+          return jsonResponse({ root: fileTreeRoot });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files/content") {
           const requestedPath = requestUrl.searchParams.get("path") ?? "";
@@ -1211,10 +1252,9 @@ describe("App", () => {
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
     expect(screen.getByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
-    expect(screen.getByText("changes.patch")).toBeInTheDocument();
     expect(
-      screen.getByText(/artifacts\/session-1\/changes.patch/),
-    ).toBeInTheDocument();
+      screen.queryByText(/artifacts\/session-1\/changes.patch/),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("navigation", { name: "Mobile tabs" }),
     ).toBeInTheDocument();
@@ -1241,6 +1281,118 @@ describe("App", () => {
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
       ).toEqual({ projectId: "project-1", sessionId: "session-1" });
     });
+  });
+
+  it("opens primary workspace actions from the command palette", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    fireEvent.click(
+      within(commandPalette).getByRole("option", { name: /Open Git/ }),
+    );
+
+    expect(screen.getByRole("region", { name: "Git" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const reopenedPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    fireEvent.click(
+      within(reopenedPalette).getByRole("option", { name: /Open Settings/ }),
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches all active project sessions from the command palette", async () => {
+    extraSessions = Array.from({ length: 45 }, (_, index): Session => ({
+      ...session,
+      id: `session-extra-${index + 1}`,
+      title: `Extra session ${index + 1}`,
+      status: "running",
+      executionMode: "direct",
+      updatedAt: `2026-06-05T00:${String(index + 1).padStart(2, "0")}:00.000Z`,
+    }));
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+    fireEvent.change(within(commandPalette).getByRole("combobox"), {
+      target: { value: "Extra session 45" },
+    });
+
+    expect(
+      within(commandPalette).getByRole("option", {
+        name: /Extra session 45/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches all loaded files from the command palette", async () => {
+    fileTreeRoot = {
+      path: ".",
+      name: "workspace",
+      type: "directory",
+      children: Array.from({ length: 45 }, (_, index) => ({
+        path: `src/generated-${index + 1}.ts`,
+        name: `generated-${index + 1}.ts`,
+        type: "file",
+        size: 12,
+      })),
+    };
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+    fireEvent.change(within(commandPalette).getByRole("combobox"), {
+      target: { value: "generated-45" },
+    });
+
+    expect(
+      within(commandPalette).getByRole("option", {
+        name: /generated-45\.ts/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides sessions without an active project from the command palette", async () => {
+    extraSessions = [
+      {
+        ...session,
+        id: "archived-project-session",
+        projectId: "archived-project",
+        title: "Archived project session",
+        status: "running",
+        executionMode: "direct",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    expect(
+      within(commandPalette).queryByRole("option", {
+        name: /Archived project session/,
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes account security from the Settings tab", async () => {
@@ -1394,7 +1546,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
     expect(screen.getByText("Loading account settings...")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    closeSettingsDrawer();
     queuedAccountSecurityResponses.push(freshAccount);
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
@@ -1508,7 +1660,7 @@ describe("App", () => {
     queuedRunnerTokenResponses.push(slowRegenerate);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Files" })[0]!);
+    closeSettingsDrawer();
     openSettingsTab();
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
     expect(await screen.findByText("runner-token")).toBeInTheDocument();
@@ -1860,8 +2012,8 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Approval required")).toBeInTheDocument();
     expect(
-      screen.getByText(/artifacts\/session-1\/late.patch/),
-    ).toBeInTheDocument();
+      screen.queryByText(/artifacts\/session-1\/late.patch/),
+    ).not.toBeInTheDocument();
     expect(
       fetchCalls.some(
         (call) =>
@@ -3751,6 +3903,25 @@ describe("App", () => {
     expect(settings.queryByText("First preset")).not.toBeInTheDocument();
     expect(settings.getByText("Second preset")).toBeInTheDocument();
     expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
+  it("opens the prompt preset editor above the Settings drawer", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    expect(await settings.findByText("First preset")).toBeInTheDocument();
+
+    fireEvent.click(settings.getByRole("button", { name: "New" }));
+
+    expect(
+      screen.queryByRole("region", { name: "Settings" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "New Prompt Preset" }),
+    ).toBeInTheDocument();
   });
 
   it("clears Settings prompt preset refresh errors when changing projects", async () => {
