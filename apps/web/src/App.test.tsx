@@ -492,6 +492,17 @@ describe("App", () => {
   let sessionDetailArtifacts: Artifact[];
   let extraProjects: Project[];
   let extraSessions: Session[];
+  let fileTreeRoot: {
+    path: string;
+    name: string;
+    type: "directory";
+    children?: Array<{
+      path: string;
+      name: string;
+      type: "directory" | "file";
+      size?: number;
+    }>;
+  };
 
   beforeEach(() => {
     fetchRequests = [];
@@ -626,6 +637,18 @@ describe("App", () => {
     sessionDetailArtifacts = [patchArtifact];
     extraProjects = [];
     extraSessions = [];
+    fileTreeRoot = {
+      path: ".",
+      name: "workspace",
+      type: "directory",
+      children: [
+        {
+          path: "src",
+          name: "src",
+          type: "directory",
+        },
+      ],
+    };
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -998,20 +1021,7 @@ describe("App", () => {
               },
             });
           }
-          return jsonResponse({
-            root: {
-              path: ".",
-              name: "workspace",
-              type: "directory",
-              children: [
-                {
-                  path: "src",
-                  name: "src",
-                  type: "directory",
-                },
-              ],
-            },
-          });
+          return jsonResponse({ root: fileTreeRoot });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1/files/content") {
           const requestedPath = requestUrl.searchParams.get("path") ?? "";
@@ -1316,6 +1326,36 @@ describe("App", () => {
     expect(
       within(commandPalette).getByRole("option", {
         name: /Extra session 45/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches all loaded files from the command palette", async () => {
+    fileTreeRoot = {
+      path: ".",
+      name: "workspace",
+      type: "directory",
+      children: Array.from({ length: 45 }, (_, index) => ({
+        path: `src/generated-${index + 1}.ts`,
+        name: `generated-${index + 1}.ts`,
+        type: "file",
+        size: 12,
+      })),
+    };
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+    fireEvent.change(within(commandPalette).getByRole("combobox"), {
+      target: { value: "generated-45" },
+    });
+
+    expect(
+      within(commandPalette).getByRole("option", {
+        name: /generated-45\.ts/,
       }),
     ).toBeInTheDocument();
   });

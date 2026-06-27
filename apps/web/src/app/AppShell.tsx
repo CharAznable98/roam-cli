@@ -1247,9 +1247,7 @@ function AppCommandPalette({
       ),
     [activeProjectIds, sessions],
   );
-  const fileItems = useMemo(() => flattenCommandFiles(files).slice(0, 40), [
-    files,
-  ]);
+  const fileItems = useMemo(() => flattenCommandFiles(files), [files]);
   const close = () => onOpenChange(false);
 
   return (
