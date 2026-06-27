@@ -575,6 +575,15 @@ export function AppShell({ controller }: AppShellProps) {
     [notify, selectedSession],
   );
 
+  const openSettingsPromptPresetEditor = useCallback(
+    (projectId: string, preset?: ProjectPromptPreset) => {
+      setSettingsDrawerOpen(false);
+      setSettingsView("home");
+      setPromptPresetEditor(preset ? { projectId, preset } : { projectId });
+    },
+    [],
+  );
+
   const savePromptPreset = useCallback(
     async (
       projectId: string,
@@ -1114,10 +1123,10 @@ export function AppShell({ controller }: AppShellProps) {
                 promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
                 onRefreshPromptPresets={refreshProjectPromptPresets}
                 onNewPromptPreset={(projectId) =>
-                  setPromptPresetEditor({ projectId })
+                  openSettingsPromptPresetEditor(projectId)
                 }
                 onEditPromptPreset={(projectId, preset) =>
-                  setPromptPresetEditor({ projectId, preset })
+                  openSettingsPromptPresetEditor(projectId, preset)
                 }
                 onDeletePromptPreset={removePromptPreset}
                 onReorderPromptPresets={reorderPromptPresets}
@@ -1226,7 +1235,18 @@ function AppCommandPalette({
   onOpenSettings: (view?: SettingsView) => void;
   onNewSession: () => void;
 }) {
-  const visibleSessions = sessions.filter((session) => !session.archivedAt);
+  const activeProjectIds = useMemo(
+    () => new Set(projects.map((project) => project.id)),
+    [projects],
+  );
+  const visibleSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          !session.archivedAt && activeProjectIds.has(session.projectId),
+      ),
+    [activeProjectIds, sessions],
+  );
   const fileItems = useMemo(() => flattenCommandFiles(files).slice(0, 40), [
     files,
   ]);
@@ -1265,7 +1285,7 @@ function AppCommandPalette({
           </CommandGroup>
           <CommandSeparator />
           <CommandGroup heading="Sessions">
-            {visibleSessions.slice(0, 40).map((session) => (
+            {visibleSessions.map((session) => (
               <CommandItem
                 key={session.id}
                 value={`session ${session.title} ${session.cwd}`}

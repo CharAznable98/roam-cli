@@ -19,7 +19,9 @@ import type {
   GitJob,
   Message,
   MessageAttachment,
+  Project,
   ProjectPromptPreset,
+  Session,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
 import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
@@ -488,6 +490,8 @@ describe("App", () => {
   let sessionDetailAttachments: MessageAttachment[];
   let sessionDetailApprovals: Approval[];
   let sessionDetailArtifacts: Artifact[];
+  let extraProjects: Project[];
+  let extraSessions: Session[];
 
   beforeEach(() => {
     fetchRequests = [];
@@ -620,6 +624,8 @@ describe("App", () => {
     sessionDetailAttachments = [];
     sessionDetailApprovals = [patchApproval];
     sessionDetailArtifacts = [patchArtifact];
+    extraProjects = [];
+    extraSessions = [];
     sockets = [];
     localStorage.clear();
     vi.stubGlobal("WebSocket", TestWebSocket);
@@ -713,7 +719,10 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({
-            projects: defaultProjectVisible ? [project] : [],
+            projects: [
+              ...(defaultProjectVisible ? [project] : []),
+              ...extraProjects,
+            ],
           });
         }
         if (requestUrl.pathname === "/v1/projects/project-1/archive") {
@@ -780,23 +789,28 @@ describe("App", () => {
         }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({
-            sessions: defaultSessionVisible
-              ? [
-                  {
-                    ...session,
-                    title: remoteSessionTitle,
-                    status: remoteSessionStatus,
-                    executionMode: remoteSessionExecutionMode,
-                    executionFolder: remoteSessionExecutionFolder,
-                    ...(remoteSessionArchivedAt === undefined
-                      ? {}
-                      : { archivedAt: remoteSessionArchivedAt }),
-                    ...(remoteSessionWorktreeDeletedAt === undefined
-                      ? {}
-                      : { worktreeDeletedAt: remoteSessionWorktreeDeletedAt }),
-                  },
-                ]
-              : [],
+            sessions: [
+              ...(defaultSessionVisible
+                ? [
+                    {
+                      ...session,
+                      title: remoteSessionTitle,
+                      status: remoteSessionStatus,
+                      executionMode: remoteSessionExecutionMode,
+                      executionFolder: remoteSessionExecutionFolder,
+                      ...(remoteSessionArchivedAt === undefined
+                        ? {}
+                        : { archivedAt: remoteSessionArchivedAt }),
+                      ...(remoteSessionWorktreeDeletedAt === undefined
+                        ? {}
+                        : {
+                            worktreeDeletedAt: remoteSessionWorktreeDeletedAt,
+                          }),
+                    },
+                  ]
+                : []),
+              ...extraSessions,
+            ],
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
@@ -886,6 +900,19 @@ describe("App", () => {
             attachments: sessionDetailAttachments,
             approvals: sessionDetailApprovals,
             artifacts: sessionDetailArtifacts,
+          });
+        }
+        const extraSession = extraSessions.find(
+          (candidate) =>
+            requestUrl.pathname === `/v1/sessions/${candidate.id}`,
+        );
+        if (extraSession) {
+          return jsonResponse({
+            session: extraSession,
+            messages: [],
+            attachments: [],
+            approvals: [],
+            artifacts: [],
           });
         }
         if (
@@ -1264,6 +1291,59 @@ describe("App", () => {
     expect(
       screen.getByRole("region", { name: "Settings" }),
     ).toBeInTheDocument();
+  });
+
+  it("searches all active project sessions from the command palette", async () => {
+    extraSessions = Array.from({ length: 45 }, (_, index): Session => ({
+      ...session,
+      id: `session-extra-${index + 1}`,
+      title: `Extra session ${index + 1}`,
+      status: "running",
+      executionMode: "direct",
+      updatedAt: `2026-06-05T00:${String(index + 1).padStart(2, "0")}:00.000Z`,
+    }));
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+    fireEvent.change(within(commandPalette).getByRole("combobox"), {
+      target: { value: "Extra session 45" },
+    });
+
+    expect(
+      within(commandPalette).getByRole("option", {
+        name: /Extra session 45/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides sessions without an active project from the command palette", async () => {
+    extraSessions = [
+      {
+        ...session,
+        id: "archived-project-session",
+        projectId: "archived-project",
+        title: "Archived project session",
+        status: "running",
+        executionMode: "direct",
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const commandPalette = await screen.findByRole("dialog", {
+      name: "Command Palette",
+    });
+
+    expect(
+      within(commandPalette).queryByRole("option", {
+        name: /Archived project session/,
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("exposes account security from the Settings tab", async () => {
@@ -3774,6 +3854,25 @@ describe("App", () => {
     expect(settings.queryByText("First preset")).not.toBeInTheDocument();
     expect(settings.getByText("Second preset")).toBeInTheDocument();
     expect(settings.queryByText("Third preset")).not.toBeInTheDocument();
+  });
+
+  it("opens the prompt preset editor above the Settings drawer", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Project Settings/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+    expect(await settings.findByText("First preset")).toBeInTheDocument();
+
+    fireEvent.click(settings.getByRole("button", { name: "New" }));
+
+    expect(
+      screen.queryByRole("region", { name: "Settings" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "New Prompt Preset" }),
+    ).toBeInTheDocument();
   });
 
   it("clears Settings prompt preset refresh errors when changing projects", async () => {
