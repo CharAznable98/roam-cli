@@ -71,6 +71,52 @@ describe("createRoamApiClient", () => {
     );
   });
 
+  it("loads session summaries without fetching every session detail", async () => {
+    const requests: string[] = [];
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        requests.push(path);
+        if (path === "/v1/runners") {
+          return Response.json({ runners: [] });
+        }
+        if (path === "/v1/projects") {
+          return Response.json({ projects: [] });
+        }
+        if (path === "/v1/sessions") {
+          return Response.json({
+            sessions: [
+              {
+                id: "session-1",
+                title: "Persisted session",
+                projectId: "project-1",
+                runnerId: "runner-1",
+                agent: "codex",
+                status: "completed",
+                executionMode: "direct",
+                executionFolder: ".",
+                cwd: ".",
+                createdAt: "2026-06-10T00:00:00.000Z",
+                updatedAt: "2026-06-10T00:01:00.000Z",
+              },
+            ],
+          });
+        }
+        return Response.json(
+          { error: "unexpected detail request" },
+          { status: 500 },
+        );
+      },
+    });
+
+    const initialState = await client.loadInitialState();
+
+    expect(initialState.sessions).toHaveLength(1);
+    expect(initialState.messages).toEqual([]);
+    expect(requests).toEqual(["/v1/runners", "/v1/projects", "/v1/sessions"]);
+  });
+
   it("formats worktree archive failures as user-facing messages", async () => {
     const client = createRoamApiClient({
       baseUrl: "http://127.0.0.1:8787",

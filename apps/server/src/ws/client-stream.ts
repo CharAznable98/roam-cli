@@ -37,6 +37,10 @@ export function registerClientStreamRoute(
       }
       try {
         const command = ClientCommandSchema.parse(parseSocketJson(data));
+        if (command.type === "activeSessionChanged") {
+          context.hub.setStreamActiveSession(socket, command.sessionId);
+          return;
+        }
         void context.services.sessions
           .handleClientCommand(command, activeSession.id)
           .catch((error: unknown) => {
