@@ -55,6 +55,14 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   );
 });
 
+export const StreamingTextMessage = memo(function StreamingTextMessage({
+  content,
+}: {
+  content: string;
+}) {
+  return <div className="streaming-message-text">{content}</div>;
+});
+
 function createMarkdownComponents(options: {
   fileLinkContext: MarkdownFileLinkContext | undefined;
   onOpenFileLink: ((target: MarkdownFileLinkTarget) => void) | undefined;

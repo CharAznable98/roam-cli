@@ -27,6 +27,7 @@ type FilePanelProps = {
   onSelectFile: (path: string) => void;
   onLoadDirectory: (path: string) => void;
   onRefreshTree: () => void;
+  onRefreshFile: () => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onChangeContent: (content: string) => void;
@@ -47,6 +48,7 @@ export function FilePanel({
   onSelectFile,
   onLoadDirectory,
   onRefreshTree,
+  onRefreshFile,
   onStartEdit,
   onCancelEdit,
   onChangeContent,
@@ -186,7 +188,19 @@ export function FilePanel({
                     </button>
                   </div>
                 ) : null}
-                {visibleContent ? (
+                {visibleContent && !isEditing ? (
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Refresh file preview"
+                    title="Refresh file preview"
+                    disabled={contentState === "loading"}
+                    onClick={onRefreshFile}
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                ) : null}
+                {visibleContent || fullscreen ? (
                   <button
                     className="icon-button"
                     type="button"

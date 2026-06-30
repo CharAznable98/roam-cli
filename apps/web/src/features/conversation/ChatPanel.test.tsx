@@ -650,6 +650,27 @@ describe("ChatPanel", () => {
     expect(codeToHtmlMock).toHaveBeenCalledTimes(highlightCount);
   });
 
+  it("renders streaming assistant output without markdown code highlighting", () => {
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "```ts\nconst value = 1;\n```",
+      encrypted: false,
+      streaming: true,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    const { container } = render(
+      <ChatPanel session={baseSession} messages={[message]} onSend={vi.fn()} />,
+    );
+
+    expect(container.querySelector(".streaming-message-text")?.textContent).toBe(
+      "```ts\nconst value = 1;\n```",
+    );
+    expect(codeToHtmlMock).not.toHaveBeenCalled();
+  });
+
   it("groups session header actions in a text menu", () => {
     const onControl = vi.fn();
     const onRename = vi.fn();

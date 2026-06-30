@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import "../test/setup.js";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ProjectPromptPreset } from "@roamcli/shared/protocol";
+import type {
+  Project,
+  ProjectPromptPreset,
+  Session,
+} from "@roamcli/shared/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRoamController } from "./useRoamController";
 
@@ -33,18 +37,24 @@ class TestWebSocket extends EventTarget {
   static OPEN = 1;
   static CLOSED = 3;
   readyState = TestWebSocket.OPEN;
+  readonly sent: string[] = [];
 
   constructor(readonly url: URL) {
     super();
+    testSockets.push(this);
   }
 
-  send() {}
+  send(payload: string) {
+    this.sent.push(payload);
+  }
 
   close() {
     this.readyState = TestWebSocket.CLOSED;
     this.dispatchEvent(new Event("close"));
   }
 }
+
+let testSockets: TestWebSocket[] = [];
 
 const authSession = {
   id: "auth-session-1",
@@ -79,11 +89,18 @@ describe("useRoamController prompt presets", () => {
   let reorderResponses: Array<Deferred<Response>>;
   let reorderBodies: string[][];
   let promptPresetFetchResponses: Array<Deferred<Response>>;
+  let projectSummaries: Project[];
+  let sessionSummaries: Session[];
+  let sessionDetails: Map<string, unknown>;
 
   beforeEach(() => {
     reorderResponses = [];
     reorderBodies = [];
     promptPresetFetchResponses = [];
+    projectSummaries = [];
+    sessionSummaries = [];
+    sessionDetails = new Map();
+    testSockets = [];
     vi.stubGlobal("WebSocket", TestWebSocket);
     vi.stubGlobal(
       "fetch",
@@ -101,10 +118,36 @@ describe("useRoamController prompt presets", () => {
           return jsonResponse({ runners: [] });
         }
         if (requestUrl.pathname === "/v1/projects") {
-          return jsonResponse({ projects: [] });
+          return jsonResponse({ projects: projectSummaries });
+        }
+        if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
+          return jsonResponse({
+            session: {
+              id: "session-created",
+              title: "Created session",
+              projectId: "project-1",
+              runnerId: "runner-1",
+              agent: "codex",
+              status: "running",
+              executionMode: "direct",
+              executionFolder: ".",
+              cwd: ".",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+            },
+          });
         }
         if (requestUrl.pathname === "/v1/sessions") {
-          return jsonResponse({ sessions: [] });
+          return jsonResponse({ sessions: sessionSummaries });
+        }
+        if (requestUrl.pathname.startsWith("/v1/sessions/")) {
+          const sessionId = decodeURIComponent(
+            requestUrl.pathname.replace("/v1/sessions/", ""),
+          );
+          return jsonResponse(
+            sessionDetails.get(sessionId) ?? { error: "not found" },
+            sessionDetails.has(sessionId) ? 200 : 404,
+          );
         }
         if (requestUrl.pathname === "/v1/projects/project-1/prompt-presets") {
           if (init?.method === "POST") {
@@ -221,4 +264,119 @@ describe("useRoamController prompt presets", () => {
       ).toMatch(/refresh unavailable/),
     );
   });
+
+  it("subscribes to the selected session and lazy-loads its detail", async () => {
+    projectSummaries = [
+      {
+        id: "project-1",
+        name: "Project One",
+        runnerId: "runner-1",
+        directory: "/workspace",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+        lastActiveAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    sessionSummaries = [
+      {
+        id: "session-1",
+        title: "Lazy session",
+        projectId: "project-1",
+        runnerId: "runner-1",
+        agent: "codex",
+        status: "completed",
+        executionMode: "direct",
+        executionFolder: ".",
+        cwd: ".",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    sessionDetails.set("session-1", {
+      session: sessionSummaries[0],
+      messages: [
+        {
+          id: "message-1",
+          sessionId: "session-1",
+          role: "assistant",
+          content: "Loaded lazily",
+          encrypted: false,
+          createdAt: "2026-06-05T00:00:01.000Z",
+        },
+      ],
+      attachments: [],
+      approvals: [],
+      artifacts: [],
+    });
+    const { result } = renderHook(() => useRoamController());
+
+    act(() => {
+      testSockets[0]?.dispatchEvent(new Event("open"));
+    });
+    expect(activeSessionCommands()).toEqual([]);
+
+    await waitFor(() =>
+      expect(result.current.selectedSession?.id).toBe("session-1"),
+    );
+    await waitFor(() =>
+      expect(
+        result.current.sessionMessages.some(
+          (message) => message.content === "Loaded lazily",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        testSockets.some((socket) =>
+          socket.sent.some((payload) =>
+            payload.includes('"type":"activeSessionChanged"') &&
+            payload.includes('"sessionId":"session-1"'),
+          ),
+        ),
+      ).toBe(true),
+    );
+    expect(activeSessionCommands()).toEqual([
+      expect.objectContaining({ sessionId: "session-1" }),
+    ]);
+  });
+
+  it("subscribes to newly created sessions before selection effects catch up", async () => {
+    projectSummaries = [
+      {
+        id: "project-1",
+        name: "Project One",
+        runnerId: "runner-1",
+        directory: "/workspace",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+        lastActiveAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    const { result } = renderHook(() => useRoamController());
+
+    await waitFor(() =>
+      expect(result.current.selectedProject?.id).toBe("project-1"),
+    );
+
+    await act(async () => {
+      await result.current.createSession("project-1", {
+        title: "Created session",
+        prompt: "hello",
+        agent: "codex",
+        executionMode: "direct",
+      });
+    });
+
+    expect(activeSessionCommands()).toContainEqual(
+      expect.objectContaining({ sessionId: "session-created" }),
+    );
+  });
 });
+
+function activeSessionCommands() {
+  return testSockets.flatMap((socket) =>
+    socket.sent
+      .map((payload) => JSON.parse(payload) as { type?: string })
+      .filter((command) => command.type === "activeSessionChanged"),
+  );
+}

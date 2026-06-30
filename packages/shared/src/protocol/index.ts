@@ -751,6 +751,11 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
     signal: z.enum(["interrupt", "stop", "resume"]),
   }),
+  z.object({
+    type: z.literal("activeSessionChanged"),
+    requestId: z.string().min(1),
+    sessionId: z.string().min(1).optional(),
+  }),
 ]);
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 

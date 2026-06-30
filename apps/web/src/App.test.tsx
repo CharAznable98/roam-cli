@@ -504,6 +504,23 @@ describe("App", () => {
     }>;
   };
 
+  function countSessionFileTreeRequests(): number {
+    return fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files" &&
+        call.init?.method !== "PUT",
+    ).length;
+  }
+
+  function countSessionFileContentRequests(path: string): number {
+    return fetchCalls.filter(
+      (call) =>
+        new URL(call.url).pathname === "/v1/sessions/session-1/files/content" &&
+        new URL(call.url).searchParams.get("path") === path &&
+        call.init?.method !== "PUT",
+    ).length;
+  }
+
   beforeEach(() => {
     fetchRequests = [];
     fetchCalls = [];
@@ -4274,6 +4291,9 @@ describe("App", () => {
     );
     expect(sourcePreview).toHaveClass("monaco-file-editor");
     expect(sourcePreview).toHaveAttribute("readonly");
+    expect(
+      screen.getByRole("button", { name: "Refresh file preview" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Save file" }),
@@ -4287,6 +4307,74 @@ describe("App", () => {
     expect(new URL(contentUrl ?? "").searchParams.get("path")).toBe(
       "src/App.tsx",
     );
+  });
+
+  it("refreshes the selected file preview without refreshing the file tree", async () => {
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    expect(await findFileSourcePreview("src/App.tsx")).toHaveValue(
+      "export function RealContent() { return null; }",
+    );
+
+    const initialContentRequests =
+      countSessionFileContentRequests("src/App.tsx");
+    const initialTreeRequests = countSessionFileTreeRequests();
+    const refreshedContent = deferred<Response>();
+    deferredFileContent.set("src/App.tsx", refreshedContent);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh file preview" }),
+    );
+
+    expect(screen.getByText("Loading file content...")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "View source src/App.tsx" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(countSessionFileContentRequests("src/App.tsx")).toBe(
+        initialContentRequests + 1,
+      ),
+    );
+    expect(countSessionFileTreeRequests()).toBe(initialTreeRequests);
+
+    deferredFileContent.delete("src/App.tsx");
+    await act(async () => {
+      refreshedContent.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-content-refresh",
+            sessionId: "session-1",
+            path: "src/App.tsx",
+            kind: "text",
+            content: "export const refreshed = true;",
+            truncated: false,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await refreshedContent.promise;
+    });
+
+    expect(await findFileSourcePreview("src/App.tsx")).toHaveValue(
+      "export const refreshed = true;",
+    );
+  });
+
+  it("hides file preview refresh while editing", async () => {
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/App\.tsx/));
+    await findFileSourcePreview("src/App.tsx");
+    expect(
+      screen.getByRole("button", { name: "Refresh file preview" }),
+    ).toBeInTheDocument();
+
+    await startFileEdit("src/App.tsx");
+
+    expect(
+      screen.queryByRole("button", { name: "Refresh file preview" }),
+    ).not.toBeInTheDocument();
   });
 
   it("confirms before cancelling dirty file edits", async () => {
@@ -4446,6 +4534,9 @@ describe("App", () => {
       "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
     );
     expect(
+      screen.getByRole("button", { name: "Refresh file preview" }),
+    ).toBeInTheDocument();
+    expect(
       screen.queryByRole("button", { name: "Edit" }),
     ).not.toBeInTheDocument();
     expect(
@@ -4475,6 +4566,60 @@ describe("App", () => {
       "# Markdown Preview\n\n- rendered item",
     );
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("preserves markdown source mode and fullscreen after refreshing the preview", async () => {
+    render(<App />);
+
+    fireEvent.click(await findSessionFile(/README\.md/));
+    await screen.findByRole("heading", { name: "Markdown Preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    expect(await findFileSourcePreview("src/README.md")).toHaveValue(
+      "# Markdown Preview\n\n- rendered item",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen preview" }));
+    expect(
+      screen.getByRole("button", { name: "Exit fullscreen preview" }),
+    ).toBeInTheDocument();
+
+    const refreshedContent = deferred<Response>();
+    deferredFileContent.set("src/README.md", refreshedContent);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh file preview" }),
+    );
+
+    expect(screen.getByText("Loading file content...")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Exit fullscreen preview" }),
+    ).toBeInTheDocument();
+
+    deferredFileContent.delete("src/README.md");
+    await act(async () => {
+      refreshedContent.resolve(
+        jsonResponse({
+          result: {
+            requestId: "file-content-markdown-refresh",
+            sessionId: "session-1",
+            path: "src/README.md",
+            kind: "text",
+            content: "# Refreshed Markdown\n\n- current item",
+            truncated: false,
+            encoding: "utf8",
+          },
+        }),
+      );
+      await refreshedContent.promise;
+    });
+
+    expect(await findFileSourcePreview("src/README.md")).toHaveValue(
+      "# Refreshed Markdown\n\n- current item",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Refreshed Markdown" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Exit fullscreen preview" }),
+    ).toBeInTheDocument();
   });
 
   it("opens runner-local markdown file links in the file panel", async () => {

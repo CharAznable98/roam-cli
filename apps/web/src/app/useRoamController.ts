@@ -19,6 +19,7 @@ import type {
   ExecutionMode,
   ImageAttachmentUpload,
   ProjectPromptPreset,
+  ServerEvent,
   Session,
   SessionStatus,
 } from "@roamcli/shared/protocol";
@@ -111,6 +112,8 @@ export function useRoamController() {
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
+  const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const activeSessionSubscriptionSequenceRef = useRef(0);
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
   const accountSecurityRequestIdRef = useRef(0);
   const promptPresetRequestVersionsRef = useRef<Record<string, number>>({});
@@ -147,6 +150,19 @@ export function useRoamController() {
     setAccountSecurity(undefined);
   }, []);
 
+  const syncActiveSessionSubscription = useCallback(
+    (sessionId: string | undefined) => {
+      activeSessionIdRef.current = sessionId;
+      activeSessionSubscriptionSequenceRef.current += 1;
+      return sendStreamCommand(streamRef.current, {
+        type: "activeSessionChanged",
+        requestId: `active-session-${Date.now()}-${activeSessionSubscriptionSequenceRef.current}`,
+        ...(sessionId ? { sessionId } : {}),
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     const api = createRoamApiClient();
     apiRef.current = api;
@@ -161,6 +177,9 @@ export function useRoamController() {
     let latestNotificationRequestId = 0;
     let pendingBootstrapRequestId: number | undefined;
     let bootstrapReady = false;
+    let pendingServerEvents: ServerEvent[] = [];
+    let eventFlushFrame: number | undefined;
+    let eventFlushTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
     function transitionToUnauthenticated(
       nextView: Extract<AuthViewState, "setup_required" | "login"> = "login",
@@ -249,11 +268,86 @@ export function useRoamController() {
         });
     }
 
+    function loadActiveSessionDetailAfterGap() {
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId) {
+        return;
+      }
+      void api
+        .fetchSessionDetail(sessionId)
+        .then((detail) => {
+          if (!cancelled) {
+            dispatch({ type: "sessionDetailMerged", detail });
+          }
+        })
+        .catch((detailError: unknown) => {
+          if (!cancelled) {
+            dispatch({
+              type: "errorChanged",
+              title: "Session detail request failed",
+              message: errorMessage(detailError),
+            });
+          }
+        });
+    }
+
     function clearRetryTimer() {
       if (retryTimer) {
         globalThis.clearTimeout(retryTimer);
         retryTimer = undefined;
       }
+    }
+
+    function clearEventFlush() {
+      if (
+        eventFlushFrame !== undefined &&
+        typeof globalThis.cancelAnimationFrame === "function"
+      ) {
+        globalThis.cancelAnimationFrame(eventFlushFrame);
+      }
+      if (eventFlushTimer) {
+        globalThis.clearTimeout(eventFlushTimer);
+      }
+      eventFlushFrame = undefined;
+      eventFlushTimer = undefined;
+    }
+
+    function flushServerEvents() {
+      eventFlushFrame = undefined;
+      eventFlushTimer = undefined;
+      if (cancelled || pendingServerEvents.length === 0) {
+        pendingServerEvents = [];
+        return;
+      }
+      const events = pendingServerEvents;
+      pendingServerEvents = [];
+      dispatch({ type: "serverEventsReceived", events });
+    }
+
+    function enqueueServerEvent(event: ServerEvent) {
+      pendingServerEvents.push(event);
+      if (shouldFlushServerEventImmediately(event)) {
+        clearEventFlush();
+        flushServerEvents();
+        return;
+      }
+      if (eventFlushFrame !== undefined || eventFlushTimer !== undefined) {
+        return;
+      }
+      if (typeof globalThis.requestAnimationFrame === "function") {
+        eventFlushFrame = globalThis.requestAnimationFrame(flushServerEvents);
+        return;
+      }
+      eventFlushTimer = globalThis.setTimeout(flushServerEvents, 16);
+    }
+
+    function shouldFlushServerEventImmediately(event: ServerEvent) {
+      return (
+        event.type === "error" ||
+        event.type.startsWith("runner:") ||
+        event.type.startsWith("project:") ||
+        event.type.startsWith("session:")
+      );
     }
 
     function scheduleReconnect() {
@@ -291,7 +385,7 @@ export function useRoamController() {
       const socket = api.connectStream(
         (event) => {
           if (!cancelled && generation === socketGeneration) {
-            dispatch({ type: "serverEventReceived", event });
+            enqueueServerEvent(event);
           }
         },
         (status) => {
@@ -309,8 +403,12 @@ export function useRoamController() {
               attempt: 0,
               delayMs: INITIAL_RECONNECT_DELAY_MS,
             });
+            if (bootstrapReady || activeSessionIdRef.current) {
+              syncActiveSessionSubscription(activeSessionIdRef.current);
+            }
             if (shouldSyncMissedEvents) {
               loadRemoteState("notification");
+              loadActiveSessionDetailAfterGap();
             }
             return;
           }
@@ -388,6 +486,7 @@ export function useRoamController() {
       cancelled = true;
       reconnectStreamRef.current = undefined;
       clearRetryTimer();
+      clearEventFlush();
       activeSocket?.close();
       if (streamRef.current === activeSocket) {
         streamRef.current = undefined;
@@ -398,6 +497,7 @@ export function useRoamController() {
     authEpoch,
     clearAccountSecurity,
     nextAccountSecurityRequestId,
+    syncActiveSessionSubscription,
   ]);
 
   const refreshAuth = useCallback(() => {
@@ -527,6 +627,48 @@ export function useRoamController() {
         : undefined,
     );
   }, [selectedProject, selectedSession, state.loadState]);
+
+  useEffect(() => {
+    if (state.loadState !== "ready") {
+      return;
+    }
+    syncActiveSessionSubscription(selectedSession?.id);
+  }, [
+    selectedSession?.id,
+    state.loadState,
+    syncActiveSessionSubscription,
+  ]);
+
+  useEffect(() => {
+    if (state.loadState !== "ready" || !selectedSession?.id) {
+      return;
+    }
+    const sessionId = selectedSession.id;
+    const api = apiRef.current;
+    if (!api) {
+      return;
+    }
+    let cancelled = false;
+    void api
+      .fetchSessionDetail(sessionId)
+      .then((detail) => {
+        if (!cancelled) {
+          dispatch({ type: "sessionDetailMerged", detail });
+        }
+      })
+      .catch((detailError: unknown) => {
+        if (!cancelled) {
+          dispatch({
+            type: "errorChanged",
+            title: "Session detail request failed",
+            message: errorMessage(detailError),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSession?.id, state.loadState]);
 
   useEffect(() => {
     const sessionId = selectedSession?.id;
@@ -776,6 +918,7 @@ export function useRoamController() {
         projectId,
         ...values,
       });
+      syncActiveSessionSubscription(session.id);
       dispatch({ type: "sessionCreated", session });
     } catch (createError: unknown) {
       const message = errorMessage(createError);
@@ -1059,6 +1202,11 @@ export function useRoamController() {
   const refreshSelectedFileTree = () => {
     if (!selectedSession || !apiRef.current) return;
     loadFileTreePath(selectedSession.id, ".", { force: true, resetTree: true });
+  };
+
+  const refreshSelectedFileContent = () => {
+    if (!selectedSession || !state.selectedFilePath || !apiRef.current) return;
+    loadFileContent(selectedSession.id, state.selectedFilePath);
   };
 
   const saveSelectedFile = () => {
@@ -1563,34 +1711,62 @@ export function useRoamController() {
     [requireApiClient, runGitJob],
   );
 
-  const sessionMessages = selectedSession
-    ? state.messages
-        .filter((message) => message.sessionId === selectedSession.id)
-        .map((message) =>
-          toUiMessage(
-            message,
-            state.messageAttachments.filter(
-              (attachment) => attachment.messageId === message.id,
-            ),
-          ),
-        )
-    : [];
-  const sessionActivities = selectedSession
-    ? state.activities.filter(
-        (activity) => activity.sessionId === selectedSession.id,
-      )
-    : [];
-  const sessionApprovals = selectedSession
-    ? state.approvals.filter(
-        (approval) => approval.sessionId === selectedSession.id,
-      )
-    : state.approvals;
-  const sessionHunks = selectedSession
-    ? state.hunks.filter((hunk) => hunk.sessionId === selectedSession.id)
-    : [];
-  const sessionFiles = selectedSession
-    ? (state.filesBySession[selectedSession.id] ?? [])
-    : [];
+  const messageAttachmentsByMessage = useMemo(() => {
+    const grouped = new Map<string, typeof state.messageAttachments>();
+    for (const attachment of state.messageAttachments) {
+      const attachments = grouped.get(attachment.messageId);
+      if (attachments) {
+        attachments.push(attachment);
+      } else {
+        grouped.set(attachment.messageId, [attachment]);
+      }
+    }
+    return grouped;
+  }, [state.messageAttachments]);
+  const sessionMessages = useMemo(
+    () =>
+      selectedSession
+        ? state.messages
+            .filter((message) => message.sessionId === selectedSession.id)
+            .map((message) =>
+              toUiMessage(
+                message,
+                messageAttachmentsByMessage.get(message.id) ?? [],
+              ),
+            )
+        : [],
+    [messageAttachmentsByMessage, selectedSession, state.messages],
+  );
+  const sessionActivities = useMemo(
+    () =>
+      selectedSession
+        ? state.activities.filter(
+            (activity) => activity.sessionId === selectedSession.id,
+          )
+        : [],
+    [selectedSession, state.activities],
+  );
+  const sessionApprovals = useMemo(
+    () =>
+      selectedSession
+        ? state.approvals.filter(
+            (approval) => approval.sessionId === selectedSession.id,
+          )
+        : state.approvals,
+    [selectedSession, state.approvals],
+  );
+  const sessionHunks = useMemo(
+    () =>
+      selectedSession
+        ? state.hunks.filter((hunk) => hunk.sessionId === selectedSession.id)
+        : [],
+    [selectedSession, state.hunks],
+  );
+  const sessionFiles = useMemo(
+    () =>
+      selectedSession ? (state.filesBySession[selectedSession.id] ?? []) : [],
+    [selectedSession, state.filesBySession],
+  );
   const sessionFileTreeState = selectedSession
     ? (state.fileTreeState[selectedSession.id] ?? "idle")
     : "idle";
@@ -1653,6 +1829,7 @@ export function useRoamController() {
     cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
+    refreshSelectedFileContent,
     saveSelectedFile,
     refreshProjectPromptPresets,
     createProjectPromptPreset,
