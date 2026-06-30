@@ -402,7 +402,9 @@ export function useRoamController() {
               attempt: 0,
               delayMs: INITIAL_RECONNECT_DELAY_MS,
             });
-            syncActiveSessionSubscription(activeSessionIdRef.current);
+            if (bootstrapReady || activeSessionIdRef.current) {
+              syncActiveSessionSubscription(activeSessionIdRef.current);
+            }
             if (shouldSyncMissedEvents) {
               loadRemoteState("notification");
               loadActiveSessionDetailAfterGap();
@@ -896,6 +898,7 @@ export function useRoamController() {
         projectId,
         ...values,
       });
+      syncActiveSessionSubscription(session.id);
       dispatch({ type: "sessionCreated", session });
     } catch (createError: unknown) {
       const message = errorMessage(createError);

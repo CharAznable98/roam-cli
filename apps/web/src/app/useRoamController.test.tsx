@@ -120,6 +120,23 @@ describe("useRoamController prompt presets", () => {
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({ projects: projectSummaries });
         }
+        if (requestUrl.pathname === "/v1/sessions" && init?.method === "POST") {
+          return jsonResponse({
+            session: {
+              id: "session-created",
+              title: "Created session",
+              projectId: "project-1",
+              runnerId: "runner-1",
+              agent: "codex",
+              status: "running",
+              executionMode: "direct",
+              executionFolder: ".",
+              cwd: ".",
+              createdAt: "2026-06-05T00:00:00.000Z",
+              updatedAt: "2026-06-05T00:00:00.000Z",
+            },
+          });
+        }
         if (requestUrl.pathname === "/v1/sessions") {
           return jsonResponse({ sessions: sessionSummaries });
         }
@@ -293,6 +310,11 @@ describe("useRoamController prompt presets", () => {
     });
     const { result } = renderHook(() => useRoamController());
 
+    act(() => {
+      testSockets[0]?.dispatchEvent(new Event("open"));
+    });
+    expect(activeSessionCommands()).toEqual([]);
+
     await waitFor(() =>
       expect(result.current.selectedSession?.id).toBe("session-1"),
     );
@@ -313,5 +335,48 @@ describe("useRoamController prompt presets", () => {
         ),
       ).toBe(true),
     );
+    expect(activeSessionCommands()).toEqual([
+      expect.objectContaining({ sessionId: "session-1" }),
+    ]);
+  });
+
+  it("subscribes to newly created sessions before selection effects catch up", async () => {
+    projectSummaries = [
+      {
+        id: "project-1",
+        name: "Project One",
+        runnerId: "runner-1",
+        directory: "/workspace",
+        createdAt: "2026-06-05T00:00:00.000Z",
+        updatedAt: "2026-06-05T00:00:00.000Z",
+        lastActiveAt: "2026-06-05T00:00:00.000Z",
+      },
+    ];
+    const { result } = renderHook(() => useRoamController());
+
+    await waitFor(() =>
+      expect(result.current.selectedProject?.id).toBe("project-1"),
+    );
+
+    await act(async () => {
+      await result.current.createSession("project-1", {
+        title: "Created session",
+        prompt: "hello",
+        agent: "codex",
+        executionMode: "direct",
+      });
+    });
+
+    expect(activeSessionCommands()).toContainEqual(
+      expect.objectContaining({ sessionId: "session-created" }),
+    );
   });
 });
+
+function activeSessionCommands() {
+  return testSockets.flatMap((socket) =>
+    socket.sent
+      .map((payload) => JSON.parse(payload) as { type?: string })
+      .filter((command) => command.type === "activeSessionChanged"),
+  );
+}

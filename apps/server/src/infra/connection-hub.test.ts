@@ -4,6 +4,7 @@ import type {
   Message,
   RunnerRegistration,
   ServerEvent,
+  Session,
 } from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import { ConnectionHub } from "./connection-hub.js";
@@ -98,7 +99,10 @@ describe("ConnectionHub", () => {
       sessionTwoStream as unknown as WebSocket,
       "session-2",
     );
-    hub.setStreamActiveSession(unsubscribedStream as unknown as WebSocket, undefined);
+    hub.setStreamActiveSession(
+      unsubscribedStream as unknown as WebSocket,
+      undefined,
+    );
 
     hub.broadcast({
       type: "message:updated",
@@ -115,6 +119,42 @@ describe("ConnectionHub", () => {
     ]);
     expect(parsedEvents(sessionTwoStream)).toEqual([]);
     expect(parsedEvents(unsubscribedStream)).toEqual([]);
+  });
+
+  it("keeps events for newly created sessions visible until clients resubscribe", () => {
+    const hub = new ConnectionHub(createFakeStore());
+    const stream = new FakeSocket();
+    hub.addStream(stream as unknown as WebSocket);
+    hub.setStreamActiveSession(stream as unknown as WebSocket, "session-1");
+
+    hub.broadcast({
+      type: "session:created",
+      session: session("session-2", "project-1"),
+    });
+    hub.broadcast({
+      type: "message:created",
+      message: message("session-2", "initial prompt"),
+    });
+
+    expect(parsedEvents(stream)).toEqual([
+      {
+        type: "session:created",
+        session: session("session-2", "project-1"),
+      },
+      {
+        type: "message:created",
+        message: message("session-2", "initial prompt"),
+      },
+    ]);
+
+    hub.setStreamActiveSession(stream as unknown as WebSocket, "session-1");
+    hub.broadcast({
+      type: "message:updated",
+      contentMode: "append",
+      message: message("session-2", "late token"),
+    });
+
+    expect(parsedEvents(stream)).toHaveLength(2);
   });
 
   it("keeps global events visible regardless of active session subscription", () => {
@@ -182,5 +222,21 @@ function message(sessionId: string, content: string): Message {
     encrypted: false,
     streaming: true,
     createdAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function session(sessionId: string, projectId: string): Session {
+  return {
+    id: sessionId,
+    title: `Session ${sessionId}`,
+    projectId,
+    runnerId: "runner-1",
+    agent: "codex",
+    status: "running",
+    executionMode: "direct",
+    executionFolder: "/workspace",
+    cwd: "/workspace",
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
   };
 }

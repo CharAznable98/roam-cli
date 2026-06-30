@@ -17,8 +17,11 @@ interface StreamConnection {
   authSessionId?: string;
   activeSessionId?: string;
   subscriptionInitialized?: boolean;
+  recentlyCreatedSessionIds?: Map<string, number>;
   isAuthorized?: () => boolean;
 }
+
+const RECENTLY_CREATED_SESSION_GRACE_MS = 10_000;
 
 export interface RunnerConnectionLifecycle {
   onRunnerReplaced?: (runnerId: string) => void;
@@ -72,6 +75,7 @@ export class ConnectionHub {
     for (const connection of this.streamClients) {
       if (connection.socket === socket) {
         connection.subscriptionInitialized = true;
+        connection.recentlyCreatedSessionIds?.clear();
         if (sessionId) {
           connection.activeSessionId = sessionId;
         } else {
@@ -148,6 +152,9 @@ export class ConnectionHub {
       if (!this.isStreamAuthorized(connection)) {
         continue;
       }
+      if (event.type === "session:created") {
+        rememberRecentlyCreatedSession(connection, event.session.id);
+      }
       if (!shouldSendToStream(connection, event)) {
         continue;
       }
@@ -187,8 +194,35 @@ function shouldSendToStream(
   return (
     sessionId === undefined ||
     !connection.subscriptionInitialized ||
-    connection.activeSessionId === sessionId
+    connection.activeSessionId === sessionId ||
+    isRecentlyCreatedSession(connection, sessionId)
   );
+}
+
+function rememberRecentlyCreatedSession(
+  connection: StreamConnection,
+  sessionId: string,
+): void {
+  connection.recentlyCreatedSessionIds ??= new Map();
+  connection.recentlyCreatedSessionIds.set(
+    sessionId,
+    Date.now() + RECENTLY_CREATED_SESSION_GRACE_MS,
+  );
+}
+
+function isRecentlyCreatedSession(
+  connection: StreamConnection,
+  sessionId: string,
+): boolean {
+  const expiresAt = connection.recentlyCreatedSessionIds?.get(sessionId);
+  if (expiresAt === undefined) {
+    return false;
+  }
+  if (expiresAt < Date.now()) {
+    connection.recentlyCreatedSessionIds?.delete(sessionId);
+    return false;
+  }
+  return true;
 }
 
 function eventSessionId(event: ServerEvent): string | undefined {
