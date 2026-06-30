@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
-import type { RunnerRegistration } from "@roamcli/shared/protocol";
+import type {
+  Message,
+  RunnerRegistration,
+  ServerEvent,
+} from "@roamcli/shared/protocol";
 import { describe, expect, it } from "vitest";
 import { ConnectionHub } from "./connection-hub.js";
 import type { ServerStore } from "./sqlite-store.js";
@@ -77,6 +81,53 @@ describe("ConnectionHub", () => {
       runnerId: "runner-1",
     });
   });
+
+  it("only forwards session-scoped events to streams subscribed to that session", () => {
+    const hub = new ConnectionHub(createFakeStore());
+    const sessionOneStream = new FakeSocket();
+    const sessionTwoStream = new FakeSocket();
+    const unsubscribedStream = new FakeSocket();
+    hub.addStream(sessionOneStream as unknown as WebSocket);
+    hub.addStream(sessionTwoStream as unknown as WebSocket);
+    hub.addStream(unsubscribedStream as unknown as WebSocket);
+    hub.setStreamActiveSession(
+      sessionOneStream as unknown as WebSocket,
+      "session-1",
+    );
+    hub.setStreamActiveSession(
+      sessionTwoStream as unknown as WebSocket,
+      "session-2",
+    );
+    hub.setStreamActiveSession(unsubscribedStream as unknown as WebSocket, undefined);
+
+    hub.broadcast({
+      type: "message:updated",
+      contentMode: "append",
+      message: message("session-1", "hello"),
+    });
+
+    expect(parsedEvents(sessionOneStream)).toEqual([
+      {
+        type: "message:updated",
+        contentMode: "append",
+        message: message("session-1", "hello"),
+      },
+    ]);
+    expect(parsedEvents(sessionTwoStream)).toEqual([]);
+    expect(parsedEvents(unsubscribedStream)).toEqual([]);
+  });
+
+  it("keeps global events visible regardless of active session subscription", () => {
+    const hub = new ConnectionHub(createFakeStore());
+    const stream = new FakeSocket();
+    hub.addStream(stream as unknown as WebSocket);
+
+    hub.broadcast({ type: "runner:offline", runnerId: "runner-1" });
+
+    expect(parsedEvents(stream)).toEqual([
+      { type: "runner:offline", runnerId: "runner-1" },
+    ]);
+  });
 });
 
 type FakeStore = ServerStore & {
@@ -117,3 +168,19 @@ const runner: RunnerRegistration = {
   capabilities: [],
   version: "1.1.0",
 };
+
+function parsedEvents(socket: FakeSocket): ServerEvent[] {
+  return socket.sent.map((payload) => JSON.parse(payload) as ServerEvent);
+}
+
+function message(sessionId: string, content: string): Message {
+  return {
+    id: `message-${sessionId}`,
+    sessionId,
+    role: "assistant",
+    content,
+    encrypted: false,
+    streaming: true,
+    createdAt: "2026-06-05T00:00:00.000Z",
+  };
+}

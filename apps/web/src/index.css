@@ -2061,6 +2061,18 @@
     line-height: 1.55;
   }
 
+  .streaming-message-text {
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    color: var(--text-main);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
   .markdown-message > :first-child,
   .markdown-alert > :first-child {
     margin-top: 0;

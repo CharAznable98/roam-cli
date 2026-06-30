@@ -190,6 +190,7 @@ export type AppAction =
   | { type: "fileSaveSucceeded" }
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
+  | { type: "serverEventsReceived"; events: ServerEvent[] }
   | { type: "sessionDetailMerged"; detail: SessionDetailPayload }
   | {
       type: "notificationPushed";
@@ -261,12 +262,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         projects: action.remote.projects,
         runners: action.remote.runners,
         sessions: action.remote.sessions,
-        messages: action.remote.messages,
-        activities: action.remote.activities ?? [],
-        messageAttachments: action.remote.messageAttachments ?? [],
-        approvals: action.remote.approvals,
-        artifacts: action.remote.artifacts,
-        hunks: extractPatchHunks(action.remote.approvals),
+        ...bootstrapDetailState(state, action.remote),
         selectedRunnerId,
         selectedProjectId,
         selectedSessionId,
@@ -610,6 +606,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       );
     case "serverEventReceived":
       return applyServerEvent(state, action.event);
+    case "serverEventsReceived":
+      return applyServerEvents(state, action.events);
     case "sessionDetailMerged":
       return mergeSessionDetailState(state, action.detail);
     case "notificationPushed":
@@ -634,6 +632,56 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   }
 }
 
+function bootstrapDetailState(
+  state: AppState,
+  remote: InitialRemoteState,
+): Pick<
+  AppState,
+  "messages" | "activities" | "messageAttachments" | "approvals" | "artifacts" | "hunks"
+> {
+  if (hasRemoteDetail(remote)) {
+    return {
+      messages: remote.messages,
+      activities: remote.activities ?? [],
+      messageAttachments: remote.messageAttachments ?? [],
+      approvals: remote.approvals,
+      artifacts: remote.artifacts,
+      hunks: extractPatchHunks(remote.approvals),
+    };
+  }
+
+  const remoteSessionIds = new Set(remote.sessions.map((session) => session.id));
+  const approvals = state.approvals.filter((approval) =>
+    remoteSessionIds.has(approval.sessionId),
+  );
+  return {
+    messages: state.messages.filter((message) =>
+      remoteSessionIds.has(message.sessionId),
+    ),
+    activities: state.activities.filter((activity) =>
+      remoteSessionIds.has(activity.sessionId),
+    ),
+    messageAttachments: state.messageAttachments.filter((attachment) =>
+      remoteSessionIds.has(attachment.sessionId),
+    ),
+    approvals,
+    artifacts: state.artifacts.filter((artifact) =>
+      remoteSessionIds.has(artifact.sessionId),
+    ),
+    hunks: state.hunks.filter((hunk) => remoteSessionIds.has(hunk.sessionId)),
+  };
+}
+
+function hasRemoteDetail(remote: InitialRemoteState): boolean {
+  return (
+    remote.messages.length > 0 ||
+    (remote.activities?.length ?? 0) > 0 ||
+    remote.messageAttachments.length > 0 ||
+    remote.approvals.length > 0 ||
+    remote.artifacts.length > 0
+  );
+}
+
 function mergeSessionDetailState(
   state: AppState,
   detail: SessionDetailPayload,
@@ -649,6 +697,8 @@ function mergeSessionDetailState(
   const freshDetailApprovals = mergedApprovals.filter((approval) =>
     detailApprovalIds.has(approval.id),
   );
+  const shouldAdoptDetailSelection =
+    !state.selectedProjectId && !state.selectedSessionId;
   return {
     ...state,
     sessions: upsertFreshSession(state.sessions, detail.session),
@@ -670,8 +720,12 @@ function mergeSessionDetailState(
       state.hunks,
       extractPatchHunks(freshDetailApprovals),
     ),
-    selectedProjectId: state.selectedProjectId || detail.session.projectId,
-    selectedSessionId: state.selectedSessionId || detail.session.id,
+    selectedProjectId: shouldAdoptDetailSelection
+      ? detail.session.projectId
+      : state.selectedProjectId,
+    selectedSessionId: shouldAdoptDetailSelection
+      ? detail.session.id
+      : state.selectedSessionId,
   };
 }
 
@@ -911,6 +965,67 @@ function isClientStreamPlaceholder(
     message.role === "assistant" &&
     message.id.startsWith(`stream-${sessionId}-`)
   );
+}
+
+function applyServerEvents(state: AppState, events: ServerEvent[]): AppState {
+  return compactAppendMessageUpdates(events).reduce(
+    (nextState, event) => applyServerEvent(nextState, event),
+    state,
+  );
+}
+
+type AppendMessageUpdateEvent = Extract<
+  ServerEvent,
+  { type: "message:updated" }
+> & { contentMode: "append" };
+
+function compactAppendMessageUpdates(events: ServerEvent[]): ServerEvent[] {
+  const compacted: ServerEvent[] = [];
+  for (const event of events) {
+    const previous = compacted.at(-1);
+    if (
+      isAppendMessageUpdate(previous) &&
+      isAppendMessageUpdate(event) &&
+      previous.message.id === event.message.id
+    ) {
+      compacted[compacted.length - 1] = mergeAppendMessageUpdate(
+        previous,
+        event,
+      );
+      continue;
+    }
+    compacted.push(event);
+  }
+  return compacted;
+}
+
+function isAppendMessageUpdate(
+  event: ServerEvent | undefined,
+): event is AppendMessageUpdateEvent {
+  return event?.type === "message:updated" && event.contentMode === "append";
+}
+
+function mergeAppendMessageUpdate(
+  previous: AppendMessageUpdateEvent,
+  next: AppendMessageUpdateEvent,
+): AppendMessageUpdateEvent {
+  const mergedMessage = {
+    ...previous.message,
+    ...next.message,
+    content: previous.message.content + next.message.content,
+  };
+  if (next.message.streaming === true) {
+    return {
+      ...next,
+      message: { ...mergedMessage, streaming: true },
+    };
+  }
+
+  const { streaming: _streaming, ...settledMessage } = mergedMessage;
+  return {
+    ...next,
+    message: settledMessage,
+  };
 }
 
 function applyServerEvent(state: AppState, event: ServerEvent): AppState {

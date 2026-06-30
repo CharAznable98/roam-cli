@@ -11,6 +11,7 @@ import {
   ApiCreateSessionSchema,
   ApiReorderProjectPromptPresetsSchema,
   ApiUpdateProjectPromptPresetSchema,
+  ClientCommandSchema,
   DEFAULT_MAX_IMAGE_BYTES,
   PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
   PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
@@ -127,6 +128,29 @@ describe("protocol schemas", () => {
     if (event.type === "message_attachment:created") {
       expect(event.attachment).not.toHaveProperty("runnerStoragePath");
     }
+  });
+
+  it("validates active session subscription commands", () => {
+    expect(
+      ClientCommandSchema.parse({
+        type: "activeSessionChanged",
+        requestId: "active-session-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual({
+      type: "activeSessionChanged",
+      requestId: "active-session-1",
+      sessionId: "session-1",
+    });
+    expect(
+      ClientCommandSchema.parse({
+        type: "activeSessionChanged",
+        requestId: "active-session-none",
+      }),
+    ).toEqual({
+      type: "activeSessionChanged",
+      requestId: "active-session-none",
+    });
   });
 
   it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {

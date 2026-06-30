@@ -237,6 +237,66 @@ describe("app reducer", () => {
     expect(next.selectedRunnerId).toBe("runner-1");
   });
 
+  it("keeps loaded session detail during shell-only bootstrap refreshes", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        sessions: [makeSession("session-1", "project-1")],
+        messages: [
+          {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "loaded detail",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        ],
+      },
+      {
+        type: "bootstrapSucceeded",
+        remote: {
+          projects: [makeProject("project-1")],
+          runners: [runner],
+          sessions: [makeSession("session-1", "project-1")],
+          messages: [],
+          messageAttachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.messages.map((message) => message.content)).toEqual([
+      "loaded detail",
+    ]);
+  });
+
+  it("does not let lazy detail merges override an explicit empty session selection", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        projects: [makeProject("project-1"), makeProject("project-2")],
+        sessions: [makeSession("session-1", "project-1")],
+        selectedProjectId: "project-2",
+        selectedSessionId: "",
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: makeSession("session-1", "project-1"),
+          messages: [],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("");
+  });
+
   it("selects the session project when switching directly to a session", () => {
     const next = appReducer(
       {
@@ -333,6 +393,68 @@ describe("app reducer", () => {
     expect(updated.messages).toHaveLength(1);
     expect(updated.messages[0]?.content).toBe("partial answer");
     expect(updated.messages[0]?.streaming).toBeUndefined();
+  });
+
+  it("compacts adjacent streamed message deltas in batched server events", () => {
+    const next = appReducer(initialAppState, {
+      type: "serverEventsReceived",
+      events: [
+        {
+          type: "message:created",
+          message: {
+            id: "stream_session-1_output",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "",
+            encrypted: false,
+            streaming: true,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+        {
+          type: "message:updated",
+          contentMode: "append",
+          message: {
+            id: "stream_session-1_output",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "fast",
+            encrypted: false,
+            streaming: true,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+        {
+          type: "message:updated",
+          contentMode: "append",
+          message: {
+            id: "stream_session-1_output",
+            sessionId: "session-1",
+            role: "assistant",
+            content: " stream",
+            encrypted: false,
+            streaming: true,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+        {
+          type: "message:updated",
+          contentMode: "append",
+          message: {
+            id: "stream_session-1_output",
+            sessionId: "session-1",
+            role: "assistant",
+            content: " done",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        },
+      ],
+    });
+
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]?.content).toBe("fast stream done");
+    expect(next.messages[0]?.streaming).toBeUndefined();
   });
 
   it("reconciles client stream placeholders when merging persisted session details", () => {

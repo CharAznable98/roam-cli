@@ -40,7 +40,7 @@ import {
   type UiMessage,
 } from "./model";
 import { StatusPill } from "../../shared/components/StatusPill";
-import { MarkdownMessage } from "./MarkdownMessage";
+import { MarkdownMessage, StreamingTextMessage } from "./MarkdownMessage";
 import type {
   MarkdownFileLinkContext,
   MarkdownFileLinkTarget,
@@ -954,6 +954,8 @@ function IntermediateMessage({
           </details>
         ) : message.role === "user" ? (
           <p>{message.content}</p>
+        ) : message.streaming === true ? (
+          <StreamingTextMessage content={message.content} />
         ) : (
           <MarkdownMessage
             content={message.content}
@@ -1026,6 +1028,8 @@ function MessageBubble({
         <div className="message-meta">{message.role}</div>
         {isUser ? (
           <p>{message.content}</p>
+        ) : message.streaming === true ? (
+          <StreamingTextMessage content={message.content} />
         ) : (
           <MarkdownMessage
             content={message.content}

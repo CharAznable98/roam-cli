@@ -50,7 +50,6 @@ import type {
   Session,
 } from "@roamcli/shared/protocol";
 import type { InitialRemoteState, SessionDetailPayload } from "./contracts";
-import { toUiMessage } from "../features/conversation/model";
 
 export interface RoamApiOptions {
   baseUrl?: string;
@@ -396,22 +395,15 @@ export function createRoamApiClient(
         request<ProjectsResponse>("/v1/projects"),
         request<SessionsResponse>("/v1/sessions"),
       ]);
-      const details = await Promise.all(
-        sessions.map((session) => fetchSessionDetail(session.id)),
-      );
       return {
         projects,
         runners,
         sessions,
-        messages: details.flatMap((detail) =>
-          detail.messages.map((message) => toUiMessage(message)),
-        ),
-        activities: details.flatMap((detail) => detail.activities ?? []),
-        messageAttachments: details.flatMap(
-          (detail) => detail.attachments ?? [],
-        ),
-        approvals: details.flatMap((detail) => detail.approvals),
-        artifacts: details.flatMap((detail) => detail.artifacts),
+        messages: [],
+        activities: [],
+        messageAttachments: [],
+        approvals: [],
+        artifacts: [],
       };
     },
 

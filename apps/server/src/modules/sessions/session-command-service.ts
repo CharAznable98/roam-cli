@@ -322,6 +322,10 @@ export class SessionCommandService {
       return;
     }
 
+    if (command.type === "activeSessionChanged") {
+      return;
+    }
+
     this.handleControlSignal(command);
   }
 
