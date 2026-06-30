@@ -209,6 +209,37 @@ describe("SessionCommandService", () => {
     expect(service.updateSession("session-4", { pinned: true }).ok).toBe(true);
   });
 
+  it("rejects pinning archived sessions", () => {
+    const hub = new ConnectionHub(store);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      new RunnerRpcClient(hub),
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    store.createSession({
+      ...sessionRecord(),
+      id: "session-2",
+      title: "Project archived session",
+    });
+
+    store.archiveSession("session-1", "2026-06-05T00:00:00.000Z");
+    expect(service.updateSession("session-1", { pinned: true })).toMatchObject({
+      ok: false,
+      error: "session_pin_limit_exceeded",
+    });
+
+    store.archiveProject("project-1", "2026-06-05T00:00:01.000Z");
+    expect(service.updateSession("session-2", { pinned: true })).toMatchObject({
+      ok: false,
+      error: "session_pin_limit_exceeded",
+    });
+    expect(service.updateSession("session-2", { pinned: false }).ok).toBe(true);
+  });
+
   it("guards runner availability and agent support before starting sessions", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(store, hub);

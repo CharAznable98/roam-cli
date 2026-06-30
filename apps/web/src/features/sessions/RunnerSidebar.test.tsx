@@ -628,6 +628,29 @@ describe("RunnerSidebar", () => {
     expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
   });
 
+  it("shows an externally selected session when the project is already open", async () => {
+    const sessions = makeOrderedSessions(6);
+    const props = runnerSidebarProps({
+      sessions,
+      selectedSessionId: "session-1",
+    });
+    const view = render(<RunnerSidebar {...props} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+    expect(screen.queryByText("Session 6")).not.toBeInTheDocument();
+
+    view.rerender(
+      <RunnerSidebar {...props} selectedSessionId="session-6" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Session 6")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
+  });
+
   it("wires project and session pin controls without selecting rows", () => {
     const onSelectProject = vi.fn();
     const onSelectSession = vi.fn();
@@ -656,6 +679,36 @@ describe("RunnerSidebar", () => {
     );
     expect(onToggleSessionPinned).toHaveBeenCalledWith("session-1", true);
     expect(onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("catches rejected project and session pin actions", async () => {
+    const onToggleProjectPinned = vi
+      .fn()
+      .mockRejectedValue(new Error("offline"));
+    const onToggleSessionPinned = vi
+      .fn()
+      .mockRejectedValue(new Error("pin limit"));
+
+    renderRunnerSidebar({
+      sessions: [makeSession("session-1", "project-1", "First session")],
+      onToggleProjectPinned,
+      onToggleSessionPinned,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin project project-1" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin session First session" }),
+    );
+
+    await waitFor(() => {
+      expect(onToggleProjectPinned).toHaveBeenCalledWith("project-1", true);
+      expect(onToggleSessionPinned).toHaveBeenCalledWith("session-1", true);
+    });
   });
 
   it("disables additional session pins after three pinned sessions", () => {
@@ -780,58 +833,62 @@ function makeOrderedSessions(count: number): Session[] {
 function renderRunnerSidebar(
   props: Partial<ComponentProps<typeof RunnerSidebar>> = {},
 ) {
-  return render(
-    <RunnerSidebar
-      projects={[makeProject("project-1")]}
-      runners={runners}
-      selectedProjectId="project-1"
-      sessions={[]}
-      selectedSessionId=""
-      onSelectProject={vi.fn()}
-      onSelectSession={vi.fn()}
-      onCreateProject={vi.fn()}
-      onFetchRunnerDirectoryTree={vi.fn(async () => [])}
-      onCreateRunnerDirectory={vi.fn(async () => ({
-        requestId: "directory-create-test",
-        path: "test",
-        node: directoryNode("test", "test"),
-      }))}
-      onArchiveProject={vi.fn()}
-      onToggleProjectPinned={vi.fn()}
-      onCreateSession={vi.fn()}
-      onToggleSessionPinned={vi.fn()}
-      onListAgentSkills={vi.fn(async () => ({
-        requestId: "agent-skills-test",
-        agent: "codex",
-        basePath: "/workspace/project-1",
-        queriedAt: "2026-06-05T00:00:00.000Z",
-        skills: [],
-      }))}
-      onSearchWorkspacePaths={vi.fn(async () => ({
-        requestId: "path-search-test",
-        basePath: "/workspace/project-1",
-        query: "",
-        entries: [],
-      }))}
-      onFetchGitStatus={vi.fn(async (context) => ({
-        kind: "repository" as const,
-        requestId: "git-status-test",
-        context,
-        detached: false,
-        ahead: 0,
-        behind: 0,
-        clean: true,
-        unborn: false,
-        groups: [],
-      }))}
-      onFetchGitBranches={vi.fn(async (context) => ({
-        requestId: "git-branches-test",
-        context,
-        branches: [],
-      }))}
-      {...props}
-    />,
-  );
+  return render(<RunnerSidebar {...runnerSidebarProps(props)} />);
+}
+
+function runnerSidebarProps(
+  props: Partial<ComponentProps<typeof RunnerSidebar>> = {},
+): ComponentProps<typeof RunnerSidebar> {
+  return {
+    projects: [makeProject("project-1")],
+    runners,
+    selectedProjectId: "project-1",
+    sessions: [],
+    selectedSessionId: "",
+    onSelectProject: vi.fn(),
+    onSelectSession: vi.fn(),
+    onCreateProject: vi.fn(),
+    onFetchRunnerDirectoryTree: vi.fn(async () => []),
+    onCreateRunnerDirectory: vi.fn(async () => ({
+      requestId: "directory-create-test",
+      path: "test",
+      node: directoryNode("test", "test"),
+    })),
+    onArchiveProject: vi.fn(),
+    onToggleProjectPinned: vi.fn(),
+    onCreateSession: vi.fn(),
+    onToggleSessionPinned: vi.fn(),
+    onListAgentSkills: vi.fn(async () => ({
+      requestId: "agent-skills-test",
+      agent: "codex",
+      basePath: "/workspace/project-1",
+      queriedAt: "2026-06-05T00:00:00.000Z",
+      skills: [],
+    })),
+    onSearchWorkspacePaths: vi.fn(async () => ({
+      requestId: "path-search-test",
+      basePath: "/workspace/project-1",
+      query: "",
+      entries: [],
+    })),
+    onFetchGitStatus: vi.fn(async (context) => ({
+      kind: "repository" as const,
+      requestId: "git-status-test",
+      context,
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      clean: true,
+      unborn: false,
+      groups: [],
+    })),
+    onFetchGitBranches: vi.fn(async (context) => ({
+      requestId: "git-branches-test",
+      context,
+      branches: [],
+    })),
+    ...props,
+  };
 }
 
 function directoryNode(

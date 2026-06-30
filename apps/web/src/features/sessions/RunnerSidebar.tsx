@@ -210,6 +210,38 @@ export function RunnerSidebar({
     });
   };
 
+  useEffect(() => {
+    if (!selectedSessionId) {
+      return;
+    }
+    const selectedSession = sessions.find(
+      (session) => session.id === selectedSessionId && !session.archivedAt,
+    );
+    if (!selectedSession || !expandedProjectIds.has(selectedSession.projectId)) {
+      return;
+    }
+    const projectSessions = sortSessionsForDisplay(
+      sessions.filter(
+        (session) =>
+          session.projectId === selectedSession.projectId && !session.archivedAt,
+      ),
+    );
+    const selectedIndex = projectSessions.findIndex(
+      (session) => session.id === selectedSessionId,
+    );
+    if (selectedIndex < DEFAULT_VISIBLE_SESSIONS_PER_PROJECT) {
+      return;
+    }
+    setExpandedSessionProjectIds((current) => {
+      if (current.has(selectedSession.projectId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(selectedSession.projectId);
+      return next;
+    });
+  }, [expandedProjectIds, selectedSessionId, sessions]);
+
   return (
     <aside className="left-column" aria-label="Projects and sessions">
       <section className="sidebar-tree">
@@ -319,9 +351,12 @@ export function RunnerSidebar({
                       aria-label={`${project.pinnedAt ? "Unpin" : "Pin"} project ${project.name}`}
                       title={project.pinnedAt ? "Unpin project" : "Pin project"}
                       onClick={() =>
-                        void onToggleProjectPinned(
-                          project.id,
-                          !project.pinnedAt,
+                        runAsyncAction(
+                          () =>
+                            onToggleProjectPinned(
+                              project.id,
+                              !project.pinnedAt,
+                            ),
                         )
                       }
                     >
@@ -405,9 +440,12 @@ export function RunnerSidebar({
                                       : "Pin session"
                                 }
                                 onClick={() =>
-                                  void onToggleSessionPinned(
-                                    session.id,
-                                    !isPinned,
+                                  runAsyncAction(
+                                    () =>
+                                      onToggleSessionPinned(
+                                        session.id,
+                                        !isPinned,
+                                      ),
                                   )
                                 }
                               >
@@ -513,6 +551,14 @@ export function RunnerSidebar({
       ) : null}
     </aside>
   );
+}
+
+function runAsyncAction(action: () => void | Promise<void>) {
+  try {
+    void Promise.resolve(action()).catch(() => undefined);
+  } catch {
+    // The controller owns user-visible error state for these actions.
+  }
 }
 
 export function SidebarModal({

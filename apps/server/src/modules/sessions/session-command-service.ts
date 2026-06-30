@@ -78,6 +78,10 @@ export class SessionCommandService {
     let pinnedAt: string | null | undefined;
     if (input.pinned !== undefined) {
       if (input.pinned) {
+        const project = this.store.getProject(session.projectId);
+        if (session.archivedAt || project?.archivedAt) {
+          return fail("session_pin_limit_exceeded");
+        }
         if (
           !session.pinnedAt &&
           this.store.countPinnedSessions(session.projectId) >=

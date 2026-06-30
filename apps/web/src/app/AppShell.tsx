@@ -2878,9 +2878,12 @@ function MobileSessionSwitcher({
                   selectedProject.pinnedAt ? "Unpin project" : "Pin project"
                 }
                 onClick={() =>
-                  void onToggleProjectPinned(
-                    selectedProject.id,
-                    !selectedProject.pinnedAt,
+                  runAsyncAction(
+                    () =>
+                      onToggleProjectPinned(
+                        selectedProject.id,
+                        !selectedProject.pinnedAt,
+                      ),
                   )
                 }
               >
@@ -2970,9 +2973,12 @@ function MobileSessionSwitcher({
                     : "Pin session"
               }
               onClick={() =>
-                void onToggleSessionPinned(
-                  selectedSession.id,
-                  !selectedSessionPinned,
+                runAsyncAction(
+                  () =>
+                    onToggleSessionPinned(
+                      selectedSession.id,
+                      !selectedSessionPinned,
+                    ),
                 )
               }
             >
@@ -2987,6 +2993,14 @@ function MobileSessionSwitcher({
       </div>
     </div>
   );
+}
+
+function runAsyncAction(action: () => void | Promise<void>) {
+  try {
+    void Promise.resolve(action()).catch(() => undefined);
+  } catch {
+    // The controller owns user-visible error state for these actions.
+  }
 }
 
 function NotificationStack({
