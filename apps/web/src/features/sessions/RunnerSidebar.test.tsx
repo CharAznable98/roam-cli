@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
   type FileNode,
@@ -402,7 +403,9 @@ describe("RunnerSidebar", () => {
           node: directoryNode("test", "test"),
         }))}
         onArchiveProject={vi.fn()}
+        onToggleProjectPinned={vi.fn()}
         onCreateSession={vi.fn()}
+        onToggleSessionPinned={vi.fn()}
         onListAgentSkills={vi.fn(async () => ({
           requestId: "agent-skills-test",
           agent: "codex",
@@ -460,7 +463,9 @@ describe("RunnerSidebar", () => {
           node: directoryNode("test", "test"),
         }))}
         onArchiveProject={vi.fn()}
+        onToggleProjectPinned={vi.fn()}
         onCreateSession={vi.fn()}
+        onToggleSessionPinned={vi.fn()}
         onListAgentSkills={vi.fn(async () => ({
           requestId: "agent-skills-test",
           agent: "codex",
@@ -543,7 +548,9 @@ describe("RunnerSidebar", () => {
           node: directoryNode("test", "test"),
         }))}
         onArchiveProject={vi.fn()}
+        onToggleProjectPinned={vi.fn()}
         onCreateSession={vi.fn()}
+        onToggleSessionPinned={vi.fn()}
         onListAgentSkills={vi.fn(async () => ({
           requestId: "agent-skills-test",
           agent: "codex",
@@ -582,9 +589,104 @@ describe("RunnerSidebar", () => {
       screen.getByRole("button", { name: "Expand project project-2" }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Second session/ }));
+    fireEvent.click(screen.getByText("Second session").closest("button")!);
 
     expect(onSelectSession).toHaveBeenCalledWith("session-2");
+  });
+
+  it("limits project session lists to five until the user expands them", () => {
+    renderRunnerSidebar({
+      sessions: makeOrderedSessions(6),
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+
+    expect(screen.getByText("Session 1")).toBeInTheDocument();
+    expect(screen.getByText("Session 5")).toBeInTheDocument();
+    expect(screen.queryByText("Session 6")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看更多" }));
+    expect(screen.getByText("Session 6")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.queryByText("Session 6")).not.toBeInTheDocument();
+  });
+
+  it("shows the selected session when it is beyond the first five", () => {
+    renderRunnerSidebar({
+      sessions: makeOrderedSessions(6),
+      selectedSessionId: "session-6",
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+
+    expect(screen.getByText("Session 6")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起" })).toBeInTheDocument();
+  });
+
+  it("wires project and session pin controls without selecting rows", () => {
+    const onSelectProject = vi.fn();
+    const onSelectSession = vi.fn();
+    const onToggleProjectPinned = vi.fn();
+    const onToggleSessionPinned = vi.fn();
+
+    renderRunnerSidebar({
+      sessions: [makeSession("session-1", "project-1", "First session")],
+      onSelectProject,
+      onSelectSession,
+      onToggleProjectPinned,
+      onToggleSessionPinned,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin project project-1" }),
+    );
+    expect(onToggleProjectPinned).toHaveBeenCalledWith("project-1", true);
+    expect(onSelectProject).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin session First session" }),
+    );
+    expect(onToggleSessionPinned).toHaveBeenCalledWith("session-1", true);
+    expect(onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("disables additional session pins after three pinned sessions", () => {
+    renderRunnerSidebar({
+      sessions: [
+        {
+          ...makeSession("session-1", "project-1", "Pinned 1"),
+          pinnedAt: "2026-06-05T00:00:00.000Z",
+        },
+        {
+          ...makeSession("session-2", "project-1", "Pinned 2"),
+          pinnedAt: "2026-06-05T00:00:01.000Z",
+        },
+        {
+          ...makeSession("session-3", "project-1", "Pinned 3"),
+          pinnedAt: "2026-06-05T00:00:02.000Z",
+        },
+        makeSession("session-4", "project-1", "Unpinned session"),
+      ],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand project project-1" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Pin session Unpinned session" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Unpin session Pinned 1" }),
+    ).not.toBeDisabled();
   });
 });
 
@@ -663,6 +765,73 @@ function makeSession(id: string, projectId: string, title: string): Session {
     createdAt: "2026-06-05T00:00:00.000Z",
     updatedAt: "2026-06-05T00:00:00.000Z",
   };
+}
+
+function makeOrderedSessions(count: number): Session[] {
+  return Array.from({ length: count }, (_, index) => {
+    const item = index + 1;
+    return {
+      ...makeSession(`session-${item}`, "project-1", `Session ${item}`),
+      createdAt: `2026-06-${String(30 - index).padStart(2, "0")}T00:00:00.000Z`,
+    };
+  });
+}
+
+function renderRunnerSidebar(
+  props: Partial<ComponentProps<typeof RunnerSidebar>> = {},
+) {
+  return render(
+    <RunnerSidebar
+      projects={[makeProject("project-1")]}
+      runners={runners}
+      selectedProjectId="project-1"
+      sessions={[]}
+      selectedSessionId=""
+      onSelectProject={vi.fn()}
+      onSelectSession={vi.fn()}
+      onCreateProject={vi.fn()}
+      onFetchRunnerDirectoryTree={vi.fn(async () => [])}
+      onCreateRunnerDirectory={vi.fn(async () => ({
+        requestId: "directory-create-test",
+        path: "test",
+        node: directoryNode("test", "test"),
+      }))}
+      onArchiveProject={vi.fn()}
+      onToggleProjectPinned={vi.fn()}
+      onCreateSession={vi.fn()}
+      onToggleSessionPinned={vi.fn()}
+      onListAgentSkills={vi.fn(async () => ({
+        requestId: "agent-skills-test",
+        agent: "codex",
+        basePath: "/workspace/project-1",
+        queriedAt: "2026-06-05T00:00:00.000Z",
+        skills: [],
+      }))}
+      onSearchWorkspacePaths={vi.fn(async () => ({
+        requestId: "path-search-test",
+        basePath: "/workspace/project-1",
+        query: "",
+        entries: [],
+      }))}
+      onFetchGitStatus={vi.fn(async (context) => ({
+        kind: "repository" as const,
+        requestId: "git-status-test",
+        context,
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        clean: true,
+        unborn: false,
+        groups: [],
+      }))}
+      onFetchGitBranches={vi.fn(async (context) => ({
+        requestId: "git-branches-test",
+        context,
+        branches: [],
+      }))}
+      {...props}
+    />,
+  );
 }
 
 function directoryNode(

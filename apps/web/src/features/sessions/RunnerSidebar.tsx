@@ -10,12 +10,18 @@ import type {
   Session,
 } from "@roamcli/shared/protocol";
 import {
+  DEFAULT_VISIBLE_SESSIONS_PER_PROJECT,
+  MAX_PINNED_SESSIONS_PER_PROJECT,
+} from "@roamcli/shared/protocol";
+import {
   ChevronDown,
   ChevronRight,
   Cpu,
   Folder,
   FolderPlus,
   Laptop,
+  Pin,
+  PinOff,
   Plus,
   Trash2,
   X,
@@ -30,6 +36,7 @@ import {
   type ReactNode,
 } from "react";
 import { NewSessionForm, type NewSessionValues } from "./NewSessionForm";
+import { sortProjectsForDisplay, sortSessionsForDisplay } from "./model";
 import type {
   AgentSkillFetcher,
   PathSearchFetcher,
@@ -85,9 +92,17 @@ type RunnerSidebarProps = {
   onFetchRunnerDirectoryTree: FetchRunnerDirectoryTree;
   onCreateRunnerDirectory: CreateRunnerDirectory;
   onArchiveProject: (projectId: string) => void;
+  onToggleProjectPinned: (
+    projectId: string,
+    pinned: boolean,
+  ) => void | Promise<void>;
   onCreateSession: (
     projectId: string,
     values: NewSessionValues,
+  ) => void | Promise<void>;
+  onToggleSessionPinned: (
+    sessionId: string,
+    pinned: boolean,
   ) => void | Promise<void>;
   onListAgentSkills: AgentSkillFetcher;
   onSearchWorkspacePaths: PathSearchFetcher;
@@ -116,7 +131,9 @@ export function RunnerSidebar({
   onFetchRunnerDirectoryTree,
   onCreateRunnerDirectory,
   onArchiveProject,
+  onToggleProjectPinned,
   onCreateSession,
+  onToggleSessionPinned,
   onListAgentSkills,
   onSearchWorkspacePaths,
   promptPresetsByProject = {},
@@ -134,12 +151,17 @@ export function RunnerSidebar({
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [expandedSessionProjectIds, setExpandedSessionProjectIds] = useState<
+    Set<string>
+  >(() => new Set());
   const activeProjects = useMemo(
     () =>
-      projects.filter(
-        (project) =>
-          !project.archivedAt &&
-          (runnerFilterId === "all" || project.runnerId === runnerFilterId),
+      sortProjectsForDisplay(
+        projects.filter(
+          (project) =>
+            !project.archivedAt &&
+            (runnerFilterId === "all" || project.runnerId === runnerFilterId),
+        ),
       ),
     [projects, runnerFilterId],
   );
@@ -150,8 +172,34 @@ export function RunnerSidebar({
     ? runners.find((runner) => runner.runnerId === sessionProject.runnerId)
     : undefined;
 
-  const toggleProject = (projectId: string) => {
+  const toggleProject = (projectId: string, projectSessions: Session[]) => {
     setExpandedProjectIds((current) => {
+      const next = new Set(current);
+      const isClosing = next.has(projectId);
+      if (isClosing) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      setExpandedSessionProjectIds((expandedSessions) => {
+        const sessionNext = new Set(expandedSessions);
+        sessionNext.delete(projectId);
+        if (!isClosing) {
+          const selectedIndex = projectSessions.findIndex(
+            (session) => session.id === selectedSessionId,
+          );
+          if (selectedIndex >= DEFAULT_VISIBLE_SESSIONS_PER_PROJECT) {
+            sessionNext.add(projectId);
+          }
+        }
+        return sessionNext;
+      });
+      return next;
+    });
+  };
+
+  const toggleSessionList = (projectId: string) => {
+    setExpandedSessionProjectIds((current) => {
       const next = new Set(current);
       if (next.has(projectId)) {
         next.delete(projectId);
@@ -205,11 +253,22 @@ export function RunnerSidebar({
             const runner = runners.find(
               (item) => item.runnerId === project.runnerId,
             );
-            const projectSessions = sessions.filter(
-              (session) =>
-                session.projectId === project.id && !session.archivedAt,
+            const projectSessions = sortSessionsForDisplay(
+              sessions.filter(
+                (session) =>
+                  session.projectId === project.id && !session.archivedAt,
+              ),
             );
             const isExpanded = expandedProjectIds.has(project.id);
+            const showAllSessions = expandedSessionProjectIds.has(project.id);
+            const visibleSessions = showAllSessions
+              ? projectSessions
+              : projectSessions.slice(0, DEFAULT_VISIBLE_SESSIONS_PER_PROJECT);
+            const hasOverflow =
+              projectSessions.length > DEFAULT_VISIBLE_SESSIONS_PER_PROJECT;
+            const pinnedSessionCount = projectSessions.filter(
+              (session) => session.pinnedAt,
+            ).length;
             return (
               <div className="project-tree-item" key={project.id}>
                 <div
@@ -220,7 +279,7 @@ export function RunnerSidebar({
                     type="button"
                     aria-label={`${isExpanded ? "Collapse" : "Expand"} project ${project.name}`}
                     title={isExpanded ? "Collapse project" : "Expand project"}
-                    onClick={() => toggleProject(project.id)}
+                    onClick={() => toggleProject(project.id, projectSessions)}
                   >
                     {isExpanded ? (
                       <ChevronDown size={16} />
@@ -255,6 +314,24 @@ export function RunnerSidebar({
                   </button>
                   <div className="tree-row-actions">
                     <button
+                      className={`tree-action-button pin ${project.pinnedAt ? "is-active" : ""}`}
+                      type="button"
+                      aria-label={`${project.pinnedAt ? "Unpin" : "Pin"} project ${project.name}`}
+                      title={project.pinnedAt ? "Unpin project" : "Pin project"}
+                      onClick={() =>
+                        void onToggleProjectPinned(
+                          project.id,
+                          !project.pinnedAt,
+                        )
+                      }
+                    >
+                      {project.pinnedAt ? (
+                        <PinOff size={15} />
+                      ) : (
+                        <Pin size={15} />
+                      )}
+                    </button>
+                    <button
                       className="tree-action-button"
                       type="button"
                       aria-label={`New session in ${project.name}`}
@@ -281,29 +358,78 @@ export function RunnerSidebar({
                     aria-label={`${project.name} sessions`}
                   >
                     {projectSessions.length > 0 ? (
-                      projectSessions.map((session) => (
-                        <button
-                          key={session.id}
-                          type="button"
-                          className={`session-button tree-session-button ${session.id === selectedSessionId ? "is-selected" : ""}`}
-                          onClick={() => onSelectSession(session.id)}
-                        >
-                          <span className="session-agent-row">
-                            <Cpu size={15} />
-                            <span className="truncate">{session.agent}</span>
-                          </span>
-                          <span className="truncate text-left font-medium">
-                            {session.title}
-                          </span>
-                          <span className="session-meta-row">
-                            <span className="truncate text-xs text-ink-500">
-                              {session.executionMode} ·{" "}
-                              {session.executionFolder}
-                            </span>
-                            <StatusPill status={session.status} />
-                          </span>
-                        </button>
-                      ))
+                      <>
+                        {visibleSessions.map((session) => {
+                          const isPinned = Boolean(session.pinnedAt);
+                          const cannotPin =
+                            !isPinned &&
+                            pinnedSessionCount >=
+                              MAX_PINNED_SESSIONS_PER_PROJECT;
+                          return (
+                            <div
+                              className={`tree-session-row ${session.id === selectedSessionId ? "is-selected" : ""}`}
+                              key={session.id}
+                            >
+                              <button
+                                type="button"
+                                className={`session-button tree-session-button ${session.id === selectedSessionId ? "is-selected" : ""}`}
+                                onClick={() => onSelectSession(session.id)}
+                              >
+                                <span className="session-agent-row">
+                                  <Cpu size={15} />
+                                  <span className="truncate">
+                                    {session.agent}
+                                  </span>
+                                </span>
+                                <span className="truncate text-left font-medium">
+                                  {session.title}
+                                </span>
+                                <span className="session-meta-row">
+                                  <span className="truncate text-xs text-ink-500">
+                                    {session.executionMode} ·{" "}
+                                    {session.executionFolder}
+                                  </span>
+                                  <StatusPill status={session.status} />
+                                </span>
+                              </button>
+                              <button
+                                className={`tree-action-button session-pin ${isPinned ? "is-active" : ""}`}
+                                type="button"
+                                aria-label={`${isPinned ? "Unpin" : "Pin"} session ${session.title}`}
+                                disabled={cannotPin}
+                                title={
+                                  cannotPin
+                                    ? "最多只能置顶 3 个 session"
+                                    : isPinned
+                                      ? "Unpin session"
+                                      : "Pin session"
+                                }
+                                onClick={() =>
+                                  void onToggleSessionPinned(
+                                    session.id,
+                                    !isPinned,
+                                  )
+                                }
+                              >
+                                {isPinned ? (
+                                  <PinOff size={15} />
+                                ) : (
+                                  <Pin size={15} />
+                                )}
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {hasOverflow ? (
+                          <button
+                            className="tree-session-more-button"
+                            type="button"
+                            onClick={() => toggleSessionList(project.id)}
+                          >
+                            {showAllSessions ? "收起" : "查看更多"}
+                          </button>
+                        ) : null}
+                      </>
                     ) : (
                       <div className="empty-state compact tree-empty-state">
                         No sessions

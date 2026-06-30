@@ -23,6 +23,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  DEFAULT_VISIBLE_SESSIONS_PER_PROJECT,
+  MAX_PINNED_SESSIONS_PER_PROJECT,
   PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
   PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
   type AccountSecurityState,
@@ -50,6 +52,8 @@ import {
   KeyRound,
   LogOut,
   MoreHorizontal,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -68,6 +72,10 @@ import {
   SidebarModal,
 } from "../features/sessions/RunnerSidebar";
 import {
+  sortProjectsForDisplay,
+  sortSessionsForDisplay,
+} from "../features/sessions/model";
+import {
   type FormEvent,
   type ReactNode,
   useCallback,
@@ -80,6 +88,7 @@ import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
 import type { AppNotification } from "./state";
 import type { useRoamController } from "./useRoamController";
+import { StatusPill } from "../shared/components/StatusPill";
 import type { AsyncState } from "../shared/types/async";
 import { Button } from "@/components/ui/button";
 import {
@@ -212,8 +221,10 @@ export function AppShell({ controller }: AppShellProps) {
     selectProject,
     createProject,
     archiveProject,
+    toggleProjectPinned,
     createSession,
     renameSelectedSession,
+    toggleSessionPinned,
     sendMessage,
     resolveApproval,
     resolveHunk,
@@ -348,7 +359,10 @@ export function AppShell({ controller }: AppShellProps) {
     [dispatch],
   );
   const activeProjects = useMemo(
-    () => state.projects.filter((project) => !project.archivedAt),
+    () =>
+      sortProjectsForDisplay(
+        state.projects.filter((project) => !project.archivedAt),
+      ),
     [state.projects],
   );
   const currentProjectSettingsTargetId =
@@ -394,7 +408,10 @@ export function AppShell({ controller }: AppShellProps) {
 
   useEffect(() => {
     const openOnShortcut = (event: globalThis.KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== "k"
+      ) {
         return;
       }
       event.preventDefault();
@@ -658,524 +675,536 @@ export function AppShell({ controller }: AppShellProps) {
   return (
     <TooltipProvider>
       <div className={`app-shell active-${state.activeTab}`}>
-      <header className="topbar">
-        <div className="topbar-title">
-          <p className="topbar-kicker">RoamCli</p>
-          <h1 className="truncate text-lg font-semibold text-ink-900">
-            Remote Agent Control
-          </h1>
-          <p className="topbar-context">{topbarContext}</p>
-        </div>
-        <div className="topbar-actions topbar-actions-desktop">
-          <button
-            className="command-trigger"
-            type="button"
-            onClick={() => setCommandPaletteOpen(true)}
-          >
-            <Search size={15} />
-            <span>Search or run command...</span>
-            <kbd>⌘K</kbd>
-          </button>
-          <span
-            className={`topbar-status ${state.connectionState === "open" ? "success" : "warning"}`}
-          >
-            {state.connectionState === "open"
-              ? "stream connected"
-              : "stream disconnected"}
-          </span>
-          {state.loadState === "error" ? (
+        <header className="topbar">
+          <div className="topbar-title">
+            <p className="topbar-kicker">RoamCli</p>
+            <h1 className="truncate text-lg font-semibold text-ink-900">
+              Remote Agent Control
+            </h1>
+            <p className="topbar-context">{topbarContext}</p>
+          </div>
+          <div className="topbar-actions topbar-actions-desktop">
             <button
-              className="topbar-status topbar-status-button error"
+              className="command-trigger"
               type="button"
+              onClick={() => setCommandPaletteOpen(true)}
+            >
+              <Search size={15} />
+              <span>Search or run command...</span>
+              <kbd>⌘K</kbd>
+            </button>
+            <span
+              className={`topbar-status ${state.connectionState === "open" ? "success" : "warning"}`}
+            >
+              {state.connectionState === "open"
+                ? "stream connected"
+                : "stream disconnected"}
+            </span>
+            {state.loadState === "error" ? (
+              <button
+                className="topbar-status topbar-status-button error"
+                type="button"
+                onClick={() => setMobileStatusModalOpen(true)}
+              >
+                API error
+              </button>
+            ) : (
+              <span className="topbar-status success">
+                {state.runners.length} runners online
+              </span>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Settings"
+                  onClick={() => openSettingsDrawer("home")}
+                >
+                  <Settings size={16} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Settings</TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="mobile-topbar-actions">
+            <button
+              className={`compact-status-button ${compactStatus.tone}`}
+              type="button"
+              aria-label="Open connection status"
+              title="Connection status"
               onClick={() => setMobileStatusModalOpen(true)}
             >
-              API error
+              <CompactStatusIcon size={16} />
+              <span>{compactStatus.label}</span>
             </button>
-          ) : (
-            <span className="topbar-status success">
-              {state.runners.length} runners online
-            </span>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label="Settings"
-                onClick={() => openSettingsDrawer("home")}
-              >
-                <Settings size={16} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Settings</TooltipContent>
-          </Tooltip>
-        </div>
-        <div className="mobile-topbar-actions">
-          <button
-            className={`compact-status-button ${compactStatus.tone}`}
-            type="button"
-            aria-label="Open connection status"
-            title="Connection status"
-            onClick={() => setMobileStatusModalOpen(true)}
-          >
-            <CompactStatusIcon size={16} />
-            <span>{compactStatus.label}</span>
-          </button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="mobile-topbar-icon-button"
-                aria-label="Open command palette"
-                onClick={() => setCommandPaletteOpen(true)}
-              >
-                <Search size={16} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Command palette</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="mobile-topbar-icon-button"
-                aria-label="Settings"
-                onClick={() => openSettingsDrawer("home")}
-              >
-                <Settings size={16} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Settings</TooltipContent>
-          </Tooltip>
-        </div>
-      </header>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="mobile-topbar-icon-button"
+                  aria-label="Open command palette"
+                  onClick={() => setCommandPaletteOpen(true)}
+                >
+                  <Search size={16} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Command palette</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="mobile-topbar-icon-button"
+                  aria-label="Settings"
+                  onClick={() => openSettingsDrawer("home")}
+                >
+                  <Settings size={16} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Settings</TooltipContent>
+            </Tooltip>
+          </div>
+        </header>
 
-      <NotificationStack
-        notifications={state.notifications}
-        onDismiss={dismissNotification}
-      />
+        <NotificationStack
+          notifications={state.notifications}
+          onDismiss={dismissNotification}
+        />
 
-      {state.loadState === "loading" ? (
-        <div className="empty-state">Loading remote RoamCli state...</div>
-      ) : null}
+        {state.loadState === "loading" ? (
+          <div className="empty-state">Loading remote RoamCli state...</div>
+        ) : null}
 
-      {showWorkspace ? (
-        <>
-          <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
-            {workspaceTabs.map((tab) => (
-              <WorkspaceTabButton
-                key={tab.id}
-                tab={tab}
-                activeTab={state.activeTab}
-                onChange={setActiveTab}
-              />
-            ))}
-          </nav>
+        {showWorkspace ? (
+          <>
+            <nav className="tablet-tabs" aria-label="Tablet workspace tabs">
+              {workspaceTabs.map((tab) => (
+                <WorkspaceTabButton
+                  key={tab.id}
+                  tab={tab}
+                  activeTab={state.activeTab}
+                  onChange={setActiveTab}
+                />
+              ))}
+            </nav>
 
-          <main className="app-grid">
-            <RunnerSidebar
-              projects={state.projects}
-              runners={state.runners}
-              selectedProjectId={selectedProject?.id ?? ""}
-              runnerFilterId={runnerFilterId}
-              sessions={state.sessions}
-              selectedSessionId={selectedSession?.id ?? ""}
-              onRunnerFilterChange={setRunnerFilterId}
-              onSelectProject={selectProject}
-              onSelectSession={setSelectedSessionId}
-              onCreateProject={createProject}
-              onFetchRunnerDirectoryTree={fetchRunnerDirectoryTree}
-              onCreateRunnerDirectory={createRunnerDirectory}
-              onArchiveProject={archiveProject}
-              onCreateSession={createSession}
-              onListAgentSkills={listAgentSkills}
-              onSearchWorkspacePaths={searchWorkspacePaths}
-              promptPresetsByProject={projectPromptPresetsByProject}
-              promptPresetStates={projectPromptPresetStates}
-              promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
-              onRefreshPromptPresets={refreshProjectPromptPresets}
-              onManagePromptPresets={openPromptPresetManager}
-              onFetchGitStatus={fetchGitStatus}
-              onFetchGitBranches={fetchGitBranches}
-            />
-            {selectedSession ? (
-              <ChatPanel
-                session={selectedSession}
-                messages={sessionMessages}
-                activities={sessionActivities}
-                onSend={sendMessage}
-                onControl={sendControl}
-                onRename={renameSelectedSession}
-                onDelete={openArchiveSessionDialog}
-                onCheckStatus={checkSelectedSessionStatus}
-                statusCheckState={sessionStatusCheckState}
-                canSend={canUseSelectedRunner}
-                canControl={canUseSelectedRunner}
-                onOpenSessionSwitcher={() => setMobileSessionSwitcherOpen(true)}
-                onOpenFileLink={openMarkdownFileLink}
-                imageCapability={selectedRunner?.capabilities.find(
-                  (capability) => capability.kind === selectedSession.agent,
-                )}
-                onFetchAttachmentContent={fetchMessageAttachmentContent}
-                onListAgentSkills={listAgentSkills}
-                onSearchWorkspacePaths={searchWorkspacePaths}
-                promptPresets={
-                  projectPromptPresetsByProject[selectedSession.projectId] ?? []
-                }
-                promptPresetState={
-                  projectPromptPresetStates[selectedSession.projectId] ?? "idle"
-                }
-                promptPresetError={
-                  projectPromptPresetErrorsByProject[selectedSession.projectId]
-                }
-                onRefreshPromptPresets={() =>
-                  refreshProjectPromptPresets(selectedSession.projectId)
-                }
-                onManagePromptPresets={() =>
-                  openPromptPresetManager(selectedSession.projectId)
-                }
-                onSaveMessageAsPrompt={openSaveMessageAsPrompt}
-                onNotify={notify}
-                statusBanner={
-                  state.loadState === "error" ? (
-                    <ApiConnectionBanner
-                      onOpenConnection={() => setMobileStatusModalOpen(true)}
-                    />
-                  ) : undefined
-                }
-              />
-            ) : (
-              <section className="chat-column" aria-label="Conversation">
-                <div className="empty-state compact session-empty-state">
-                  {state.loadState === "error" ? (
-                    <>
-                      <span>API connection failed</span>
-                      <p className="session-empty-meta">
-                        Check your login session or backend route, then
-                        reconnect the stream.
-                      </p>
-                      <button
-                        className="small-button"
-                        type="button"
-                        onClick={() => setMobileStatusModalOpen(true)}
-                      >
-                        <WifiOff size={16} />
-                        Connection settings
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span>
-                        {state.runners.length === 0 && !hasWorkspaceData
-                          ? "No runners are online"
-                          : selectedProject
-                            ? "Create a session in the selected project."
-                            : "Create a project to start a session."}
-                      </span>
-                      <p className="session-empty-meta">
-                        {state.runners.length === 0 && !hasWorkspaceData
-                          ? "Start a runner to create or resume sessions."
-                          : selectedProject
-                            ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
-                            : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
-                      </p>
-                      {state.runners.length === 0 && !hasWorkspaceData ? (
-                        <RunnerCommandDisplay command={runnerCommand} />
-                      ) : (
-                        <button
-                          className="small-button"
-                          type="button"
-                          aria-label="Choose session"
-                          onClick={() => setMobileSessionSwitcherOpen(true)}
-                        >
-                          Choose session
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </section>
-            )}
-            <aside className="workspace-column" aria-label="Workspace tools">
-              <nav className="workspace-tabs" aria-label="Tool tabs">
-                {workspaceTabs.map((tab) => (
-                  <WorkspaceTabButton
-                    key={tab.id}
-                    tab={tab}
-                    activeTab={workspaceActiveTab}
-                    onChange={setActiveTab}
-                  />
-                ))}
-              </nav>
-              <div className="workspace-scroll">
-                <div className="workspace-surface files-surface">
-                  <FilePanel
-                    files={sessionFiles}
-                    treeState={sessionFileTreeState}
-                    treePathStates={sessionFileTreePathState}
-                    selectedPath={state.selectedFilePath}
-                    fileContent={state.fileContent}
-                    editorContent={state.editorContent}
-                    editMode={state.fileEditMode}
-                    contentState={state.fileContentState}
-                    saveState={state.fileSaveState}
-                    onSelectFile={selectFile}
-                    onLoadDirectory={loadSelectedDirectory}
-                    onRefreshTree={refreshSelectedFileTree}
-                    onStartEdit={startSelectedFileEdit}
-                    onCancelEdit={cancelSelectedFileEdit}
-                    onChangeContent={(content) =>
-                      dispatch({ type: "editorContentChanged", content })
-                    }
-                    onSaveFile={saveSelectedFile}
-                    treeId={`${selectedSession?.id ?? "none"}:${sessionFileTreeState}`}
-                  />
-                </div>
-                <div className="workspace-surface git-surface">
-                  <GitPanel
-                    active={state.activeTab === "git"}
-                    project={selectedProject}
-                    runnerOnline={Boolean(selectedRunner)}
-                    sessions={runnerSessions}
-                    archivingSessionIds={state.archivingSessionIds}
-                    defaultContext={selectedGitContext}
-                    onFetchStatus={fetchGitStatus}
-                    onFetchDiff={fetchGitDiff}
-                    onFetchHistory={fetchGitHistory}
-                    onFetchCommitFiles={fetchGitCommitFiles}
-                    onFetchBranches={fetchGitBranches}
-                    gitJobs={state.gitJobs}
-                    onFetchJobs={fetchGitJobs}
-                    onInitRepository={initGitRepository}
-                    onStagePaths={stageGitPaths}
-                    onUnstagePaths={unstageGitPaths}
-                    onDiscardPaths={discardGitPaths}
-                    onCommit={commitGitChanges}
-                    onRemoteOperation={runGitRemoteOperation}
-                    onRemoveWorktree={removeGitWorktree}
-                    canOpenFileForEdit={selectedSessionWorkspaceAvailable}
-                    onOpenFileForEdit={openFileForEdit}
-                    onNotify={(tone, title, message) =>
-                      dispatch({
-                        type: "notificationPushed",
-                        tone,
-                        title,
-                        message,
-                      })
-                    }
-                  />
-                </div>
-                <div className="workspace-surface approvals-surface">
-                  <ApprovalCenter
-                    approvals={sessionApprovals}
-                    hunks={sessionHunks}
-                    onResolveApproval={resolveApproval}
-                    onResolveHunk={resolveHunk}
-                    onApplyPatch={applyAcceptedPatch}
-                    patchApplyState={state.patchApplyState}
-                  />
-                </div>
-              </div>
-            </aside>
-          </main>
-
-          <BottomTabs activeTab={state.activeTab} onChange={setActiveTab} />
-
-          {mobileSessionSwitcherOpen ? (
-            <SidebarModal
-              title="Switch Session"
-              variant="sheet"
-              onClose={() => setMobileSessionSwitcherOpen(false)}
-            >
-              <MobileSessionSwitcher
-                activeProjects={activeProjects}
-                selectedProject={selectedProject}
-                selectedSession={selectedSession}
-                runnerSessions={runnerSessions}
-                onSelectProject={selectProject}
-                onSelectSession={(sessionId) => {
-                  setSelectedSessionId(sessionId);
-                  setMobileSessionSwitcherOpen(false);
-                }}
-                onNewProject={() => {
-                  setMobileSessionSwitcherOpen(false);
-                  setMobileProjectModalOpen(true);
-                }}
-                onArchiveProject={archiveProject}
-                onNewSession={() => {
-                  setMobileSessionSwitcherOpen(false);
-                  setMobileSessionModalOpen(true);
-                }}
-              />
-            </SidebarModal>
-          ) : null}
-
-          {mobileProjectModalOpen ? (
-            <SidebarModal
-              title="New Project"
-              variant="sheet"
-              onClose={() => setMobileProjectModalOpen(false)}
-            >
-              <ProjectForm
+            <main className="app-grid">
+              <RunnerSidebar
+                projects={state.projects}
                 runners={state.runners}
-                onCreate={createProject}
+                selectedProjectId={selectedProject?.id ?? ""}
+                runnerFilterId={runnerFilterId}
+                sessions={state.sessions}
+                selectedSessionId={selectedSession?.id ?? ""}
+                onRunnerFilterChange={setRunnerFilterId}
+                onSelectProject={selectProject}
+                onSelectSession={setSelectedSessionId}
+                onCreateProject={createProject}
                 onFetchRunnerDirectoryTree={fetchRunnerDirectoryTree}
                 onCreateRunnerDirectory={createRunnerDirectory}
-                onCreated={() => setMobileProjectModalOpen(false)}
-              />
-            </SidebarModal>
-          ) : null}
-
-          {mobileSessionModalOpen && selectedProject ? (
-            <SidebarModal
-              title={`New Session - ${selectedProject.name}`}
-              variant="sheet"
-              onClose={() => setMobileSessionModalOpen(false)}
-            >
-              {selectedRunner ? (
-                <NewSessionForm
-                  project={selectedProject}
-                  runner={selectedRunner}
-                  onListAgentSkills={listAgentSkills}
-                  onSearchWorkspacePaths={searchWorkspacePaths}
-                  promptPresets={
-                    projectPromptPresetsByProject[selectedProject.id] ?? []
-                  }
-                  promptPresetState={
-                    projectPromptPresetStates[selectedProject.id] ?? "idle"
-                  }
-                  promptPresetError={
-                    projectPromptPresetErrorsByProject[selectedProject.id]
-                  }
-                  onRefreshPromptPresets={() =>
-                    refreshProjectPromptPresets(selectedProject.id)
-                  }
-                  onManagePromptPresets={() => {
-                    setMobileSessionModalOpen(false);
-                    openPromptPresetManager(selectedProject.id);
-                  }}
-                  onFetchGitStatus={fetchGitStatus}
-                  onFetchGitBranches={fetchGitBranches}
-                  onCreate={(values) =>
-                    createSession(selectedProject.id, values)
-                  }
-                  onCreated={() => setMobileSessionModalOpen(false)}
-                />
-              ) : (
-                <div className="empty-state compact">
-                  The project runner is offline.
-                </div>
-              )}
-            </SidebarModal>
-          ) : null}
-
-          {archiveDialog ? (
-            <SessionArchiveDialog
-              state={archiveDialog}
-              onClose={closeArchiveSessionDialog}
-              onSubmit={submitArchiveSession}
-            />
-          ) : null}
-
-          {promptPresetEditor ? (
-            <PromptPresetEditorDialog
-              state={promptPresetEditor}
-              project={activeProjects.find(
-                (project) => project.id === promptPresetEditor.projectId,
-              )}
-              onClose={() => setPromptPresetEditor(null)}
-              onSave={savePromptPreset}
-              onDelete={removePromptPreset}
-            />
-          ) : null}
-
-          <Sheet
-            open={settingsDrawerOpen}
-            onOpenChange={(open) => {
-              setSettingsDrawerOpen(open);
-              if (!open) {
-                setSettingsView("home");
-              }
-            }}
-          >
-            <SheetContent className="settings-drawer" side="right">
-              <SheetHeader>
-                <SheetTitle>Settings</SheetTitle>
-              </SheetHeader>
-              <SettingsPanel
-                account={accountSecurity}
-                accountRefreshState={settingsAccountRefreshState}
-                runnerCommand={runnerCommand}
-                view={settingsView}
-                onViewChange={changeSettingsView}
-                projects={activeProjects}
-                currentProjectId={selectedProject?.id ?? ""}
-                projectId={settingsProjectId}
-                onProjectChange={setSettingsProjectId}
+                onArchiveProject={archiveProject}
+                onToggleProjectPinned={toggleProjectPinned}
+                onCreateSession={createSession}
+                onToggleSessionPinned={toggleSessionPinned}
+                onListAgentSkills={listAgentSkills}
+                onSearchWorkspacePaths={searchWorkspacePaths}
                 promptPresetsByProject={projectPromptPresetsByProject}
                 promptPresetStates={projectPromptPresetStates}
                 promptPresetErrorsByProject={projectPromptPresetErrorsByProject}
                 onRefreshPromptPresets={refreshProjectPromptPresets}
-                onNewPromptPreset={(projectId) =>
-                  openSettingsPromptPresetEditor(projectId)
-                }
-                onEditPromptPreset={(projectId, preset) =>
-                  openSettingsPromptPresetEditor(projectId, preset)
-                }
-                onDeletePromptPreset={removePromptPreset}
-                onReorderPromptPresets={reorderPromptPresets}
-                onLogout={logoutFromAccountSecurity}
-                onLogoutAll={logoutAllFromAccountSecurity}
-                onChangePassword={changePasswordFromAccountSecurity}
-                onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
+                onManagePromptPresets={openPromptPresetManager}
+                onFetchGitStatus={fetchGitStatus}
+                onFetchGitBranches={fetchGitBranches}
               />
-            </SheetContent>
-          </Sheet>
+              {selectedSession ? (
+                <ChatPanel
+                  session={selectedSession}
+                  messages={sessionMessages}
+                  activities={sessionActivities}
+                  onSend={sendMessage}
+                  onControl={sendControl}
+                  onRename={renameSelectedSession}
+                  onDelete={openArchiveSessionDialog}
+                  onCheckStatus={checkSelectedSessionStatus}
+                  statusCheckState={sessionStatusCheckState}
+                  canSend={canUseSelectedRunner}
+                  canControl={canUseSelectedRunner}
+                  onOpenSessionSwitcher={() =>
+                    setMobileSessionSwitcherOpen(true)
+                  }
+                  onOpenFileLink={openMarkdownFileLink}
+                  imageCapability={selectedRunner?.capabilities.find(
+                    (capability) => capability.kind === selectedSession.agent,
+                  )}
+                  onFetchAttachmentContent={fetchMessageAttachmentContent}
+                  onListAgentSkills={listAgentSkills}
+                  onSearchWorkspacePaths={searchWorkspacePaths}
+                  promptPresets={
+                    projectPromptPresetsByProject[selectedSession.projectId] ??
+                    []
+                  }
+                  promptPresetState={
+                    projectPromptPresetStates[selectedSession.projectId] ??
+                    "idle"
+                  }
+                  promptPresetError={
+                    projectPromptPresetErrorsByProject[
+                      selectedSession.projectId
+                    ]
+                  }
+                  onRefreshPromptPresets={() =>
+                    refreshProjectPromptPresets(selectedSession.projectId)
+                  }
+                  onManagePromptPresets={() =>
+                    openPromptPresetManager(selectedSession.projectId)
+                  }
+                  onSaveMessageAsPrompt={openSaveMessageAsPrompt}
+                  onNotify={notify}
+                  statusBanner={
+                    state.loadState === "error" ? (
+                      <ApiConnectionBanner
+                        onOpenConnection={() => setMobileStatusModalOpen(true)}
+                      />
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <section className="chat-column" aria-label="Conversation">
+                  <div className="empty-state compact session-empty-state">
+                    {state.loadState === "error" ? (
+                      <>
+                        <span>API connection failed</span>
+                        <p className="session-empty-meta">
+                          Check your login session or backend route, then
+                          reconnect the stream.
+                        </p>
+                        <button
+                          className="small-button"
+                          type="button"
+                          onClick={() => setMobileStatusModalOpen(true)}
+                        >
+                          <WifiOff size={16} />
+                          Connection settings
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span>
+                          {state.runners.length === 0 && !hasWorkspaceData
+                            ? "No runners are online"
+                            : selectedProject
+                              ? "Create a session in the selected project."
+                              : "Create a project to start a session."}
+                        </span>
+                        <p className="session-empty-meta">
+                          {state.runners.length === 0 && !hasWorkspaceData
+                            ? "Start a runner to create or resume sessions."
+                            : selectedProject
+                              ? `${selectedProject.name} · ${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`
+                              : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
+                        </p>
+                        {state.runners.length === 0 && !hasWorkspaceData ? (
+                          <RunnerCommandDisplay command={runnerCommand} />
+                        ) : (
+                          <button
+                            className="small-button"
+                            type="button"
+                            aria-label="Choose session"
+                            onClick={() => setMobileSessionSwitcherOpen(true)}
+                          >
+                            Choose session
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </section>
+              )}
+              <aside className="workspace-column" aria-label="Workspace tools">
+                <nav className="workspace-tabs" aria-label="Tool tabs">
+                  {workspaceTabs.map((tab) => (
+                    <WorkspaceTabButton
+                      key={tab.id}
+                      tab={tab}
+                      activeTab={workspaceActiveTab}
+                      onChange={setActiveTab}
+                    />
+                  ))}
+                </nav>
+                <div className="workspace-scroll">
+                  <div className="workspace-surface files-surface">
+                    <FilePanel
+                      files={sessionFiles}
+                      treeState={sessionFileTreeState}
+                      treePathStates={sessionFileTreePathState}
+                      selectedPath={state.selectedFilePath}
+                      fileContent={state.fileContent}
+                      editorContent={state.editorContent}
+                      editMode={state.fileEditMode}
+                      contentState={state.fileContentState}
+                      saveState={state.fileSaveState}
+                      onSelectFile={selectFile}
+                      onLoadDirectory={loadSelectedDirectory}
+                      onRefreshTree={refreshSelectedFileTree}
+                      onStartEdit={startSelectedFileEdit}
+                      onCancelEdit={cancelSelectedFileEdit}
+                      onChangeContent={(content) =>
+                        dispatch({ type: "editorContentChanged", content })
+                      }
+                      onSaveFile={saveSelectedFile}
+                      treeId={`${selectedSession?.id ?? "none"}:${sessionFileTreeState}`}
+                    />
+                  </div>
+                  <div className="workspace-surface git-surface">
+                    <GitPanel
+                      active={state.activeTab === "git"}
+                      project={selectedProject}
+                      runnerOnline={Boolean(selectedRunner)}
+                      sessions={runnerSessions}
+                      archivingSessionIds={state.archivingSessionIds}
+                      defaultContext={selectedGitContext}
+                      onFetchStatus={fetchGitStatus}
+                      onFetchDiff={fetchGitDiff}
+                      onFetchHistory={fetchGitHistory}
+                      onFetchCommitFiles={fetchGitCommitFiles}
+                      onFetchBranches={fetchGitBranches}
+                      gitJobs={state.gitJobs}
+                      onFetchJobs={fetchGitJobs}
+                      onInitRepository={initGitRepository}
+                      onStagePaths={stageGitPaths}
+                      onUnstagePaths={unstageGitPaths}
+                      onDiscardPaths={discardGitPaths}
+                      onCommit={commitGitChanges}
+                      onRemoteOperation={runGitRemoteOperation}
+                      onRemoveWorktree={removeGitWorktree}
+                      canOpenFileForEdit={selectedSessionWorkspaceAvailable}
+                      onOpenFileForEdit={openFileForEdit}
+                      onNotify={(tone, title, message) =>
+                        dispatch({
+                          type: "notificationPushed",
+                          tone,
+                          title,
+                          message,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="workspace-surface approvals-surface">
+                    <ApprovalCenter
+                      approvals={sessionApprovals}
+                      hunks={sessionHunks}
+                      onResolveApproval={resolveApproval}
+                      onResolveHunk={resolveHunk}
+                      onApplyPatch={applyAcceptedPatch}
+                      patchApplyState={state.patchApplyState}
+                    />
+                  </div>
+                </div>
+              </aside>
+            </main>
 
-          <AppCommandPalette
-            open={commandPaletteOpen}
-            onOpenChange={setCommandPaletteOpen}
-            projects={activeProjects}
-            sessions={state.sessions}
-            files={sessionFiles}
-            selectedProjectId={selectedProject?.id ?? ""}
-            selectedSessionId={selectedSession?.id ?? ""}
-            onSelectProject={selectProject}
-            onSelectSession={setSelectedSessionId}
-            onSelectFile={(path) => {
-              setActiveTab("files");
-              selectFile(path);
-            }}
-            onOpenTab={setActiveTab}
-            onOpenSettings={(view) => openSettingsDrawer(view)}
-            onNewSession={() => {
-              setMobileSessionModalOpen(true);
-              setCommandPaletteOpen(false);
-            }}
-          />
-        </>
-      ) : null}
+            <BottomTabs activeTab={state.activeTab} onChange={setActiveTab} />
 
-      {mobileStatusModalOpen ? (
-        <SidebarModal
-          title="Connection"
-          variant="sheet"
-          onClose={() => setMobileStatusModalOpen(false)}
-        >
-          <MobileStatusSheet
-            connectionState={state.connectionState}
-            loadState={state.loadState}
-            runnerCount={state.runners.length}
-            streamReconnect={streamReconnect}
-            onReconnect={reconnectStream}
-          />
-        </SidebarModal>
-      ) : null}
+            {mobileSessionSwitcherOpen ? (
+              <SidebarModal
+                title="Switch Session"
+                variant="sheet"
+                onClose={() => setMobileSessionSwitcherOpen(false)}
+              >
+                <MobileSessionSwitcher
+                  activeProjects={activeProjects}
+                  selectedProject={selectedProject}
+                  selectedSession={selectedSession}
+                  runnerSessions={runnerSessions}
+                  onSelectProject={selectProject}
+                  onSelectSession={(sessionId) => {
+                    setSelectedSessionId(sessionId);
+                    setMobileSessionSwitcherOpen(false);
+                  }}
+                  onNewProject={() => {
+                    setMobileSessionSwitcherOpen(false);
+                    setMobileProjectModalOpen(true);
+                  }}
+                  onArchiveProject={archiveProject}
+                  onToggleProjectPinned={toggleProjectPinned}
+                  onNewSession={() => {
+                    setMobileSessionSwitcherOpen(false);
+                    setMobileSessionModalOpen(true);
+                  }}
+                  onToggleSessionPinned={toggleSessionPinned}
+                />
+              </SidebarModal>
+            ) : null}
+
+            {mobileProjectModalOpen ? (
+              <SidebarModal
+                title="New Project"
+                variant="sheet"
+                onClose={() => setMobileProjectModalOpen(false)}
+              >
+                <ProjectForm
+                  runners={state.runners}
+                  onCreate={createProject}
+                  onFetchRunnerDirectoryTree={fetchRunnerDirectoryTree}
+                  onCreateRunnerDirectory={createRunnerDirectory}
+                  onCreated={() => setMobileProjectModalOpen(false)}
+                />
+              </SidebarModal>
+            ) : null}
+
+            {mobileSessionModalOpen && selectedProject ? (
+              <SidebarModal
+                title={`New Session - ${selectedProject.name}`}
+                variant="sheet"
+                onClose={() => setMobileSessionModalOpen(false)}
+              >
+                {selectedRunner ? (
+                  <NewSessionForm
+                    project={selectedProject}
+                    runner={selectedRunner}
+                    onListAgentSkills={listAgentSkills}
+                    onSearchWorkspacePaths={searchWorkspacePaths}
+                    promptPresets={
+                      projectPromptPresetsByProject[selectedProject.id] ?? []
+                    }
+                    promptPresetState={
+                      projectPromptPresetStates[selectedProject.id] ?? "idle"
+                    }
+                    promptPresetError={
+                      projectPromptPresetErrorsByProject[selectedProject.id]
+                    }
+                    onRefreshPromptPresets={() =>
+                      refreshProjectPromptPresets(selectedProject.id)
+                    }
+                    onManagePromptPresets={() => {
+                      setMobileSessionModalOpen(false);
+                      openPromptPresetManager(selectedProject.id);
+                    }}
+                    onFetchGitStatus={fetchGitStatus}
+                    onFetchGitBranches={fetchGitBranches}
+                    onCreate={(values) =>
+                      createSession(selectedProject.id, values)
+                    }
+                    onCreated={() => setMobileSessionModalOpen(false)}
+                  />
+                ) : (
+                  <div className="empty-state compact">
+                    The project runner is offline.
+                  </div>
+                )}
+              </SidebarModal>
+            ) : null}
+
+            {archiveDialog ? (
+              <SessionArchiveDialog
+                state={archiveDialog}
+                onClose={closeArchiveSessionDialog}
+                onSubmit={submitArchiveSession}
+              />
+            ) : null}
+
+            {promptPresetEditor ? (
+              <PromptPresetEditorDialog
+                state={promptPresetEditor}
+                project={activeProjects.find(
+                  (project) => project.id === promptPresetEditor.projectId,
+                )}
+                onClose={() => setPromptPresetEditor(null)}
+                onSave={savePromptPreset}
+                onDelete={removePromptPreset}
+              />
+            ) : null}
+
+            <Sheet
+              open={settingsDrawerOpen}
+              onOpenChange={(open) => {
+                setSettingsDrawerOpen(open);
+                if (!open) {
+                  setSettingsView("home");
+                }
+              }}
+            >
+              <SheetContent className="settings-drawer" side="right">
+                <SheetHeader>
+                  <SheetTitle>Settings</SheetTitle>
+                </SheetHeader>
+                <SettingsPanel
+                  account={accountSecurity}
+                  accountRefreshState={settingsAccountRefreshState}
+                  runnerCommand={runnerCommand}
+                  view={settingsView}
+                  onViewChange={changeSettingsView}
+                  projects={activeProjects}
+                  currentProjectId={selectedProject?.id ?? ""}
+                  projectId={settingsProjectId}
+                  onProjectChange={setSettingsProjectId}
+                  promptPresetsByProject={projectPromptPresetsByProject}
+                  promptPresetStates={projectPromptPresetStates}
+                  promptPresetErrorsByProject={
+                    projectPromptPresetErrorsByProject
+                  }
+                  onRefreshPromptPresets={refreshProjectPromptPresets}
+                  onNewPromptPreset={(projectId) =>
+                    openSettingsPromptPresetEditor(projectId)
+                  }
+                  onEditPromptPreset={(projectId, preset) =>
+                    openSettingsPromptPresetEditor(projectId, preset)
+                  }
+                  onDeletePromptPreset={removePromptPreset}
+                  onReorderPromptPresets={reorderPromptPresets}
+                  onLogout={logoutFromAccountSecurity}
+                  onLogoutAll={logoutAllFromAccountSecurity}
+                  onChangePassword={changePasswordFromAccountSecurity}
+                  onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
+                />
+              </SheetContent>
+            </Sheet>
+
+            <AppCommandPalette
+              open={commandPaletteOpen}
+              onOpenChange={setCommandPaletteOpen}
+              projects={activeProjects}
+              sessions={state.sessions}
+              files={sessionFiles}
+              selectedProjectId={selectedProject?.id ?? ""}
+              selectedSessionId={selectedSession?.id ?? ""}
+              onSelectProject={selectProject}
+              onSelectSession={setSelectedSessionId}
+              onSelectFile={(path) => {
+                setActiveTab("files");
+                selectFile(path);
+              }}
+              onOpenTab={setActiveTab}
+              onOpenSettings={(view) => openSettingsDrawer(view)}
+              onNewSession={() => {
+                setMobileSessionModalOpen(true);
+                setCommandPaletteOpen(false);
+              }}
+            />
+          </>
+        ) : null}
+
+        {mobileStatusModalOpen ? (
+          <SidebarModal
+            title="Connection"
+            variant="sheet"
+            onClose={() => setMobileStatusModalOpen(false)}
+          >
+            <MobileStatusSheet
+              connectionState={state.connectionState}
+              loadState={state.loadState}
+              runnerCount={state.runners.length}
+              streamReconnect={streamReconnect}
+              onReconnect={reconnectStream}
+            />
+          </SidebarModal>
+        ) : null}
       </div>
     </TooltipProvider>
   );
@@ -2078,11 +2107,7 @@ function PromptPresetList({
   }
 
   if (presets.length === 0) {
-    return (
-      <div className="empty-state compact">
-        {emptyMessage}
-      </div>
-    );
+    return <div className="empty-state compact">{emptyMessage}</div>;
   }
 
   return (
@@ -2759,7 +2784,9 @@ function MobileSessionSwitcher({
   onSelectSession,
   onNewProject,
   onArchiveProject,
+  onToggleProjectPinned,
   onNewSession,
+  onToggleSessionPinned,
 }: {
   activeProjects: Project[];
   selectedProject: Project | undefined;
@@ -2769,8 +2796,45 @@ function MobileSessionSwitcher({
   onSelectSession: (sessionId: string) => void;
   onNewProject: () => void;
   onArchiveProject: (projectId: string) => void;
+  onToggleProjectPinned: (
+    projectId: string,
+    pinned: boolean,
+  ) => void | Promise<void>;
   onNewSession: () => void;
+  onToggleSessionPinned: (
+    sessionId: string,
+    pinned: boolean,
+  ) => void | Promise<void>;
 }) {
+  const [showAllSessions, setShowAllSessions] = useState(false);
+  const orderedSessions = useMemo(
+    () => sortSessionsForDisplay(runnerSessions),
+    [runnerSessions],
+  );
+  const selectedSessionIndex = orderedSessions.findIndex(
+    (session) => session.id === selectedSession?.id,
+  );
+  const selectedSessionPinned = Boolean(selectedSession?.pinnedAt);
+  const pinnedSessionCount = orderedSessions.filter(
+    (session) => session.pinnedAt,
+  ).length;
+  const selectedSessionPinDisabled = Boolean(
+    selectedSession &&
+      !selectedSessionPinned &&
+      pinnedSessionCount >= MAX_PINNED_SESSIONS_PER_PROJECT,
+  );
+  const hasSessionOverflow =
+    orderedSessions.length > DEFAULT_VISIBLE_SESSIONS_PER_PROJECT;
+  const visibleSessions = showAllSessions
+    ? orderedSessions
+    : orderedSessions.slice(0, DEFAULT_VISIBLE_SESSIONS_PER_PROJECT);
+
+  useEffect(() => {
+    setShowAllSessions(
+      selectedSessionIndex >= DEFAULT_VISIBLE_SESSIONS_PER_PROJECT,
+    );
+  }, [selectedProject?.id, selectedSessionIndex]);
+
   return (
     <div className="mobile-sheet-stack">
       <div className="mobile-sheet-row">
@@ -2805,36 +2869,78 @@ function MobileSessionSwitcher({
             <FolderPlus size={16} />
           </button>
           {selectedProject ? (
-            <button
-              className="mobile-icon-button danger"
-              type="button"
-              aria-label={`Archive selected project ${selectedProject.name}`}
-              title="Archive project"
-              onClick={() => onArchiveProject(selectedProject.id)}
-            >
-              <Trash2 size={15} />
-            </button>
+            <>
+              <button
+                className={`mobile-icon-button ${selectedProject.pinnedAt ? "is-active" : ""}`}
+                type="button"
+                aria-label={`${selectedProject.pinnedAt ? "Unpin" : "Pin"} selected project ${selectedProject.name}`}
+                title={
+                  selectedProject.pinnedAt ? "Unpin project" : "Pin project"
+                }
+                onClick={() =>
+                  void onToggleProjectPinned(
+                    selectedProject.id,
+                    !selectedProject.pinnedAt,
+                  )
+                }
+              >
+                {selectedProject.pinnedAt ? (
+                  <PinOff size={15} />
+                ) : (
+                  <Pin size={15} />
+                )}
+              </button>
+              <button
+                className="mobile-icon-button danger"
+                type="button"
+                aria-label={`Archive selected project ${selectedProject.name}`}
+                title="Archive project"
+                onClick={() => onArchiveProject(selectedProject.id)}
+              >
+                <Trash2 size={15} />
+              </button>
+            </>
           ) : null}
         </div>
       </div>
-      <div className="mobile-sheet-row">
-        <label className="field">
+      <div className="mobile-session-section">
+        <div className="mobile-session-header">
           <span>Session</span>
-          <select
-            value={selectedSession?.id ?? ""}
-            disabled={!selectedProject || runnerSessions.length === 0}
-            onChange={(event) => onSelectSession(event.target.value)}
-          >
-            {!selectedProject || runnerSessions.length === 0 ? (
-              <option value="">No sessions</option>
-            ) : null}
-            {runnerSessions.map((session) => (
-              <option key={session.id} value={session.id}>
-                {session.title}
-              </option>
-            ))}
-          </select>
-        </label>
+        </div>
+        <div
+          className="mobile-session-list"
+          role="group"
+          aria-label="Mobile sessions"
+        >
+          {!selectedProject || orderedSessions.length === 0 ? (
+            <div className="empty-state compact tree-empty-state">
+              No sessions
+            </div>
+          ) : (
+            <>
+              {visibleSessions.map((session) => (
+                <button
+                  key={session.id}
+                  className={`mobile-session-button ${session.id === selectedSession?.id ? "is-selected" : ""}`}
+                  type="button"
+                  onClick={() => onSelectSession(session.id)}
+                >
+                  <span className="truncate">{session.title}</span>
+                  <StatusPill status={session.status} />
+                </button>
+              ))}
+              {hasSessionOverflow ? (
+                <button
+                  className="tree-session-more-button mobile-session-more-button"
+                  type="button"
+                  onClick={() => setShowAllSessions((current) => !current)}
+                >
+                  {showAllSessions ? "收起" : "查看更多"}
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
         <div className="mobile-sheet-actions">
           <button
             className="primary-icon-button"
@@ -2850,6 +2956,33 @@ function MobileSessionSwitcher({
           >
             <Plus size={16} />
           </button>
+          {selectedSession ? (
+            <button
+              className={`mobile-icon-button ${selectedSessionPinned ? "is-active" : ""}`}
+              type="button"
+              aria-label={`${selectedSessionPinned ? "Unpin" : "Pin"} selected session ${selectedSession.title}`}
+              disabled={selectedSessionPinDisabled}
+              title={
+                selectedSessionPinDisabled
+                  ? "最多只能置顶 3 个 session"
+                  : selectedSessionPinned
+                    ? "Unpin session"
+                    : "Pin session"
+              }
+              onClick={() =>
+                void onToggleSessionPinned(
+                  selectedSession.id,
+                  !selectedSessionPinned,
+                )
+              }
+            >
+              {selectedSessionPinned ? (
+                <PinOff size={15} />
+              ) : (
+                <Pin size={15} />
+              )}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

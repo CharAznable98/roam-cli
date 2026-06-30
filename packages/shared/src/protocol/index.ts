@@ -111,11 +111,15 @@ export const SessionStatusSchema = z.enum([
 ]);
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
+export const MAX_PINNED_SESSIONS_PER_PROJECT = 3;
+export const DEFAULT_VISIBLE_SESSIONS_PER_PROJECT = 5;
+
 export const ProjectSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   runnerId: z.string().min(1),
   directory: z.string().min(1),
+  pinnedAt: z.string().datetime().optional(),
   archivedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -378,6 +382,7 @@ export const SessionSchema = z.object({
   gitBaseSha: z.string().min(1).optional(),
   worktreeDeletedAt: z.string().datetime().optional(),
   agentThreadId: z.string().min(1).optional(),
+  pinnedAt: z.string().datetime().optional(),
   archivedAt: z.string().datetime().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1158,9 +1163,14 @@ export const ApiCreateMessageSchema = z.object({
 });
 export type ApiCreateMessage = z.infer<typeof ApiCreateMessageSchema>;
 
-export const ApiUpdateSessionSchema = z.object({
-  title: z.string().trim().min(1),
-});
+export const ApiUpdateSessionSchema = z
+  .object({
+    title: z.string().trim().min(1).optional(),
+    pinned: z.boolean().optional(),
+  })
+  .refine((value) => value.title !== undefined || value.pinned !== undefined, {
+    message: "At least one session update field is required.",
+  });
 export type ApiUpdateSession = z.infer<typeof ApiUpdateSessionSchema>;
 
 export const ApiCreateProjectSchema = z.object({
@@ -1170,10 +1180,19 @@ export const ApiCreateProjectSchema = z.object({
 });
 export type ApiCreateProject = z.infer<typeof ApiCreateProjectSchema>;
 
-export const ApiUpdateProjectSchema = z.object({
-  name: z.string().min(1).optional(),
-  directory: z.string().min(1).optional(),
-});
+export const ApiUpdateProjectSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    directory: z.string().min(1).optional(),
+    pinned: z.boolean().optional(),
+  })
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.directory !== undefined ||
+      value.pinned !== undefined,
+    { message: "At least one project update field is required." },
+  );
 export type ApiUpdateProject = z.infer<typeof ApiUpdateProjectSchema>;
 
 export const ApiCreateProjectPromptPresetSchema = z.object({

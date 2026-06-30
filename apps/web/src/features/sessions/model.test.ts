@@ -1,5 +1,6 @@
 import {
   DEFAULT_MAX_IMAGE_BYTES,
+  type Project,
   type RunnerRegistration,
   type Session,
 } from "@roamcli/shared/protocol";
@@ -9,6 +10,8 @@ import {
   getRunnerSessions,
   getSelectedRunner,
   getSelectedSession,
+  sortProjectsForDisplay,
+  sortSessionsForDisplay,
 } from "./model";
 
 const runner: RunnerRegistration = {
@@ -76,5 +79,49 @@ describe("session model", () => {
       getSelectedSession([session, otherSession], visibleSessions, "session-2"),
     ).toBe(session);
     expect(getSelectedSession([otherSession], [], "session-2")).toBeUndefined();
+  });
+
+  it("sorts pinned projects and sessions before ordinary recency order", () => {
+    const olderProject: Project = {
+      id: "project-1",
+      name: "Project One",
+      runnerId: "runner-1",
+      directory: "/workspace/project-1",
+      pinnedAt: "2026-06-07T00:00:00.000Z",
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+      lastActiveAt: "2026-06-05T00:00:00.000Z",
+    };
+    const newerProject: Project = {
+      id: "project-2",
+      name: "Project Two",
+      runnerId: "runner-1",
+      directory: "/workspace/project-2",
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      lastActiveAt: "2026-06-06T00:00:00.000Z",
+    };
+    const olderSession: Session = {
+      ...session,
+      id: "session-1",
+      pinnedAt: "2026-06-07T00:00:00.000Z",
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const newerSession: Session = {
+      ...session,
+      id: "session-2",
+      createdAt: "2026-06-06T00:00:00.000Z",
+    };
+
+    expect(
+      sortProjectsForDisplay([newerProject, olderProject]).map(
+        (project) => project.id,
+      ),
+    ).toEqual(["project-1", "project-2"]);
+    expect(
+      sortSessionsForDisplay([newerSession, olderSession]).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["session-1", "session-2"]);
   });
 });

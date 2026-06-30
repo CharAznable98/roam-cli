@@ -50,6 +50,7 @@ import {
   getSelectedProject,
   getSelectedRunner,
   getSelectedSession,
+  sortSessionsForDisplay,
 } from "../features/sessions/model";
 import { buildRunnerCommand } from "./runner-command";
 import { loadLastSelection, saveLastSelection } from "./selection-storage";
@@ -497,7 +498,10 @@ export function useRoamController() {
     [selectedProject, state.runners, state.selectedRunnerId],
   );
   const projectSessions = useMemo(
-    () => getProjectSessions(state.sessions, selectedProject?.id),
+    () =>
+      sortSessionsForDisplay(
+        getProjectSessions(state.sessions, selectedProject?.id),
+      ),
     [selectedProject?.id, state.sessions],
   );
   const selectedSession = useMemo(
@@ -736,6 +740,22 @@ export function useRoamController() {
       );
   };
 
+  const toggleProjectPinned = async (projectId: string, pinned: boolean) => {
+    if (!apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    try {
+      const project = await apiRef.current.updateProject(projectId, {
+        pinned,
+      });
+      dispatch({ type: "projectUpdated", project });
+    } catch (pinError: unknown) {
+      const message = errorMessage(pinError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
+  };
+
   const createSession = async (
     projectId: string,
     values: {
@@ -778,6 +798,42 @@ export function useRoamController() {
       });
     } catch (renameError: unknown) {
       const message = errorMessage(renameError);
+      dispatch({ type: "errorChanged", message });
+      throw new Error(message);
+    }
+  };
+
+  const toggleSessionPinned = async (sessionId: string, pinned: boolean) => {
+    if (!apiRef.current) {
+      throw new Error("API client is not ready.");
+    }
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (!session) {
+      throw new Error("Session was not found.");
+    }
+    if (pinned && !session.pinnedAt) {
+      const pinnedCount = state.sessions.filter(
+        (item) =>
+          item.projectId === session.projectId &&
+          !item.archivedAt &&
+          item.pinnedAt,
+      ).length;
+      if (pinnedCount >= 3) {
+        const message = "最多只能置顶 3 个 session，请先取消一个已置顶项";
+        dispatch({ type: "errorChanged", message });
+        throw new Error(message);
+      }
+    }
+    try {
+      const updated = await apiRef.current.updateSession(sessionId, {
+        pinned,
+      });
+      dispatch({
+        type: "serverEventReceived",
+        event: { type: "session:updated", session: updated },
+      });
+    } catch (pinError: unknown) {
+      const message = errorMessage(pinError);
       dispatch({ type: "errorChanged", message });
       throw new Error(message);
     }
@@ -1302,15 +1358,17 @@ export function useRoamController() {
     async (projectId: string, presetIds: string[]) => {
       const previous =
         promptPresetReorderChainsRef.current[projectId] ?? Promise.resolve([]);
-      const reorder = previous.catch(() => []).then(async () => {
-        const presets = await requireApiClient().reorderProjectPromptPresets(
-          projectId,
-          presetIds,
-        );
-        updateProjectPromptPresetList(projectId, () => presets);
-        refreshProjectPromptPresetsAfterMutation(projectId);
-        return presets;
-      });
+      const reorder = previous
+        .catch(() => [])
+        .then(async () => {
+          const presets = await requireApiClient().reorderProjectPromptPresets(
+            projectId,
+            presetIds,
+          );
+          updateProjectPromptPresetList(projectId, () => presets);
+          refreshProjectPromptPresetsAfterMutation(projectId);
+          return presets;
+        });
 
       promptPresetReorderChainsRef.current = {
         ...promptPresetReorderChainsRef.current,
@@ -1578,8 +1636,10 @@ export function useRoamController() {
     selectProject,
     createProject,
     archiveProject,
+    toggleProjectPinned,
     createSession,
     renameSelectedSession,
+    toggleSessionPinned,
     sendMessage,
     resolveApproval,
     resolveHunk,

@@ -953,6 +953,10 @@
     color: var(--text-strong);
   }
 
+  .mobile-icon-button.is-active {
+    color: var(--signal-amber);
+  }
+
   .mobile-icon-button.danger:hover {
     border-color: rgba(180, 35, 24, 0.34);
     color: var(--signal-red);
@@ -1205,9 +1209,25 @@
     color: var(--text-strong);
   }
 
+  .tree-action-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .tree-action-button:disabled:hover {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
   .tree-action-button.danger:hover {
     border-color: rgba(180, 35, 24, 0.3);
     color: var(--signal-red);
+  }
+
+  .tree-action-button.pin.is-active,
+  .tree-action-button.session-pin.is-active {
+    color: var(--signal-amber);
   }
 
   .tree-project-button {
@@ -1240,8 +1260,35 @@
     padding-left: 38px;
   }
 
+  .tree-session-row {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    align-items: stretch;
+    gap: 4px;
+  }
+
   .tree-session-button {
     background: rgba(255, 255, 255, 0.52);
+  }
+
+  .tree-session-row .tree-session-button {
+    min-width: 0;
+  }
+
+  .tree-session-more-button {
+    justify-self: start;
+    border: 0;
+    background: transparent;
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 6px;
+  }
+
+  .tree-session-more-button:hover {
+    color: var(--accent);
+    text-decoration: underline;
   }
 
   .tree-empty-state {
@@ -2981,6 +3028,7 @@
   }
 
   .icon-button:disabled,
+  .mobile-icon-button:disabled,
   .primary-icon-button:disabled,
   .primary-action-button:disabled,
   .small-button:disabled {
@@ -4167,6 +4215,55 @@
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
     gap: 8px;
+  }
+
+  .mobile-session-section {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+  }
+
+  .mobile-session-header {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .mobile-session-list {
+    display: grid;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .mobile-session-button {
+    display: grid;
+    min-height: 38px;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-panel-strong);
+    padding: 7px 9px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    text-align: left;
+  }
+
+  .mobile-session-button.is-selected {
+    border-color: rgba(40, 96, 144, 0.35);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .mobile-session-more-button {
+    justify-self: start;
+    padding-left: 0;
   }
 
   .mobile-sheet-actions {

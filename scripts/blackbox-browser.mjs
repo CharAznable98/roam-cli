@@ -1455,9 +1455,11 @@ async function createSessionFromUi(page, scenario, values) {
     const reopenedSwitcher = await openMobileSessionSwitcher(page);
     await waitFor(
       async () =>
-        (await reopenedSwitcher.locator("select").nth(1).inputValue()) ===
-        session.id,
-      `mobile session selector to select ${values.title}`,
+        (await reopenedSwitcher
+          .locator(".mobile-session-button.is-selected")
+          .filter({ hasText: values.title })
+          .count()) > 0,
+      `mobile session list to select ${values.title}`,
     );
     await closeDialog(reopenedSwitcher);
     return session;
