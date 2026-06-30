@@ -227,6 +227,7 @@ export function AppShell({ controller }: AppShellProps) {
     cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
+    refreshSelectedFileContent,
     saveSelectedFile,
     projectPromptPresetErrorsByProject,
     refreshProjectPromptPresets,
@@ -927,6 +928,7 @@ export function AppShell({ controller }: AppShellProps) {
                     onSelectFile={selectFile}
                     onLoadDirectory={loadSelectedDirectory}
                     onRefreshTree={refreshSelectedFileTree}
+                    onRefreshFile={refreshSelectedFileContent}
                     onStartEdit={startSelectedFileEdit}
                     onCancelEdit={cancelSelectedFileEdit}
                     onChangeContent={(content) =>

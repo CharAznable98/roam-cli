@@ -1005,6 +1005,11 @@ export function useRoamController() {
     loadFileTreePath(selectedSession.id, ".", { force: true, resetTree: true });
   };
 
+  const refreshSelectedFileContent = () => {
+    if (!selectedSession || !state.selectedFilePath || !apiRef.current) return;
+    loadFileContent(selectedSession.id, state.selectedFilePath);
+  };
+
   const saveSelectedFile = () => {
     if (!selectedSession || !state.selectedFilePath || !apiRef.current) return;
     const sessionId = selectedSession.id;
@@ -1593,6 +1598,7 @@ export function useRoamController() {
     cancelSelectedFileEdit,
     loadSelectedDirectory,
     refreshSelectedFileTree,
+    refreshSelectedFileContent,
     saveSelectedFile,
     refreshProjectPromptPresets,
     createProjectPromptPreset,

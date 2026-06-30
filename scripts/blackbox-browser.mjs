@@ -419,6 +419,11 @@ async function runUserJourney(browser, scenario) {
       fileName: markdownFileName,
       heading: markdownHeading,
       source: markdownValue,
+      refreshedHeading: `Refreshed markdown ${scenario.name} ${Date.now()}`,
+      refreshPath: resolve(
+        session.executionFolder ?? projectDir,
+        markdownFileName,
+      ),
     });
     await captureScreenshot(page, scenario, "file-markdown-preview");
     pass(`${scenario.name}: markdown file preview`);
@@ -641,10 +646,13 @@ async function assertProjectGitUi(page, scenario, project, fileName) {
 async function assertGitDiffEditOpensFile(page, scenario, fileName) {
   await openTab(page, scenario, "git");
   await waitForGitDiffReady(page);
-  await page
-    .locator('section[aria-label="Git"]')
-    .getByRole("button", { name: "Edit", exact: true })
-    .click();
+  const gitPanel = page.locator('section[aria-label="Git"]');
+  await gitPanel.getByRole("button", { name: fileName, exact: true }).click();
+  await gitPanel
+    .locator(".git-diff-header h3", { hasText: fileName })
+    .waitFor();
+  await waitForGitDiffReady(page);
+  await gitPanel.getByRole("button", { name: "Edit", exact: true }).click();
   await waitForFileEditorMode(page, fileName);
   await assertNoVisibleText(page, "Editable");
   await assertNoVisibleText(page, "Saved");
@@ -720,6 +728,9 @@ async function assertMarkdownFilePreview(page, scenario, values) {
   await openTab(page, scenario, "files");
   await page.getByRole("treeitem", { name: values.fileName }).click();
   await page.getByRole("heading", { name: values.heading }).waitFor();
+  await filesPanel
+    .getByRole("button", { name: "Refresh file preview", exact: true })
+    .waitFor();
   await expectText(page, "rendered file item");
   const marker = await page
     .locator(".file-markdown-preview li", { hasText: "rendered file item" })
@@ -782,8 +793,25 @@ async function assertMarkdownFilePreview(page, scenario, values) {
     .click();
   await waitForFileEditorMode(page, values.fileName);
   await assertNoVisibleButton(page, "Preview");
+  await assertNoVisibleButton(page, "Refresh file preview");
   await filesPanel.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("heading", { name: values.heading }).waitFor();
+  await assertNoVisibleButtonIn(filesPanel, "Cancel");
+  await assertNoVisibleButtonIn(filesPanel, "Save file");
+
+  const refreshedSource = `# ${values.refreshedHeading}\n\n- refreshed file item\n`;
+  await writeFile(values.refreshPath, refreshedSource, "utf8");
+  await filesPanel
+    .getByRole("button", { name: "Refresh file preview", exact: true })
+    .click();
+  await expectText(page, "Loading file content...");
+  await page.getByRole("heading", { name: values.refreshedHeading }).waitFor();
+  await expectText(page, "refreshed file item");
+  await filesPanel
+    .getByRole("button", { name: "Refresh file preview", exact: true })
+    .waitFor();
+  await assertNoVisibleButtonIn(filesPanel, "Cancel");
+  await assertNoVisibleButtonIn(filesPanel, "Save file");
 }
 
 async function assertImageFilePreview(page, scenario, imageFileName) {
@@ -794,6 +822,9 @@ async function assertImageFilePreview(page, scenario, imageFileName) {
     name: `Preview ${imageFileName}`,
   });
   await image.waitFor();
+  await filesPanel
+    .getByRole("button", { name: "Refresh file preview", exact: true })
+    .waitFor();
   const metrics = await image.evaluate((element) => {
     const image = element;
     const rect = image.getBoundingClientRect();
@@ -1680,6 +1711,27 @@ async function assertNoVisibleButton(page, name) {
       return true;
     },
     `button ${JSON.stringify(name)} to be hidden`,
+  );
+}
+
+async function assertNoVisibleButtonIn(scope, name) {
+  await waitFor(
+    async () => {
+      const buttons = scope.getByRole("button", { name, exact: true });
+      const count = await buttons.count();
+      for (let index = 0; index < count; index += 1) {
+        if (
+          await buttons
+            .nth(index)
+            .isVisible()
+            .catch(() => false)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    },
+    `button ${JSON.stringify(name)} to be hidden in scope`,
   );
 }
 
