@@ -859,6 +859,85 @@ describe("app reducer", () => {
     expect(next.selectedSessionId).toBe("session-2");
   });
 
+  it("reorders projects after pin updates before fallback selection", () => {
+    const pinned = appReducer(
+      {
+        ...initialAppState,
+        runners: [runner],
+        projects: [
+          makeProject("project-1"),
+          makeProject("project-2"),
+          {
+            ...makeProject("project-3"),
+            lastActiveAt: "2026-06-04T00:00:00.000Z",
+          },
+        ],
+        sessions: [
+          makeSession("session-1", "project-1"),
+          makeSession("session-2", "project-2"),
+          makeSession("session-3", "project-3"),
+        ],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "projectUpdated",
+        project: {
+          ...makeProject("project-3"),
+          lastActiveAt: "2026-06-04T00:00:00.000Z",
+          pinnedAt: "2026-06-05T01:00:00.000Z",
+        },
+      },
+    );
+
+    expect(pinned.projects.map((project) => project.id)).toEqual([
+      "project-3",
+      "project-1",
+      "project-2",
+    ]);
+
+    const archived = appReducer(pinned, {
+      type: "projectUpdated",
+      project: {
+        ...makeProject("project-1"),
+        archivedAt: "2026-06-05T02:00:00.000Z",
+      },
+    });
+
+    expect(archived.selectedProjectId).toBe("project-3");
+    expect(archived.selectedSessionId).toBe("session-3");
+  });
+
+  it("uses pinned session order for project fallback selection", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        runners: [runner],
+        projects: [makeProject("project-1"), makeProject("project-2")],
+        sessions: [
+          makeSession("session-1", "project-1"),
+          makeSession("session-2", "project-2"),
+          {
+            ...makeSession("session-3", "project-2"),
+            pinnedAt: "2026-06-05T01:00:00.000Z",
+          },
+        ],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "projectUpdated",
+        project: {
+          ...makeProject("project-1"),
+          archivedAt: "2026-06-05T02:00:00.000Z",
+        },
+      },
+    );
+
+    expect(next.selectedProjectId).toBe("project-2");
+    expect(next.selectedSessionId).toBe("session-3");
+  });
+
   it("clears the current selection when the last active project is archived", () => {
     const next = appReducer(
       {

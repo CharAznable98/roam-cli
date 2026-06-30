@@ -26,6 +26,10 @@ import type {
   InitialRemoteState,
   SessionDetailPayload,
 } from "../api/contracts";
+import {
+  sortProjectsForDisplay,
+  sortSessionsForDisplay,
+} from "../features/sessions/model";
 import type { WorkspaceTab } from "./navigation";
 import { replaceTreeChildren } from "../features/files/tree-model";
 
@@ -209,11 +213,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "bootstrapStarted":
       return { ...state, loadState: "loading" };
     case "bootstrapSucceeded": {
-      const activeProjects = action.remote.projects.filter(
-        (project) => !project.archivedAt,
+      const projects = sortProjectsForDisplay(action.remote.projects);
+      const activeProjects = sortProjectsForDisplay(
+        projects.filter((project) => !project.archivedAt),
       );
-      const activeSessions = action.remote.sessions.filter(
-        (session) => !session.archivedAt,
+      const sessions = action.remote.sessions;
+      const activeSessions = sortSessionsForDisplay(
+        sessions.filter((session) => !session.archivedAt),
       );
       const cachedProject = activeProjects.find(
         (project) => project.id === state.selectedProjectId,
@@ -229,7 +235,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         {
           ...state,
           runners: action.remote.runners,
-          sessions: action.remote.sessions,
+          sessions,
         },
         activeProjects,
       );
@@ -258,9 +264,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           : action.remote.runners[0]?.runnerId || "";
       return {
         ...state,
-        projects: action.remote.projects,
+        projects,
         runners: action.remote.runners,
-        sessions: action.remote.sessions,
+        sessions,
         messages: action.remote.messages,
         activities: action.remote.activities ?? [],
         messageAttachments: action.remote.messageAttachments ?? [],
@@ -291,7 +297,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "projectCreated":
       return {
         ...state,
-        projects: upsertBy(state.projects, action.project, (item) => item.id),
+        projects: sortProjectsForDisplay(
+          upsertBy(state.projects, action.project, (item) => item.id),
+        ),
         selectedProjectId: action.project.id,
         selectedSessionId: "",
       };
@@ -936,7 +944,9 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
   if (event.type === "project:created") {
     return {
       ...state,
-      projects: upsertBy(state.projects, event.project, (item) => item.id),
+      projects: sortProjectsForDisplay(
+        upsertBy(state.projects, event.project, (item) => item.id),
+      ),
       selectedProjectId: state.selectedProjectId || event.project.id,
     };
   }
@@ -1075,9 +1085,11 @@ function applyServerEvent(state: AppState, event: ServerEvent): AppState {
 }
 
 function updateProjectState(state: AppState, project: Project): AppState {
-  const projects = project.archivedAt
-    ? state.projects.filter((item) => item.id !== project.id)
-    : upsertBy(state.projects, project, (item) => item.id);
+  const projects = sortProjectsForDisplay(
+    project.archivedAt
+      ? state.projects.filter((item) => item.id !== project.id)
+      : upsertBy(state.projects, project, (item) => item.id),
+  );
   const archivedSelectedProject =
     Boolean(project.archivedAt) && state.selectedProjectId === project.id;
   const fallbackSelection = archivedSelectedProject
@@ -1106,12 +1118,14 @@ function selectDefaultProjectSession(
   const onlineRunnerIds = new Set(
     state.runners.map((runner) => runner.runnerId),
   );
-  const activeSessions = state.sessions.filter(
-    (session) => !session.archivedAt,
+  const orderedProjects = sortProjectsForDisplay(projects);
+  const activeSessions = sortSessionsForDisplay(
+    state.sessions.filter((session) => !session.archivedAt),
   );
   const selectedProjectId =
-    projects.find((project) => onlineRunnerIds.has(project.runnerId))?.id ??
-    projects[0]?.id ??
+    orderedProjects.find((project) => onlineRunnerIds.has(project.runnerId))
+      ?.id ??
+    orderedProjects[0]?.id ??
     "";
   const selectedSessionId =
     activeSessions.find((session) => session.projectId === selectedProjectId)

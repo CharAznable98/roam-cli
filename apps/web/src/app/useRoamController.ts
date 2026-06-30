@@ -688,9 +688,9 @@ export function useRoamController() {
   };
 
   const selectProject = (projectId: string) => {
-    const nextSession = state.sessions.find(
-      (session) => session.projectId === projectId && !session.archivedAt,
-    );
+    const nextSession = sortSessionsForDisplay(
+      getProjectSessions(state.sessions, projectId),
+    )[0];
     dispatch({
       type: "projectSelected",
       projectId,
