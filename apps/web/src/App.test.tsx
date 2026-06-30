@@ -4578,6 +4578,9 @@ describe("App", () => {
     );
 
     expect(screen.getByText("Loading file content...")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Exit fullscreen preview" }),
+    ).toBeInTheDocument();
 
     deferredFileContent.delete("src/README.md");
     await act(async () => {

@@ -200,7 +200,7 @@ export function FilePanel({
                     <RefreshCw size={15} />
                   </button>
                 ) : null}
-                {visibleContent ? (
+                {visibleContent || fullscreen ? (
                   <button
                     className="icon-button"
                     type="button"
