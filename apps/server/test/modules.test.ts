@@ -128,6 +128,118 @@ describe("SessionCommandService", () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("sorts pinned projects and sessions before ordinary recency order", () => {
+    store.createProject({
+      ...projectRecord(),
+      id: "project-1",
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+      lastActiveAt: "2026-06-05T00:00:00.000Z",
+    });
+    store.createProject({
+      ...projectRecord(),
+      id: "project-2",
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      lastActiveAt: "2026-06-06T00:00:00.000Z",
+    });
+    store.updateProject("project-1", {
+      pinnedAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+
+    expect(store.listProjects().map((project) => project.id)).toEqual([
+      "project-1",
+      "project-2",
+    ]);
+
+    store.createSession({
+      ...sessionRecord(),
+      id: "session-1",
+      projectId: "project-1",
+      createdAt: "2026-06-05T00:00:00.000Z",
+      updatedAt: "2026-06-05T00:00:00.000Z",
+    });
+    store.createSession({
+      ...sessionRecord(),
+      id: "session-2",
+      projectId: "project-1",
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    });
+    store.updateSession("session-1", {
+      pinnedAt: "2026-06-07T00:00:00.000Z",
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+
+    expect(store.listSessions().map((session) => session.id)).toEqual([
+      "session-1",
+      "session-2",
+    ]);
+  });
+
+  it("limits pinned sessions to three per project", () => {
+    const hub = new ConnectionHub(store);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      new RunnerRpcClient(hub),
+      100,
+    );
+    store.createProject(projectRecord());
+    for (let index = 1; index <= 4; index += 1) {
+      store.createSession({
+        ...sessionRecord(),
+        id: `session-${index}`,
+        title: `Session ${index}`,
+      });
+    }
+
+    expect(service.updateSession("session-1", { pinned: true }).ok).toBe(true);
+    expect(service.updateSession("session-2", { pinned: true }).ok).toBe(true);
+    expect(service.updateSession("session-3", { pinned: true }).ok).toBe(true);
+
+    expect(service.updateSession("session-4", { pinned: true })).toMatchObject({
+      ok: false,
+      error: "session_pin_limit_exceeded",
+    });
+
+    expect(service.updateSession("session-2", { pinned: false }).ok).toBe(true);
+    expect(service.updateSession("session-4", { pinned: true }).ok).toBe(true);
+  });
+
+  it("rejects pinning archived sessions", () => {
+    const hub = new ConnectionHub(store);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      new RunnerRpcClient(hub),
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    store.createSession({
+      ...sessionRecord(),
+      id: "session-2",
+      title: "Project archived session",
+    });
+
+    store.archiveSession("session-1", "2026-06-05T00:00:00.000Z");
+    expect(service.updateSession("session-1", { pinned: true })).toMatchObject({
+      ok: false,
+      error: "session_pin_limit_exceeded",
+    });
+
+    store.archiveProject("project-1", "2026-06-05T00:00:01.000Z");
+    expect(service.updateSession("session-2", { pinned: true })).toMatchObject({
+      ok: false,
+      error: "session_pin_limit_exceeded",
+    });
+    expect(service.updateSession("session-2", { pinned: false }).ok).toBe(true);
+  });
+
   it("guards runner availability and agent support before starting sessions", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(store, hub);

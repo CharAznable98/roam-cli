@@ -334,6 +334,12 @@ function registerSessionRoutes(
       if (result.error === "session_not_found") {
         return reply.code(404).send({ error: "session_not_found" });
       }
+      if (result.error === "session_pin_limit_exceeded") {
+        return reply.code(409).send({
+          error: "session_pin_limit_exceeded",
+          message: "最多只能置顶 3 个 session，请先取消一个已置顶项",
+        });
+      }
       return reply.code(400).send({ error: result.error });
     }
 
@@ -535,12 +541,20 @@ function registerProjectRoutes(
         return sendRunnerRpcError(reply, error);
       }
     }
+    const updatedAt = nowIso();
     const update = {
       ...(parsed.data.name === undefined ? {} : { name: parsed.data.name }),
       ...(parsed.data.directory === undefined
         ? {}
         : { directory: parsed.data.directory }),
-      updatedAt: nowIso(),
+      ...(parsed.data.pinned === undefined
+        ? {}
+        : {
+            pinnedAt: parsed.data.pinned
+              ? (existing.pinnedAt ?? updatedAt)
+              : null,
+          }),
+      updatedAt,
     };
     const project = context.store.updateProject(params.id, update);
     if (!project) {

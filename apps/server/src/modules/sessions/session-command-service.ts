@@ -10,6 +10,7 @@ import {
   type ApiUpdateSession,
   type ClientCommand,
   type ImageAttachmentUpload,
+  MAX_PINNED_SESSIONS_PER_PROJECT,
   type Message,
   type MessageAttachment,
   type RunnerAttachmentRef,
@@ -73,11 +74,32 @@ export class SessionCommandService {
       return fail("session_not_found");
     }
 
-    const updated = this.store.updateSessionTitle(
-      session.id,
-      input.title,
-      nowIso(),
-    );
+    const now = nowIso();
+    let pinnedAt: string | null | undefined;
+    if (input.pinned !== undefined) {
+      if (input.pinned) {
+        const project = this.store.getProject(session.projectId);
+        if (session.archivedAt || project?.archivedAt) {
+          return fail("session_pin_limit_exceeded");
+        }
+        if (
+          !session.pinnedAt &&
+          this.store.countPinnedSessions(session.projectId) >=
+            MAX_PINNED_SESSIONS_PER_PROJECT
+        ) {
+          return fail("session_pin_limit_exceeded");
+        }
+        pinnedAt = session.pinnedAt ?? now;
+      } else {
+        pinnedAt = null;
+      }
+    }
+
+    const updated = this.store.updateSession(session.id, {
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...(pinnedAt === undefined ? {} : { pinnedAt }),
+      updatedAt: now,
+    });
     if (!updated) {
       return fail("session_not_found");
     }

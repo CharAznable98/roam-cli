@@ -28,6 +28,7 @@ interface ProjectRow {
   name: string;
   runner_id: string;
   directory: string;
+  pinned_at: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -59,6 +60,7 @@ interface SessionRow {
   git_base_sha: string | null;
   worktree_deleted_at: string | null;
   agent_thread_id: string | null;
+  pinned_at: string | null;
   archived_at: string | null;
   archived_by_project_id: string | null;
   created_at: string;
@@ -323,14 +325,15 @@ export class ServerStore {
   createProject(project: Project): Project {
     this.db
       .prepare(
-        `INSERT INTO projects (id, name, runner_id, directory, archived_at, created_at, updated_at, last_active_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO projects (id, name, runner_id, directory, pinned_at, archived_at, created_at, updated_at, last_active_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         project.id,
         project.name,
         project.runnerId,
         project.directory,
+        project.pinnedAt ?? null,
         project.archivedAt ?? null,
         project.createdAt,
         project.updatedAt,
@@ -343,8 +346,8 @@ export class ServerStore {
     const rows = this.db
       .prepare(
         options.includeArchived
-          ? "SELECT * FROM projects ORDER BY last_active_at DESC, created_at DESC"
-          : "SELECT * FROM projects WHERE archived_at IS NULL ORDER BY last_active_at DESC, created_at DESC",
+          ? "SELECT * FROM projects ORDER BY pinned_at IS NULL, pinned_at DESC, last_active_at DESC, created_at DESC"
+          : "SELECT * FROM projects WHERE archived_at IS NULL ORDER BY pinned_at IS NULL, pinned_at DESC, last_active_at DESC, created_at DESC",
       )
       .all() as unknown as ProjectRow[];
     return rows.map(toProject);
@@ -359,7 +362,12 @@ export class ServerStore {
 
   updateProject(
     id: string,
-    input: { name?: string; directory?: string; updatedAt: string },
+    input: {
+      name?: string;
+      directory?: string;
+      pinnedAt?: string | null;
+      updatedAt: string;
+    },
   ): Project | undefined {
     const existing = this.getProject(id);
     if (!existing) {
@@ -367,11 +375,14 @@ export class ServerStore {
     }
     this.db
       .prepare(
-        "UPDATE projects SET name = ?, directory = ?, updated_at = ? WHERE id = ?",
+        "UPDATE projects SET name = ?, directory = ?, pinned_at = ?, updated_at = ? WHERE id = ?",
       )
       .run(
         input.name ?? existing.name,
         input.directory ?? existing.directory,
+        input.pinnedAt === undefined
+          ? (existing.pinnedAt ?? null)
+          : input.pinnedAt,
         input.updatedAt,
         id,
       );
@@ -520,8 +531,8 @@ export class ServerStore {
   createSession(session: Session): Session {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, git_branch_name, git_base_ref, git_base_sha, worktree_deleted_at, agent_thread_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, git_branch_name, git_base_ref, git_base_sha, worktree_deleted_at, agent_thread_id, pinned_at, archived_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -538,6 +549,7 @@ export class ServerStore {
         session.gitBaseSha ?? null,
         session.worktreeDeletedAt ?? null,
         session.agentThreadId ?? null,
+        session.pinnedAt ?? null,
         session.archivedAt ?? null,
         session.createdAt,
         session.updatedAt,
@@ -550,8 +562,8 @@ export class ServerStore {
     const rows = this.db
       .prepare(
         options.includeArchived
-          ? "SELECT * FROM sessions ORDER BY created_at DESC"
-          : "SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY created_at DESC",
+          ? "SELECT * FROM sessions ORDER BY pinned_at IS NULL, pinned_at DESC, created_at DESC"
+          : "SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY pinned_at IS NULL, pinned_at DESC, created_at DESC",
       )
       .all() as unknown as SessionRow[];
     return rows.map(toSession);
@@ -603,10 +615,43 @@ export class ServerStore {
     title: string,
     updatedAt: string,
   ): Session | undefined {
+    return this.updateSession(id, { title, updatedAt });
+  }
+
+  updateSession(
+    id: string,
+    input: {
+      title?: string;
+      pinnedAt?: string | null;
+      updatedAt: string;
+    },
+  ): Session | undefined {
+    const existing = this.getSession(id);
+    if (!existing) {
+      return undefined;
+    }
     this.db
-      .prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
-      .run(title, updatedAt, id);
+      .prepare(
+        "UPDATE sessions SET title = ?, pinned_at = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(
+        input.title ?? existing.title,
+        input.pinnedAt === undefined
+          ? (existing.pinnedAt ?? null)
+          : input.pinnedAt,
+        input.updatedAt,
+        id,
+      );
     return this.getSession(id);
+  }
+
+  countPinnedSessions(projectId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM sessions WHERE project_id = ? AND archived_at IS NULL AND pinned_at IS NOT NULL",
+      )
+      .get(projectId) as { count: number } | undefined;
+    return row?.count ?? 0;
   }
 
   updateSessionThread(
@@ -1000,6 +1045,7 @@ export class ServerStore {
         execution_folder TEXT,
         cwd TEXT NOT NULL,
         agent_thread_id TEXT,
+        pinned_at TEXT,
         archived_at TEXT,
         archived_by_project_id TEXT,
         created_at TEXT NOT NULL,
@@ -1012,6 +1058,7 @@ export class ServerStore {
         name TEXT NOT NULL,
         runner_id TEXT NOT NULL,
         directory TEXT NOT NULL,
+        pinned_at TEXT,
         archived_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -1157,8 +1204,10 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "git_base_sha", "TEXT");
     this.addColumnIfMissing("sessions", "worktree_deleted_at", "TEXT");
     this.addColumnIfMissing("sessions", "agent_thread_id", "TEXT");
+    this.addColumnIfMissing("sessions", "pinned_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
+    this.addColumnIfMissing("projects", "pinned_at", "TEXT");
     this.addColumnIfMissing(
       "messages",
       "streaming",
@@ -1188,6 +1237,7 @@ function toProject(row: ProjectRow): Project {
     name: row.name,
     runnerId: row.runner_id,
     directory: row.directory,
+    ...(row.pinned_at ? { pinnedAt: row.pinned_at } : {}),
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1227,6 +1277,7 @@ function toSession(row: SessionRow): Session {
       ? { worktreeDeletedAt: row.worktree_deleted_at }
       : {}),
     ...(row.agent_thread_id ? { agentThreadId: row.agent_thread_id } : {}),
+    ...(row.pinned_at ? { pinnedAt: row.pinned_at } : {}),
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

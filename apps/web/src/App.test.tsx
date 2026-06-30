@@ -781,8 +781,7 @@ describe("App", () => {
           return jsonResponse({ presets: projectPromptPresets });
         }
         if (
-          requestUrl.pathname ===
-          "/v1/projects/project-backup/prompt-presets"
+          requestUrl.pathname === "/v1/projects/project-backup/prompt-presets"
         ) {
           return jsonResponse({ presets: backupProjectPromptPresets });
         }
@@ -943,8 +942,7 @@ describe("App", () => {
           });
         }
         const extraSession = extraSessions.find(
-          (candidate) =>
-            requestUrl.pathname === `/v1/sessions/${candidate.id}`,
+          (candidate) => requestUrl.pathname === `/v1/sessions/${candidate.id}`,
         );
         if (extraSession) {
           return jsonResponse({
@@ -1330,14 +1328,17 @@ describe("App", () => {
   });
 
   it("searches all active project sessions from the command palette", async () => {
-    extraSessions = Array.from({ length: 45 }, (_, index): Session => ({
-      ...session,
-      id: `session-extra-${index + 1}`,
-      title: `Extra session ${index + 1}`,
-      status: "running",
-      executionMode: "direct",
-      updatedAt: `2026-06-05T00:${String(index + 1).padStart(2, "0")}:00.000Z`,
-    }));
+    extraSessions = Array.from(
+      { length: 45 },
+      (_, index): Session => ({
+        ...session,
+        id: `session-extra-${index + 1}`,
+        title: `Extra session ${index + 1}`,
+        status: "running",
+        executionMode: "direct",
+        updatedAt: `2026-06-05T00:${String(index + 1).padStart(2, "0")}:00.000Z`,
+      }),
+    );
     render(<App />);
     await screen.findByText("Loaded from API");
 
@@ -3897,7 +3898,9 @@ describe("App", () => {
         screen.queryByRole("dialog", { name: "New Session - Real Project" }),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Settings" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Project Settings" }),
     ).toBeInTheDocument();
@@ -4003,7 +4006,9 @@ describe("App", () => {
     expect(presetRequests()).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
-    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/prompt preset unavailable/),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
 
@@ -4031,7 +4036,9 @@ describe("App", () => {
       await screen.findByText(/prompt preset unavailable/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
-    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/prompt preset unavailable/),
+    ).not.toBeInTheDocument();
 
     failPromptPresetFetch = false;
     act(() => {
@@ -4061,7 +4068,7 @@ describe("App", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Expand project Backup Project" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: /Backup session/ }));
+    fireEvent.click(screen.getByText("Backup session").closest("button")!);
     expect(
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
     ).toBeInTheDocument();
@@ -4069,7 +4076,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
 
     expect(await screen.findByText("Backup preset")).toBeInTheDocument();
-    expect(screen.queryByText(/prompt preset unavailable/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/prompt preset unavailable/),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps desktop new-session prompt preset errors visible after reopening the modal", async () => {
@@ -4095,7 +4104,9 @@ describe("App", () => {
       await within(dialog).findByText(/prompt preset unavailable/),
     ).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close modal" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close modal" }),
+    );
     await waitFor(() =>
       expect(
         screen.queryByRole("dialog", { name: "New Session - Real Project" }),
@@ -4249,7 +4260,7 @@ describe("App", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Expand project Backup Project" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: /Backup session/ }));
+    fireEvent.click(screen.getByText("Backup session").closest("button")!);
 
     expect(
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
