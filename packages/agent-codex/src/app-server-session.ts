@@ -100,6 +100,9 @@ export class CodexAppServerSession implements AgentSession {
 
   public async start(): Promise<void> {
     await this.#ensureAppServerDaemon();
+    if (this.#closed || this.#stopRequested) {
+      return;
+    }
     this.#child = spawnChild(this.#command, [...this.#args], {
       cwd: this.#context.cwd,
       env: this.#context.env,
@@ -181,15 +184,11 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #shouldEnsureAppServerDaemon(): boolean {
-    return (
-      this.#command === "codex" &&
-      this.#args[0] === "app-server" &&
-      this.#args[1] === "proxy"
-    );
+    return this.#args[0] === "app-server" && this.#args[1] === "proxy";
   }
 
   public deliverInput(input: AgentInput): void {
-    if (this.#closed) {
+    if (this.#closed || this.#pendingTerminalStatus === "stopped") {
       return;
     }
     if (this.#threadId && this.#activeTurnId) {
@@ -302,6 +301,10 @@ export class CodexAppServerSession implements AgentSession {
 
   async #drain(): Promise<void> {
     while (!this.#closed) {
+      if (this.#pendingTerminalStatus === "stopped") {
+        await this.#emitPendingTerminalStatus();
+        return;
+      }
       const input = this.#queue.shift();
       if (input === undefined) {
         await this.#emitPendingTerminalStatus();
@@ -573,17 +576,22 @@ export class CodexAppServerSession implements AgentSession {
   async #handleToolUserInput(request: JsonRpcRequest): Promise<void> {
     const params = request.params as ToolRequestUserInputParams;
     const draft = toolUserInputDraft(request.method, params);
+    if (draft.questions.some((question) => question.isSecret)) {
+      const message =
+        "Codex requested secret user input, which RoamCli cannot collect safely yet";
+      this.#client?.reject(request.id, message);
+      await this.#fail(message, "CODEX_APP_SERVER_USER_INPUT_ERROR");
+      return;
+    }
     const decision = await this.#requestUserInput(draft);
-    const firstQuestionId = draft.questions[0]?.id;
+    const answers: Record<string, { answers: string[] }> = {};
+    draft.questions.forEach((question, index) => {
+      answers[question.id] = {
+        answers: index === 0 ? [decision.content] : [],
+      };
+    });
     this.#client?.respond(request.id, {
-      answers:
-        firstQuestionId === undefined
-          ? {}
-          : {
-              [firstQuestionId]: {
-                answers: [decision.content],
-              },
-            },
+      answers,
     });
   }
 
@@ -721,6 +729,7 @@ export class CodexAppServerSession implements AgentSession {
       this.#queue.length = 0;
       this.#pendingTerminalStatus = "stopped";
       done?.resolve();
+      await this.#emitPendingTerminalStatus();
       return;
     }
     if (status !== "completed") {

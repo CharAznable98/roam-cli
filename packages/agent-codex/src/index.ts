@@ -35,7 +35,12 @@ const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
-const DEFAULT_APP_SERVER_ARGS = ["app-server", "proxy"];
+const DEFAULT_APP_SERVER_ARGS = [
+  "app-server",
+  "proxy",
+  "-c",
+  "skip_git_repo_check=true",
+];
 const DEFAULT_ARGS = [
   "exec",
   "--json",

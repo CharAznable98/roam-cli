@@ -36,7 +36,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "proxy"],
+      args: ["app-server", "proxy", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -722,6 +722,68 @@ describe("codex agent plugin", () => {
     await expect(startPromise).resolves.toBeUndefined();
     expect(events).toContainEqual({ type: "status", status: "stopped" });
     expect(events).not.toContainEqual({ type: "status", status: "failed" });
+  });
+
+  it("does not spawn the proxy when stopped while daemon startup is pending", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-daemon-stop-");
+    const script = join(workspace, "app-server");
+    const daemonMarker = join(workspace, "daemon.txt");
+    const releaseMarker = join(workspace, "release.txt");
+    const proxyMarker = join(workspace, "proxy.txt");
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
+        `const releaseMarker = ${JSON.stringify(releaseMarker)};`,
+        `const proxyMarker = ${JSON.stringify(proxyMarker)};`,
+        "const args = process.argv.slice(2);",
+        "if (args.join(' ') === 'daemon start') {",
+        "  fs.writeFileSync(daemonMarker, 'daemon');",
+        "  const buffer = new SharedArrayBuffer(4);",
+        "  const view = new Int32Array(buffer);",
+        "  const started = Date.now();",
+        "  while (!fs.existsSync(releaseMarker) && Date.now() - started < 5000) {",
+        "    Atomics.wait(view, 0, 0, 50);",
+        "  }",
+        "  process.exit(0);",
+        "}",
+        "fs.writeFileSync(proxyMarker, args.join(' '));",
+        "setInterval(() => undefined, 1000);",
+      ].join("\n"),
+    );
+    await chmod(script, 0o755);
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    const startPromise = session.start();
+    await vi.waitFor(async () => {
+      await expect(readFile(daemonMarker, "utf8")).resolves.toBe("daemon");
+    });
+    await session.control("stop");
+    await writeFile(releaseMarker, "release");
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(events).toContainEqual({ type: "status", status: "stopped" });
+    await expect(readFile(proxyMarker, "utf8")).rejects.toThrow();
   });
 
   it("passes trusted runner permissions to app-server turns", async () => {
@@ -1538,7 +1600,7 @@ describe("codex agent plugin", () => {
       "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
       "  if (message.method === 'turn/start') {",
       "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-      "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
+      "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }, { id: 'details', header: 'Details', question: 'Anything else?', isOther: true, isSecret: false, options: [] }] } });",
       "  }",
       "  if (message.id === 12 && message.result) {",
       "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
@@ -1590,18 +1652,84 @@ describe("codex agent plugin", () => {
                 id: "confirm",
                 question: "Proceed?",
               }),
+              expect.objectContaining({
+                id: "details",
+                question: "Anything else?",
+              }),
             ],
           }),
         }),
       ]);
-      expect(
-        events.some(
-          (event) =>
-            event.type === "assistantOutput" &&
-            typeof event.content === "string" &&
-            event.content.includes('"confirm":{"answers":["yes"]}'),
-        ),
-      ).toBe(true);
+      const output = events.find(
+        (event) =>
+          event.type === "assistantOutput" &&
+          typeof event.content === "string" &&
+          event.content.includes("confirm"),
+      );
+      expect(output).toEqual(
+        expect.objectContaining({
+          type: "assistantOutput",
+        }),
+      );
+      const content = output?.type === "assistantOutput" ? output.content : "";
+      expect(JSON.parse(String(content)).answers).toEqual({
+        confirm: { answers: ["yes"] },
+        details: { answers: [] },
+      });
+    });
+  });
+
+  it("rejects secret app-server tool user-input requests without prompting", async () => {
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-secret-user-input-",
+    );
+    await writeAppServerScript(workspace, "secret-user-input.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'token', header: 'Token', question: 'API token?', isOther: false, isSecret: true, options: [] }] } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
+    const events: AgentRuntimeEvent[] = [];
+    const userInputs: unknown[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+      requestUserInput: async (draft) => {
+        userInputs.push(draft);
+        throw new Error("secret input should not prompt");
+      },
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(userInputs).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          code: "CODEX_APP_SERVER_USER_INPUT_ERROR",
+        }),
+      );
+      expect(events).toContainEqual({ type: "status", status: "failed" });
     });
   });
 
@@ -2439,6 +2567,7 @@ async function writeAppServerScript(
     [
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
+      "if (process.argv.slice(2).join(' ') === 'daemon start') process.exit(0);",
       "process.stdin.setEncoding('utf8');",
       "let buffer = '';",
       "let handleMessage = () => undefined;",

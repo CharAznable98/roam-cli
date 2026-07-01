@@ -35,7 +35,7 @@ describe("capabilities", () => {
 
     expect(codex).toMatchObject({
       command: "codex",
-      args: ["app-server", "proxy"],
+      args: ["app-server", "proxy", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       pluginName: "@roamcli/agent-codex",
