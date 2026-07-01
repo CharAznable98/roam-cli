@@ -803,22 +803,73 @@ function mergeDetailActivities(
   currentActivities: AgentActivity[],
   detailActivities: AgentActivity[],
 ): AgentActivity[] {
-  return detailActivities.reduce(
-    (activities, activity) => upsertAgentActivity(activities, activity),
-    currentActivities,
-  );
+  if (detailActivities.length === 0) {
+    return currentActivities;
+  }
+  const activitiesById = new Map<string, AgentActivity>();
+  for (const activity of currentActivities) {
+    activitiesById.set(activity.id, activity);
+  }
+  for (const activity of detailActivities) {
+    activitiesById.set(activity.id, activity);
+  }
+  return sortAgentActivities(Array.from(activitiesById.values()));
 }
 
 function upsertAgentActivity(
   activities: AgentActivity[],
   next: AgentActivity,
 ): AgentActivity[] {
-  const exists = activities.some((activity) => activity.id === next.id);
-  const merged = exists
-    ? activities.map((activity) => (activity.id === next.id ? next : activity))
-    : [...activities, next];
-  return merged.sort(
-    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  const existingIndex = activities.findIndex(
+    (activity) => activity.id === next.id,
+  );
+  if (existingIndex >= 0) {
+    const merged = activities.map((activity, index) =>
+      index === existingIndex ? next : activity,
+    );
+    return isAgentActivitySortedAt(merged, existingIndex)
+      ? merged
+      : sortAgentActivities(merged);
+  }
+
+  const merged = [...activities, next];
+  return shouldAppendAgentActivity(activities, next)
+    ? merged
+    : sortAgentActivities(merged);
+}
+
+function sortAgentActivities(activities: AgentActivity[]): AgentActivity[] {
+  return [...activities].sort(compareAgentActivities);
+}
+
+function compareAgentActivities(
+  left: AgentActivity,
+  right: AgentActivity,
+): number {
+  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+}
+
+function shouldAppendAgentActivity(
+  activities: AgentActivity[],
+  next: AgentActivity,
+): boolean {
+  const previous = activities.at(-1);
+  return !previous || compareAgentActivities(previous, next) <= 0;
+}
+
+function isAgentActivitySortedAt(
+  activities: AgentActivity[],
+  index: number,
+): boolean {
+  const current = activities[index];
+  if (!current) {
+    return true;
+  }
+  const previous = activities[index - 1];
+  const next = activities[index + 1];
+  return (
+    (!previous || compareAgentActivities(previous, current) <= 0) &&
+    (!next || compareAgentActivities(current, next) <= 0)
   );
 }
 
