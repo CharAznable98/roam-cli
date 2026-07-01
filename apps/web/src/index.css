@@ -450,17 +450,17 @@
 
   .notification-close {
     display: inline-flex;
-    height: 30px;
-    width: 30px;
+    height: 28px;
+    width: 28px;
     align-items: center;
     justify-content: center;
-    border: 1px solid transparent;
+    border: 0;
     border-radius: var(--radius-control);
+    background: transparent;
     color: var(--text-faint);
   }
 
   .notification-close:hover {
-    border-color: var(--border-subtle);
     background: var(--surface-muted);
     color: var(--text-strong);
   }
@@ -740,8 +740,8 @@
     position: relative;
     display: grid;
     min-width: 0;
-    grid-template-columns: 36px minmax(0, 1fr) 34px;
-    align-items: stretch;
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+    align-items: center;
     gap: 8px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-control);
@@ -761,14 +761,15 @@
   .prompt-preset-drag-handle,
   .prompt-preset-row-actions > summary {
     display: inline-flex;
-    min-height: 44px;
-    width: 100%;
+    min-height: 28px;
+    width: 28px;
+    height: 28px;
     cursor: grab;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--border-subtle);
+    border: 0;
     border-radius: var(--radius-control);
-    background: #ffffff;
+    background: transparent;
     color: #60748a;
   }
 
@@ -778,7 +779,6 @@
 
   .prompt-preset-drag-handle:hover,
   .prompt-preset-row-actions > summary:hover {
-    border-color: var(--border-strong);
     background: var(--surface-muted);
     color: var(--text-strong);
   }
@@ -936,19 +936,18 @@
 
   .mobile-icon-button {
     display: inline-flex;
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--border-subtle);
+    border: 0;
     border-radius: var(--radius-control);
-    background: var(--surface-panel-strong);
+    background: transparent;
     color: var(--text-main);
   }
 
   .mobile-icon-button:hover {
-    border-color: var(--border-strong);
     background: var(--surface-muted);
     color: var(--text-strong);
   }
@@ -958,7 +957,6 @@
   }
 
   .mobile-icon-button.danger:hover {
-    border-color: rgba(180, 35, 24, 0.34);
     color: var(--signal-red);
   }
 
@@ -2014,7 +2012,7 @@
   .message.user .message-body {
     border-color: rgba(19, 143, 189, 0.22);
     background: var(--surface-selected);
-    padding-right: 42px;
+    padding-right: 38px;
   }
 
   .message-action-menu {
@@ -2030,17 +2028,16 @@
     width: 28px;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgba(19, 143, 189, 0.18);
+    border: 0;
     border-radius: var(--radius-control);
-    background: rgba(255, 255, 255, 0.74);
+    background: transparent;
     color: #51677d;
     cursor: pointer;
     list-style: none;
   }
 
   .message-action-menu > summary:hover {
-    border-color: rgba(19, 143, 189, 0.36);
-    background: #ffffff;
+    background: rgba(255, 255, 255, 0.74);
     color: var(--text-strong);
   }
 
@@ -2637,8 +2634,10 @@
     position: absolute;
     right: 7px;
     bottom: 7px;
-    height: 30px;
-    width: 30px;
+    height: 28px;
+    width: 28px;
+    border: 0;
+    background: transparent;
   }
 
   .prompt-preset-trigger:hover,
@@ -2646,6 +2645,10 @@
     border-color: var(--border-strong);
     background: var(--surface-muted);
     color: var(--text-strong);
+  }
+
+  .prompt-preset-trigger:hover {
+    border: 0;
   }
 
   .prompt-preset-trigger:disabled,
@@ -2688,7 +2691,8 @@
   .prompt-preset-toolbar {
     display: grid;
     min-width: 0;
-    grid-template-columns: minmax(0, 1fr) 34px;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    align-items: center;
     gap: 6px;
     padding: 2px;
   }
@@ -2711,8 +2715,9 @@
   }
 
   .prompt-preset-refresh {
-    min-height: 34px;
-    width: 34px;
+    align-self: center;
+    height: 28px;
+    width: 28px;
   }
 
   .prompt-suggestion-option {
@@ -2827,7 +2832,7 @@
     border: 1px solid #cdd7e4;
     border-radius: 7px;
     background: #ffffff;
-    padding: 6px 28px 6px 6px;
+    padding: 6px 40px 6px 6px;
   }
 
   .draft-image-tile img,
@@ -2878,8 +2883,8 @@
     top: 5px;
     right: 5px;
     display: inline-flex;
-    height: 22px;
-    width: 22px;
+    height: 28px;
+    width: 28px;
     align-items: center;
     justify-content: center;
     border: 1px solid rgba(88, 106, 128, 0.22);
@@ -2976,8 +2981,8 @@
 
   .icon-button,
   .primary-icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
     flex-shrink: 0;
   }
 
@@ -2987,6 +2992,17 @@
     background: var(--accent);
     color: white;
     box-shadow: 0 8px 18px rgba(19, 143, 189, 0.18);
+  }
+
+  .primary-icon-button {
+    border: 0;
+    box-shadow: none;
+  }
+
+  .modal-header .icon-button,
+  .skill-list-header-actions .icon-button[aria-label^="Close"] {
+    border: 0;
+    background: transparent;
   }
 
   .icon-button:hover,
@@ -3004,6 +3020,16 @@
     border-color: var(--accent-strong);
     background: var(--accent-strong);
     color: white;
+  }
+
+  .primary-icon-button:hover {
+    border: 0;
+  }
+
+  .modal-header .icon-button:hover,
+  .skill-list-header-actions .icon-button[aria-label^="Close"]:hover {
+    border: 0;
+    background: var(--surface-muted);
   }
 
   .icon-button:active,
@@ -3333,8 +3359,8 @@
   }
 
   .git-panel-header .icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .git-title-block {
@@ -4333,16 +4359,16 @@
 
   .mobile-topbar-actions button[aria-label="Open command palette"],
   .mobile-topbar-actions button[aria-label="Settings"] {
-    min-height: 44px;
-    min-width: 44px;
-    height: 44px;
-    width: 44px;
-    flex: 0 0 44px;
+    min-height: 28px;
+    min-width: 28px;
+    height: 28px;
+    width: 28px;
+    flex: 0 0 28px;
   }
 
   .mobile-topbar-actions .mobile-topbar-icon-button {
-    height: 44px !important;
-    width: 44px !important;
+    height: 28px !important;
+    width: 28px !important;
   }
 
   .chat-header,
@@ -4353,23 +4379,23 @@
   }
 
   .chat-header .icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .notification-card {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) 28px;
   }
 
   .notification-close,
   .modal-header .icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .mobile-icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .primary-action-button,
@@ -4448,14 +4474,14 @@
 
   .draft-image-tile {
     min-height: 64px;
-    padding-right: 54px;
+    padding-right: 40px;
   }
 
   .draft-image-remove {
     top: 4px;
     right: 4px;
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .markdown-code-header {
@@ -4475,8 +4501,8 @@
   }
 
   .git-panel-header .icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .git-toolbar {
@@ -4525,7 +4551,6 @@
   }
 
   .git-tree-folder summary,
-  .git-action-menu > summary,
   .git-action-menu-content button,
   .git-history-list button,
   .git-commit-files button {
@@ -4533,8 +4558,9 @@
   }
 
   .git-action-menu > summary {
-    height: 44px;
-    width: 44px;
+    min-height: 28px;
+    height: 28px;
+    width: 28px;
     border-color: var(--border-subtle);
     background: var(--surface-panel-strong);
   }
@@ -4580,12 +4606,12 @@
 
   .composer .icon-button,
   .composer .primary-icon-button {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .message.user .message-body {
-    padding-right: 58px;
+    padding-right: 38px;
   }
 
   .message-action-menu {
@@ -4594,8 +4620,8 @@
   }
 
   .message-action-menu > summary {
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .message-action-menu-content button {
@@ -4603,29 +4629,29 @@
   }
 
   .prompt-composer textarea {
-    padding-right: 58px;
+    padding-right: 42px;
   }
 
   .prompt-preset-trigger {
     right: 6px;
     bottom: 6px;
-    height: 44px;
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .prompt-preset-toolbar {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) 28px;
   }
 
   .prompt-preset-toolbar input,
-  .prompt-preset-refresh,
   .prompt-preset-manage,
   .prompt-preset-option {
     min-height: 44px;
   }
 
   .prompt-preset-refresh {
-    width: 44px;
+    height: 28px;
+    width: 28px;
   }
 
   .prompt-suggestion-panel,
@@ -4647,15 +4673,15 @@
   }
 
   .prompt-preset-row {
-    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
     gap: 6px;
     padding: 7px;
   }
 
   .prompt-preset-drag-handle,
   .prompt-preset-row-actions > summary {
-    min-height: 46px;
-    width: 44px;
+    min-height: 28px;
+    width: 28px;
   }
 
   .prompt-preset-editor-content textarea {
@@ -4682,7 +4708,7 @@
   }
 
   .session-actions {
-    min-width: 44px;
+    min-width: 28px;
   }
 
   .message-list {
@@ -4708,7 +4734,7 @@
   }
 
   .composer {
-    grid-template-columns: minmax(0, 1fr) 44px 44px;
+    grid-template-columns: minmax(0, 1fr) 28px 28px;
     gap: 7px;
     padding-left: 8px;
     padding-right: 8px;
