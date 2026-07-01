@@ -95,6 +95,7 @@ export interface ItemStartedNotification {
   item?: {
     id?: string;
     type?: string;
+    tool?: string;
     command?: string | null;
     cwd?: string | null;
     commandActions?: unknown[] | null;
@@ -106,6 +107,11 @@ export interface ItemStartedNotification {
     changes?: unknown;
     status?: string;
   };
+}
+
+export interface ToolRequestUserInputOption {
+  label?: string;
+  description?: string;
 }
 
 export interface CommandApprovalParams {
@@ -153,7 +159,7 @@ export interface ToolRequestUserInputParams {
     question?: string;
     isOther?: boolean;
     isSecret?: boolean;
-    options?: unknown[] | null;
+    options?: ToolRequestUserInputOption[] | null;
   }> | null;
 }
 

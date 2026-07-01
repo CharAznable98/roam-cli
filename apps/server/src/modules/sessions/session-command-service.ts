@@ -375,7 +375,9 @@ export class SessionCommandService {
     const runner = this.store.getRunner(session.runnerId);
     const canResume = runnerCanResume(runner, session.agent);
     const isActive =
-      session.status === "running" || session.status === "waiting_approval";
+      session.status === "running" ||
+      session.status === "waiting_approval" ||
+      session.status === "waiting_input";
     const turnInProgress = isActive || session.status === "pending";
     if (attachments.length > 0 && isActive) {
       return fail("attachments_require_idle", {
@@ -433,11 +435,20 @@ export class SessionCommandService {
       });
     }
 
-    const sent = this.hub.sendToRunner(session.runnerId, {
-      type: "deliverInput",
-      sessionId: session.id,
-      content: input.content,
-    });
+    const sent = this.hub.sendToRunner(
+      session.runnerId,
+      session.status === "waiting_input"
+        ? {
+            type: "resolveUserInput",
+            sessionId: session.id,
+            content: input.content,
+          }
+        : {
+            type: "deliverInput",
+            sessionId: session.id,
+            content: input.content,
+          },
+    );
     if (!sent) {
       return fail("runner_offline", { message: "runner is offline" });
     }
@@ -593,7 +604,8 @@ export class SessionCommandService {
     if (
       command.signal === "resume" &&
       session.status !== "running" &&
-      session.status !== "waiting_approval"
+      session.status !== "waiting_approval" &&
+      session.status !== "waiting_input"
     ) {
       if (!this.hub.isRunnerOnline(session.runnerId)) {
         this.hub.broadcast({
@@ -864,6 +876,7 @@ const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
   "pending",
   "running",
   "waiting_approval",
+  "waiting_input",
 ]);
 
 function hasActiveRunnerWork(session: Session): boolean {

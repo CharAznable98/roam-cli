@@ -530,7 +530,7 @@ describe("SessionManager", () => {
       },
     });
 
-    await manager.start(makeSession(workspace), "ready");
+    const started = manager.start(makeSession(workspace), "ready");
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
@@ -563,7 +563,7 @@ describe("SessionManager", () => {
       },
     });
 
-    await manager.start(makeSession(workspace), "ready");
+    const started = manager.start(makeSession(workspace), "ready");
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "sessionStatus",
@@ -650,10 +650,7 @@ describe("SessionManager", () => {
       agents: [controlledAgent.agent],
       emit: async (event) => {
         events.push(event);
-        if (
-          event.type === "sessionStatus" &&
-          event.status === "completed"
-        ) {
+        if (event.type === "sessionStatus" && event.status === "completed") {
           throw new Error("sink down");
         }
       },
@@ -812,6 +809,51 @@ describe("SessionManager", () => {
     );
   });
 
+  it("resolves pending user input through ordinary session input", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-user-input-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [userInputCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    const started = manager.start(makeSession(workspace), "ready");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      });
+    });
+
+    await manager.handle({
+      type: "resolveUserInput",
+      sessionId: "s1",
+      content: "continue",
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "agentActivity",
+        sessionId: "s1",
+        agent: "codex",
+        kind: "tool",
+        label: "answered: continue",
+      });
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "completed",
+      });
+    });
+    await started;
+  });
 });
 
 async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
@@ -913,6 +955,57 @@ function approvalCodexAgent(): LoadedAgent {
               payload: { command: "echo ok" },
             });
           }
+          await context.emit({ type: "status", status: "completed" });
+        });
+      },
+    },
+  };
+}
+
+function userInputCodexAgent(): LoadedAgent {
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-user-input",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      createSession(context) {
+        return new TestAgentSession(context, async () => {
+          const decision = await context.requestUserInput?.({
+            summary: "Need direction",
+            questions: [
+              {
+                id: "next",
+                header: "Next",
+                question: "What next?",
+                isOther: false,
+                isSecret: false,
+                options: null,
+              },
+            ],
+            payload: { source: "test" },
+          });
+          await context.emit({
+            type: "activity",
+            kind: "tool",
+            label: `answered: ${decision?.content ?? ""}`,
+          });
           await context.emit({ type: "status", status: "completed" });
         });
       },
@@ -1138,7 +1231,9 @@ class TestAgentSession implements AgentSession {
     return this.#deliverInput?.(input);
   }
 
-  public control(signal: "interrupt" | "stop" | "resume"): Promise<void> | void {
+  public control(
+    signal: "interrupt" | "stop" | "resume",
+  ): Promise<void> | void {
     if (this.#control !== undefined) {
       return this.#control(signal);
     }

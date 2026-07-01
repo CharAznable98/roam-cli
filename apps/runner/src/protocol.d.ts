@@ -6,6 +6,7 @@ declare module "@roamcli/shared/protocol" {
     | "pending"
     | "running"
     | "waiting_approval"
+    | "waiting_input"
     | "completed"
     | "failed"
     | "stopped";
@@ -585,6 +586,11 @@ declare module "@roamcli/shared/protocol" {
         type: "resolveApproval";
         approvalId: string;
         approved: boolean;
+      }
+    | {
+        type: "resolveUserInput";
+        sessionId: string;
+        content: string;
       }
     | {
         type: "controlSignal";

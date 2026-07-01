@@ -20,6 +20,7 @@ export interface AgentSessionContext extends AgentPluginContext {
   attachments?: readonly AgentLaunchAttachment[];
   emit(event: AgentRuntimeEvent): Promise<void>;
   requestApproval(draft: ApprovalRequestDraft): Promise<ApprovalDecision>;
+  requestUserInput?(draft: UserInputRequestDraft): Promise<UserInputDecision>;
 }
 
 export interface AgentSkillListContext extends AgentPluginContext {
@@ -45,6 +46,32 @@ export interface ApprovalDecision {
   approved: boolean;
   signedAt: string;
   signature: string;
+}
+
+export interface UserInputQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options?: readonly UserInputQuestionOption[] | null;
+}
+
+export interface UserInputRequestDraft {
+  summary: string;
+  questions: readonly UserInputQuestion[];
+  payload: Record<string, unknown>;
+}
+
+export interface UserInputDecision {
+  inputRequestId: string;
+  content: string;
+  answeredAt: string;
 }
 
 export interface ArtifactDraft {

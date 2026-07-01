@@ -390,7 +390,7 @@ describe("SessionCommandService", () => {
     expect(runnerMessages).toHaveLength(1);
   });
 
-  it.each(["pending", "running", "waiting_approval"] as const)(
+  it.each(["pending", "running", "waiting_approval", "waiting_input"] as const)(
     "rejects active Claude Code messages before persistence when %s",
     async (status) => {
       const hub = new ConnectionHub(store);
@@ -427,6 +427,40 @@ describe("SessionCommandService", () => {
     },
   );
 
+  it("routes ordinary user messages as user input answers while waiting_input", async () => {
+    const hub = new ConnectionHub(store);
+    const approvals = new ApprovalService(store, hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      approvals,
+      new RunnerRpcClient(hub),
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    store.createSession({
+      ...sessionRecord(),
+      status: "waiting_input",
+    });
+
+    const result = await service.createUserMessage("session-1", {
+      content: "continue",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { message: expect.objectContaining({ content: "continue" }) },
+    });
+    expect(store.listMessages("session-1")).toHaveLength(1);
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "resolveUserInput",
+      sessionId: "session-1",
+      content: "continue",
+    });
+  });
+
   it("rolls back session creation when startSession cannot be delivered", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(store, hub);
@@ -450,7 +484,7 @@ describe("SessionCommandService", () => {
     expect(store.listSessions()).toEqual([]);
   });
 
-  it.each(["pending", "running", "waiting_approval"] as const)(
+  it.each(["pending", "running", "waiting_approval", "waiting_input"] as const)(
     "marks only the checked %s session stopped when its runner is offline",
     async (status) => {
       const streamEvents: ServerEvent[] = [];
@@ -995,7 +1029,12 @@ describe("SessionCommandService", () => {
     });
   });
 
-  it.each(["pending", "running", "waiting_approval"] satisfies SessionStatus[])(
+  it.each([
+    "pending",
+    "running",
+    "waiting_approval",
+    "waiting_input",
+  ] satisfies SessionStatus[])(
     "rejects managed worktree removal for active %s sessions",
     async (status) => {
       const runnerMessages: RunnerCommand[] = [];

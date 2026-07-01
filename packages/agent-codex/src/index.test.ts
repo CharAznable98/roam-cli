@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, realpath, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -29,7 +36,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
+      args: ["app-server", "proxy"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -270,7 +277,7 @@ describe("codex agent plugin", () => {
         "  item: {",
         "    id: 'item_1',",
         "    type: 'agent_message',",
-        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        '    text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\',',
         "  },",
         "}));",
         "setInterval(() => undefined, 1000);",
@@ -318,7 +325,7 @@ describe("codex agent plugin", () => {
         "  item: {",
         "    id: 'item_1',",
         "    type: 'agent_message',",
-        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        '    text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\',',
         "  },",
         "}));",
       ].join("\n"),
@@ -367,7 +374,7 @@ describe("codex agent plugin", () => {
         "  item: {",
         "    id: 'item_1',",
         "    type: 'agent_message',",
-        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        '    text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\',',
         "  },",
         "}));",
         "setInterval(() => undefined, 1000);",
@@ -520,7 +527,7 @@ describe("codex agent plugin", () => {
         "  item: {",
         "    id: 'item_1',",
         "    type: 'agent_message',",
-        "    text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}',",
+        '    text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\',',
         "  },",
         "}));",
         "process.stdin.setEncoding('utf8');",
@@ -586,24 +593,20 @@ describe("codex agent plugin", () => {
   it("completes app-server turns when start response and completion share a chunk", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-coalesced-");
     const closedMarker = join(workspace, "closed.txt");
-    await writeAppServerScript(
-      workspace,
-      "coalesced.mjs",
-      [
-        `const closedMarker = ${JSON.stringify(closedMarker)};`,
-        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'coalesced done' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "coalesced.mjs", [
+      `const closedMarker = ${JSON.stringify(closedMarker)};`,
+      "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'coalesced done' } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -629,7 +632,9 @@ describe("codex agent plugin", () => {
     await vi.waitFor(async () => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        outputId: expect.stringMatching(
+          /^codex-app-server-run-[^:]+-1:item-1$/,
+        ),
         content: "coalesced done",
         mode: "replace",
         done: true,
@@ -642,19 +647,15 @@ describe("codex agent plugin", () => {
   it("closes app-server when thread startup fails", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-startup-fail-");
     const closedMarker = join(workspace, "closed.txt");
-    await writeAppServerScript(
-      workspace,
-      "startup-fail.mjs",
-      [
-        `const closedMarker = ${JSON.stringify(closedMarker)};`,
-        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, error: { code: -32000, message: 'thread missing' } });",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "startup-fail.mjs", [
+      `const closedMarker = ${JSON.stringify(closedMarker)};`,
+      "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, error: { code: -32000, message: 'thread missing' } });",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
@@ -683,17 +684,13 @@ describe("codex agent plugin", () => {
   it("preserves stopped status when app-server startup is cancelled", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-startup-stop-");
     const initializedMarker = join(workspace, "initialized.txt");
-    await writeAppServerScript(
-      workspace,
-      "startup-stop.mjs",
-      [
-        `const initializedMarker = ${JSON.stringify(initializedMarker)};`,
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') fs.writeFileSync(initializedMarker, 'initialized');",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "startup-stop.mjs", [
+      `const initializedMarker = ${JSON.stringify(initializedMarker)};`,
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') fs.writeFileSync(initializedMarker, 'initialized');",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -730,29 +727,25 @@ describe("codex agent plugin", () => {
   it("passes trusted runner permissions to app-server turns", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-profile-");
     const capturedPath = join(workspace, "captured.jsonl");
-    await writeAppServerScript(
-      workspace,
-      "profile.mjs",
-      [
-        `const capturedPath = ${JSON.stringify(capturedPath)};`,
-        "function capture(message) { fs.appendFileSync(capturedPath, `${JSON.stringify(message)}\\n`); }",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') {",
-        "    capture(message);",
-        "    write({ id: message.id, result: {} });",
-        "  }",
-        "  if (message.method === 'thread/start') {",
-        "    capture(message);",
-        "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  }",
-        "  if (message.method === 'turn/start') {",
-        "    capture(message);",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "profile.mjs", [
+      `const capturedPath = ${JSON.stringify(capturedPath)};`,
+      "function capture(message) { fs.appendFileSync(capturedPath, `${JSON.stringify(message)}\\n`); }",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') {",
+      "    capture(message);",
+      "    write({ id: message.id, result: {} });",
+      "  }",
+      "  if (message.method === 'thread/start') {",
+      "    capture(message);",
+      "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  }",
+      "  if (message.method === 'turn/start') {",
+      "    capture(message);",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const session = codexAgent.createSession({
       profile: "trusted",
       env: {
@@ -808,26 +801,22 @@ describe("codex agent plugin", () => {
   it("maps app-server interrupted turns to stopped status", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-interrupt-");
     const startedMarker = join(workspace, "started.txt");
-    await writeAppServerScript(
-      workspace,
-      "interrupt.mjs",
-      [
-        `const startedMarker = ${JSON.stringify(startedMarker)};`,
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    fs.writeFileSync(startedMarker, 'started');",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "  }",
-        "  if (message.method === 'turn/interrupt') {",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "interrupt.mjs", [
+      `const startedMarker = ${JSON.stringify(startedMarker)};`,
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    fs.writeFileSync(startedMarker, 'started');",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "  }",
+      "  if (message.method === 'turn/interrupt') {",
+      "    write({ id: message.id, result: {} });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -861,28 +850,26 @@ describe("codex agent plugin", () => {
   });
 
   it("preserves interrupts while app-server turn startup is pending", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-pending-interrupt-");
-    const pendingMarker = join(workspace, "pending.txt");
-    await writeAppServerScript(
-      workspace,
-      "pending-interrupt.mjs",
-      [
-        `const pendingMarker = ${JSON.stringify(pendingMarker)};`,
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    fs.writeFileSync(pendingMarker, 'pending');",
-        "    setTimeout(() => write({ id: message.id, result: { turn: { id: 'turn-1' } } }), 100);",
-        "  }",
-        "  if (message.method === 'turn/interrupt') {",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-pending-interrupt-",
     );
+    const pendingMarker = join(workspace, "pending.txt");
+    await writeAppServerScript(workspace, "pending-interrupt.mjs", [
+      `const pendingMarker = ${JSON.stringify(pendingMarker)};`,
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    fs.writeFileSync(pendingMarker, 'pending');",
+      "    setTimeout(() => write({ id: message.id, result: { turn: { id: 'turn-1' } } }), 100);",
+      "  }",
+      "  if (message.method === 'turn/interrupt') {",
+      "    write({ id: message.id, result: {} });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -919,30 +906,26 @@ describe("codex agent plugin", () => {
     const workspace = await mkdirTemp("roam-codex-app-server-startup-input-");
     const startupMarker = join(workspace, "startup.txt");
     const turnsPath = join(workspace, "turns.jsonl");
-    await writeAppServerScript(
-      workspace,
-      "startup-input.mjs",
-      [
-        `const startupMarker = ${JSON.stringify(startupMarker)};`,
-        `const turnsPath = ${JSON.stringify(turnsPath)};`,
-        "let turnCount = 0;",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') {",
-        "    fs.writeFileSync(startupMarker, 'pending');",
-        "    setTimeout(() => write({ id: message.id, result: { thread: { id: 'thread-1' } } }), 100);",
-        "  }",
-        "  if (message.method === 'turn/start') {",
-        "    turnCount += 1;",
-        "    fs.appendFileSync(turnsPath, `${message.params.input[0].text}\\n`);",
-        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
-        "    write({ method: 'item/completed', params: { item: { id: `item-${turnCount}`, type: 'agentMessage', text: message.params.input[0].text } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: `turn-${turnCount}`, status: 'completed' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "startup-input.mjs", [
+      `const startupMarker = ${JSON.stringify(startupMarker)};`,
+      `const turnsPath = ${JSON.stringify(turnsPath)};`,
+      "let turnCount = 0;",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') {",
+      "    fs.writeFileSync(startupMarker, 'pending');",
+      "    setTimeout(() => write({ id: message.id, result: { thread: { id: 'thread-1' } } }), 100);",
+      "  }",
+      "  if (message.method === 'turn/start') {",
+      "    turnCount += 1;",
+      "    fs.appendFileSync(turnsPath, `${message.params.input[0].text}\\n`);",
+      "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+      "    write({ method: 'item/completed', params: { item: { id: `item-${turnCount}`, type: 'agentMessage', text: message.params.input[0].text } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: `turn-${turnCount}`, status: 'completed' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -985,29 +968,25 @@ describe("codex agent plugin", () => {
     const workspace = await mkdirTemp("roam-codex-app-server-steer-");
     const startedMarker = join(workspace, "started.txt");
     const capturedPath = join(workspace, "steer.json");
-    await writeAppServerScript(
-      workspace,
-      "steer.mjs",
-      [
-        `const startedMarker = ${JSON.stringify(startedMarker)};`,
-        `const capturedPath = ${JSON.stringify(capturedPath)};`,
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    fs.writeFileSync(startedMarker, 'started');",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "  }",
-        "  if (message.method === 'turn/steer') {",
-        "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: message.params.input[0].text } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "steer.mjs", [
+      `const startedMarker = ${JSON.stringify(startedMarker)};`,
+      `const capturedPath = ${JSON.stringify(capturedPath)};`,
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    fs.writeFileSync(startedMarker, 'started');",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "  }",
+      "  if (message.method === 'turn/steer') {",
+      "    fs.writeFileSync(capturedPath, JSON.stringify(message));",
+      "    write({ id: message.id, result: {} });",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: message.params.input[0].text } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1054,7 +1033,9 @@ describe("codex agent plugin", () => {
       );
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        outputId: expect.stringMatching(
+          /^codex-app-server-run-[^:]+-1:item-1$/,
+        ),
         content: "continue here",
         mode: "replace",
         done: true,
@@ -1065,34 +1046,30 @@ describe("codex agent plugin", () => {
   it("preserves delivered input when app-server completes before steer succeeds", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-steer-race-");
     const startedMarker = join(workspace, "started.txt");
-    await writeAppServerScript(
-      workspace,
-      "steer-race.mjs",
-      [
-        `const startedMarker = ${JSON.stringify(startedMarker)};`,
-        "let turnCount = 0;",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    turnCount += 1;",
-        "    if (turnCount === 1) {",
-        "      fs.writeFileSync(startedMarker, 'started');",
-        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "      return;",
-        "    }",
-        "    write({ id: message.id, result: { turn: { id: 'turn-2' } } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
-        "  }",
-        "  if (message.method === 'turn/steer') {",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "    write({ id: message.id, error: { code: -32000, message: 'turn already completed' } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "steer-race.mjs", [
+      `const startedMarker = ${JSON.stringify(startedMarker)};`,
+      "let turnCount = 0;",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    turnCount += 1;",
+      "    if (turnCount === 1) {",
+      "      fs.writeFileSync(startedMarker, 'started');",
+      "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "      return;",
+      "    }",
+      "    write({ id: message.id, result: { turn: { id: 'turn-2' } } });",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+      "  }",
+      "  if (message.method === 'turn/steer') {",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "    write({ id: message.id, error: { code: -32000, message: 'turn already completed' } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1122,7 +1099,9 @@ describe("codex agent plugin", () => {
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-2:item-2$/),
+        outputId: expect.stringMatching(
+          /^codex-app-server-run-[^:]+-2:item-2$/,
+        ),
         content: "run as next turn",
         mode: "replace",
         done: true,
@@ -1132,27 +1111,25 @@ describe("codex agent plugin", () => {
   });
 
   it("does not block app-server interrupts behind pending approval prompts", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-approval-interrupt-");
-    const approvalMarker = join(workspace, "approval.txt");
-    await writeAppServerScript(
-      workspace,
-      "approval-interrupt.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
-        "  }",
-        "  if (message.method === 'turn/interrupt') {",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-approval-interrupt-",
     );
+    const approvalMarker = join(workspace, "approval.txt");
+    await writeAppServerScript(workspace, "approval-interrupt.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
+      "  }",
+      "  if (message.method === 'turn/interrupt') {",
+      "    write({ id: message.id, result: {} });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1189,27 +1166,25 @@ describe("codex agent plugin", () => {
   });
 
   it("does not block app-server interrupts behind directive approval prompts", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-directive-interrupt-");
-    const approvalMarker = join(workspace, "approval.txt");
-    await writeAppServerScript(
-      workspace,
-      "directive-interrupt.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
-        "  }",
-        "  if (message.method === 'turn/interrupt') {",
-        "    write({ id: message.id, result: {} });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-directive-interrupt-",
     );
+    const approvalMarker = join(workspace, "approval.txt");
+    await writeAppServerScript(workspace, "directive-interrupt.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      '    write({ method: \'item/completed\', params: { item: { id: \'item-1\', type: \'agentMessage\', text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\' } } });',
+      "  }",
+      "  if (message.method === 'turn/interrupt') {",
+      "    write({ id: message.id, result: {} });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1249,24 +1224,20 @@ describe("codex agent plugin", () => {
     const workspace = await mkdirTemp("roam-codex-app-server-stop-no-ack-");
     const startedMarker = join(workspace, "started.txt");
     const closedMarker = join(workspace, "closed.txt");
-    await writeAppServerScript(
-      workspace,
-      "stop-no-ack.mjs",
-      [
-        `const startedMarker = ${JSON.stringify(startedMarker)};`,
-        `const closedMarker = ${JSON.stringify(closedMarker)};`,
-        "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    fs.writeFileSync(startedMarker, 'started');",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "stop-no-ack.mjs", [
+      `const startedMarker = ${JSON.stringify(startedMarker)};`,
+      `const closedMarker = ${JSON.stringify(closedMarker)};`,
+      "process.on('SIGTERM', () => { fs.writeFileSync(closedMarker, 'closed'); process.exit(0); });",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    fs.writeFileSync(startedMarker, 'started');",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1307,22 +1278,18 @@ describe("codex agent plugin", () => {
 
   it("does not fail app-server turns on retryable error notifications", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-retryable-error-");
-    await writeAppServerScript(
-      workspace,
-      "retryable-error.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'error', params: { error: { message: 'temporary upstream issue' }, willRetry: true } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'recovered' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "retryable-error.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'error', params: { error: { message: 'temporary upstream issue' }, willRetry: true } });",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'recovered' } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1353,7 +1320,9 @@ describe("codex agent plugin", () => {
       });
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(/^codex-app-server-run-[^:]+-1:item-1$/),
+        outputId: expect.stringMatching(
+          /^codex-app-server-run-[^:]+-1:item-1$/,
+        ),
         content: "recovered",
         mode: "replace",
         done: true,
@@ -1366,20 +1335,18 @@ describe("codex agent plugin", () => {
   });
 
   it("fails app-server sessions when the process exits before a queued turn starts", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-exit-between-turns-");
-    await writeAppServerScript(
-      workspace,
-      "exit-before-turn.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') {",
-        "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "    process.exit(0);",
-        "  }",
-        "};",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-exit-between-turns-",
     );
+    await writeAppServerScript(workspace, "exit-before-turn.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') {",
+      "    write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "    process.exit(0);",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1415,32 +1382,30 @@ describe("codex agent plugin", () => {
   });
 
   it("sends app-server approval directive decisions as follow-up turns", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-approval-directive-");
-    const capturedPath = join(workspace, "approval-turn.json");
-    await writeAppServerScript(
-      workspace,
-      "approval-directive.mjs",
-      [
-        `const capturedPath = ${JSON.stringify(capturedPath)};`,
-        "let turnCount = 0;",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    turnCount += 1;",
-        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
-        "    if (turnCount === 2) {",
-        "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
-        "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
-        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
-        "      return;",
-        "    }",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-approval-directive-",
     );
+    const capturedPath = join(workspace, "approval-turn.json");
+    await writeAppServerScript(workspace, "approval-directive.mjs", [
+      `const capturedPath = ${JSON.stringify(capturedPath)};`,
+      "let turnCount = 0;",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    turnCount += 1;",
+      "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+      "    if (turnCount === 2) {",
+      "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
+      "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+      "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+      "      return;",
+      "    }",
+      '    write({ method: \'item/completed\', params: { item: { id: \'item-1\', type: \'agentMessage\', text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\' } } });',
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1493,31 +1458,27 @@ describe("codex agent plugin", () => {
   it("keeps final directive approvals alive after app-server turn completion", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-final-directive-");
     const capturedPath = join(workspace, "approval-turn.json");
-    await writeAppServerScript(
-      workspace,
-      "final-directive.mjs",
-      [
-        `const capturedPath = ${JSON.stringify(capturedPath)};`,
-        "let turnCount = 0;",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    turnCount += 1;",
-        "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
-        "    if (turnCount === 2) {",
-        "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
-        "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
-        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
-        "      return;",
-        "    }",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_APPROVAL: {\"type\":\"approval_request\",\"kind\":\"execCommand\",\"summary\":\"Run tests\",\"payload\":{\"command\":\"pnpm test\"}}' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "final-directive.mjs", [
+      `const capturedPath = ${JSON.stringify(capturedPath)};`,
+      "let turnCount = 0;",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    turnCount += 1;",
+      "    write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });",
+      "    if (turnCount === 2) {",
+      "      fs.writeFileSync(capturedPath, JSON.stringify(message));",
+      "      write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: message.params.input[0].text } } });",
+      "      write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
+      "      return;",
+      "    }",
+      '    write({ method: \'item/completed\', params: { item: { id: \'item-1\', type: \'agentMessage\', text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\' } } });',
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1569,28 +1530,24 @@ describe("codex agent plugin", () => {
     });
   });
 
-  it("handles app-server tool user-input requests through approvals", async () => {
+  it("handles app-server tool user-input requests through user input", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-user-input-");
-    await writeAppServerScript(
-      workspace,
-      "user-input.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
-        "  }",
-        "  if (message.id === 12 && message.error) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.error) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "user-input.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 12, method: 'item/tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
+      "  }",
+      "  if (message.id === 12 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
-    const approvals: unknown[] = [];
+    const userInputs: unknown[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
@@ -1603,7 +1560,6 @@ describe("codex agent plugin", () => {
         events.push(event);
       },
       requestApproval: async (draft) => {
-        approvals.push(draft);
         return {
           approvalId: "approval-1",
           approved: true,
@@ -1611,14 +1567,21 @@ describe("codex agent plugin", () => {
           signature: "sig",
         };
       },
+      requestUserInput: async (draft) => {
+        userInputs.push(draft);
+        return {
+          inputRequestId: "input-1",
+          content: "yes",
+          answeredAt: "2026-06-21T00:00:00.000Z",
+        };
+      },
     });
 
     await session.start();
 
     await vi.waitFor(() => {
-      expect(approvals).toEqual([
+      expect(userInputs).toEqual([
         expect.objectContaining({
-          kind: "execCommand",
           summary: "Proceed?",
           payload: expect.objectContaining({
             method: "item/tool/requestUserInput",
@@ -1636,7 +1599,7 @@ describe("codex agent plugin", () => {
           (event) =>
             event.type === "assistantOutput" &&
             typeof event.content === "string" &&
-            event.content.includes("structured Codex tool user input"),
+            event.content.includes('"confirm":{"answers":["yes"]}'),
         ),
       ).toBe(true);
     });
@@ -1644,24 +1607,20 @@ describe("codex agent plugin", () => {
 
   it("answers app-server current-time requests", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-current-time-");
-    await writeAppServerScript(
-      workspace,
-      "current-time.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 21, method: 'currentTime/read', params: { threadId: 'thread-1', turnId: 'turn-1' } });",
-        "  }",
-        "  if (message.id === 21 && message.result) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "current-time.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 21, method: 'currentTime/read', params: { threadId: 'thread-1', turnId: 'turn-1' } });",
+      "  }",
+      "  if (message.id === 21 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1703,26 +1662,24 @@ describe("codex agent plugin", () => {
   });
 
   it("recognizes top-level app-server tool user-input requests", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-top-level-user-input-");
-    await writeAppServerScript(
-      workspace,
-      "top-level-user-input.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 12, method: 'tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
-        "  }",
-        "  if (message.id === 12 && message.error) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.error) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
+    const workspace = await mkdirTemp(
+      "roam-codex-app-server-top-level-user-input-",
     );
-    const approvals: unknown[] = [];
+    await writeAppServerScript(workspace, "top-level-user-input.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 12, method: 'tool/requestUserInput', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'confirm', header: 'Confirm', question: 'Proceed?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Proceed' }] }] } });",
+      "  }",
+      "  if (message.id === 12 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
+    const userInputs: unknown[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
       env: {
@@ -1733,7 +1690,6 @@ describe("codex agent plugin", () => {
       prompt: "hello",
       emit: async () => undefined,
       requestApproval: async (draft) => {
-        approvals.push(draft);
         return {
           approvalId: "approval-1",
           approved: true,
@@ -1741,14 +1697,21 @@ describe("codex agent plugin", () => {
           signature: "sig",
         };
       },
+      requestUserInput: async (draft) => {
+        userInputs.push(draft);
+        return {
+          inputRequestId: "input-1",
+          content: "yes",
+          answeredAt: "2026-06-21T00:00:00.000Z",
+        };
+      },
     });
 
     await session.start();
 
     await vi.waitFor(() => {
-      expect(approvals).toEqual([
+      expect(userInputs).toEqual([
         expect.objectContaining({
-          kind: "execCommand",
           summary: "Proceed?",
           payload: expect.objectContaining({
             method: "tool/requestUserInput",
@@ -1760,24 +1723,20 @@ describe("codex agent plugin", () => {
 
   it("handles app-server MCP elicitation requests through approvals", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-elicitation-");
-    await writeAppServerScript(
-      workspace,
-      "elicitation.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 13, method: 'mcpServer/elicitation/request', params: { threadId: 'thread-1', turnId: 'turn-1', serverName: 'connector', mode: 'form', message: 'Choose account', requestedSchema: { type: 'object' }, _meta: null } });",
-        "  }",
-        "  if (message.id === 13 && message.result) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "elicitation.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 13, method: 'mcpServer/elicitation/request', params: { threadId: 'thread-1', turnId: 'turn-1', serverName: 'connector', mode: 'form', message: 'Choose account', requestedSchema: { type: 'object' }, _meta: null } });",
+      "  }",
+      "  if (message.id === 13 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
@@ -1828,24 +1787,20 @@ describe("codex agent plugin", () => {
 
   it("cancels approved app-server URL elicitations until content is supported", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-url-elicitation-");
-    await writeAppServerScript(
-      workspace,
-      "url-elicitation.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 13, method: 'mcpServer/elicitation/request', params: { threadId: 'thread-1', turnId: 'turn-1', serverName: 'connector', mode: 'url', message: 'Authorize connector', url: 'https://example.com/oauth', elicitationId: 'elicitation-1', _meta: null } });",
-        "  }",
-        "  if (message.id === 13 && message.result) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "url-elicitation.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 13, method: 'mcpServer/elicitation/request', params: { threadId: 'thread-1', turnId: 'turn-1', serverName: 'connector', mode: 'url', message: 'Authorize connector', url: 'https://example.com/oauth', elicitationId: 'elicitation-1', _meta: null } });",
+      "  }",
+      "  if (message.id === 13 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
@@ -1896,21 +1851,17 @@ describe("codex agent plugin", () => {
 
   it("fails app-server sessions cleanly when approval creation fails", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-approval-fail-");
-    await writeAppServerScript(
-      workspace,
-      "approval-fail.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 99, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
-        "  }",
-        "};",
-        "setInterval(() => undefined, 1000);",
-      ],
-    );
+    await writeAppServerScript(workspace, "approval-fail.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 99, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test', cwd: process.cwd() } });",
+      "  }",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -1943,28 +1894,24 @@ describe("codex agent plugin", () => {
   it("rejects app-server requests that arrive after session closure", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-late-request-");
     const rejectedPath = join(workspace, "late-rejected.json");
-    await writeAppServerScript(
-      workspace,
-      "late-request.mjs",
-      [
-        `const rejectedPath = ${JSON.stringify(rejectedPath)};`,
-        "process.on('SIGTERM', () => undefined);",
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'done' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "    setTimeout(() => write({ id: 31, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test' } }), 20);",
-        "  }",
-        "  if (message.id === 31 && message.error) {",
-        "    fs.writeFileSync(rejectedPath, JSON.stringify(message.error));",
-        "    process.exit(0);",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "late-request.mjs", [
+      `const rejectedPath = ${JSON.stringify(rejectedPath)};`,
+      "process.on('SIGTERM', () => undefined);",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'done' } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "    setTimeout(() => write({ id: 31, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', command: 'pnpm test' } }), 20);",
+      "  }",
+      "  if (message.id === 31 && message.error) {",
+      "    fs.writeFileSync(rejectedPath, JSON.stringify(message.error));",
+      "    process.exit(0);",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
@@ -2007,25 +1954,21 @@ describe("codex agent plugin", () => {
   it("passes app-server network approval context to the approval chain", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-network-");
     const capturedPath = join(workspace, "network-response.json");
-    await writeAppServerScript(
-      workspace,
-      "network-approval.mjs",
-      [
-        `const capturedPath = ${JSON.stringify(capturedPath)};`,
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Allow network', availableDecisions: [{ applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'allow' } } }], networkApprovalContext: { host: 'example.com', protocol: 'https' }, proposedNetworkPolicyAmendments: [{ host: 'example.com', action: 'allow' }] } });",
-        "  }",
-        "  if (message.id === 7 && message.result) {",
-        "    fs.writeFileSync(capturedPath, JSON.stringify(message.result));",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "network-approval.mjs", [
+      `const capturedPath = ${JSON.stringify(capturedPath)};`,
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 7, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Allow network', availableDecisions: [{ applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'allow' } } }], networkApprovalContext: { host: 'example.com', protocol: 'https' }, proposedNetworkPolicyAmendments: [{ host: 'example.com', action: 'allow' }] } });",
+      "  }",
+      "  if (message.id === 7 && message.result) {",
+      "    fs.writeFileSync(capturedPath, JSON.stringify(message.result));",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -2084,24 +2027,20 @@ describe("codex agent plugin", () => {
 
   it("passes app-server file change details to the approval chain", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-file-change-");
-    await writeAppServerScript(
-      workspace,
-      "file-change.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'fileChange', changes: [{ path: 'src/app.ts', kind: 'update', diff: '@@ -1 +1 @@' }], status: 'pending' }, startedAtMs: Date.now() } });",
-        "    write({ id: 11, method: 'item/fileChange/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Apply patch' } });",
-        "  }",
-        "  if (message.id === 11 && message.result) {",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "file-change.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'fileChange', changes: [{ path: 'src/app.ts', kind: 'update', diff: '@@ -1 +1 @@' }], status: 'pending' }, startedAtMs: Date.now() } });",
+      "    write({ id: 11, method: 'item/fileChange/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', reason: 'Apply patch' } });",
+      "  }",
+      "  if (message.id === 11 && message.result) {",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -2148,24 +2087,20 @@ describe("codex agent plugin", () => {
 
   it("passes app-server command item details to the approval chain", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-command-details-");
-    await writeAppServerScript(
-      workspace,
-      "command-details.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'commandExecution', command: 'pnpm test', cwd: process.cwd(), commandActions: [{ type: 'run' }], environmentId: 'local' }, startedAtMs: Date.now() } });",
-        "    write({ id: 11, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' } });",
-        "  }",
-        "  if (message.id === 11 && message.result) {",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "command-details.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'item-1', type: 'commandExecution', command: 'pnpm test', cwd: process.cwd(), commandActions: [{ type: 'run' }], environmentId: 'local' }, startedAtMs: Date.now() } });",
+      "    write({ id: 11, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' } });",
+      "  }",
+      "  if (message.id === 11 && message.result) {",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -2197,7 +2132,9 @@ describe("codex agent plugin", () => {
           payload: expect.objectContaining({
             itemId: "item-1",
             command: "pnpm test",
-            cwd: expect.stringContaining("roam-codex-app-server-command-details"),
+            cwd: expect.stringContaining(
+              "roam-codex-app-server-command-details",
+            ),
             commandActions: [{ type: "run" }],
             environmentId: "local",
             commandExecution: expect.objectContaining({
@@ -2213,24 +2150,20 @@ describe("codex agent plugin", () => {
 
   it("handles app-server permission approval requests", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-permissions-");
-    await writeAppServerScript(
-      workspace,
-      "permissions.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ id: 8, method: 'item/permissions/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', environmentId: 'local', cwd: process.cwd(), reason: 'Need workspace write', permissions: { fileSystem: { write: [process.cwd()] }, network: { enabled: true } } } });",
-        "  }",
-        "  if (message.id === 8 && message.result) {",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "permissions.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      "    write({ id: 8, method: 'item/permissions/requestApproval', params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1', environmentId: 'local', cwd: process.cwd(), reason: 'Need workspace write', permissions: { fileSystem: { write: [process.cwd()] }, network: { enabled: true } } } });",
+      "  }",
+      "  if (message.id === 8 && message.result) {",
+      "    write({ method: 'item/completed', params: { item: { id: 'item-2', type: 'agentMessage', text: JSON.stringify(message.result) } } });",
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const approvals: unknown[] = [];
     const session = codexAgent.createSession({
@@ -2266,9 +2199,7 @@ describe("codex agent plugin", () => {
             permissions: {
               fileSystem: {
                 write: [
-                  expect.stringContaining(
-                    "roam-codex-app-server-permissions",
-                  ),
+                  expect.stringContaining("roam-codex-app-server-permissions"),
                 ],
               },
               network: { enabled: true },
@@ -2289,21 +2220,17 @@ describe("codex agent plugin", () => {
 
   it("emits app-server artifact directives from completed messages", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-artifact-");
-    await writeAppServerScript(
-      workspace,
-      "artifact.mjs",
-      [
-        "handleMessage = (message) => {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'item/completed', params: { item: { id: 'item-1', type: 'agentMessage', text: 'ROAMCLI_ARTIFACT: {\"type\":\"artifact\",\"path\":\"result.log\",\"kind\":\"log\",\"mimeType\":\"text/plain\"}' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "};",
-      ],
-    );
+    await writeAppServerScript(workspace, "artifact.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+      "  if (message.method === 'turn/start') {",
+      "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+      '    write({ method: \'item/completed\', params: { item: { id: \'item-1\', type: \'agentMessage\', text: \'ROAMCLI_ARTIFACT: {"type":"artifact","path":"result.log","kind":"log","mimeType":"text/plain"}\' } } });',
+      "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+      "  }",
+      "};",
+    ]);
     const events: AgentRuntimeEvent[] = [];
     const session = codexAgent.createSession({
       profile: "standard",
@@ -2373,7 +2300,10 @@ describe("codex agent plugin", () => {
                 event.content.includes("ROAMCLI_OK"),
             ),
           ).toBe(true);
-          expect(events).toContainEqual({ type: "status", status: "completed" });
+          expect(events).toContainEqual({
+            type: "status",
+            status: "completed",
+          });
         },
         { timeout: 120_000 },
       );

@@ -633,11 +633,7 @@ export function useRoamController() {
       return;
     }
     syncActiveSessionSubscription(selectedSession?.id);
-  }, [
-    selectedSession?.id,
-    state.loadState,
-    syncActiveSessionSubscription,
-  ]);
+  }, [selectedSession?.id, state.loadState, syncActiveSessionSubscription]);
 
   useEffect(() => {
     if (state.loadState !== "ready" || !selectedSession?.id) {
@@ -1941,6 +1937,7 @@ function isActiveSessionStatus(status: SessionStatus): boolean {
   return (
     status === "pending" ||
     status === "running" ||
-    status === "waiting_approval"
+    status === "waiting_approval" ||
+    status === "waiting_input"
   );
 }

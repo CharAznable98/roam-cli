@@ -35,12 +35,7 @@ const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
-const DEFAULT_APP_SERVER_ARGS = [
-  "app-server",
-  "--stdio",
-  "-c",
-  "skip_git_repo_check=true",
-];
+const DEFAULT_APP_SERVER_ARGS = ["app-server", "proxy"];
 const DEFAULT_ARGS = [
   "exec",
   "--json",
@@ -666,7 +661,10 @@ function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
   return [...DEFAULT_APP_SERVER_ARGS];
 }
 
-function modeFor(kind: string, env: NodeJS.ProcessEnv): "app-server" | "exec-json" {
+function modeFor(
+  kind: string,
+  env: NodeJS.ProcessEnv,
+): "app-server" | "exec-json" {
   const mode = env[`ROAMCLI_AGENT_${envKey(kind)}_MODE`]?.trim();
   if (mode === undefined || mode.length === 0 || mode === "app-server") {
     return "app-server";

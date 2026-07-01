@@ -194,7 +194,8 @@ function isActiveSessionStatus(status: SessionStatus): boolean {
   return (
     status === "pending" ||
     status === "running" ||
-    status === "waiting_approval"
+    status === "waiting_approval" ||
+    status === "waiting_input"
   );
 }
 

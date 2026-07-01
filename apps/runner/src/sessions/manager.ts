@@ -15,6 +15,7 @@ import type {
 } from "@roamcli/shared/protocol";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";
+import { UserInputRequestTracker } from "../input-requests/tracker.js";
 import { buildArtifact } from "../persistence/artifacts.js";
 import { resolveWorkspaceChild } from "../workspace/scope.js";
 import { SessionAttachmentStore } from "./attachments.js";
@@ -38,6 +39,7 @@ export class SessionManager {
   readonly #agents: Map<AgentKind, LoadedAgent>;
   readonly #emit: RunnerEventSink;
   readonly #approvals: ApprovalTracker;
+  readonly #userInputs: UserInputRequestTracker;
   readonly #workspaceCommands: WorkspaceCommandHandler;
   readonly #sessions = new Map<string, RunningSession>();
   readonly #startingSessionIds = new Set<string>();
@@ -54,6 +56,9 @@ export class SessionManager {
     );
     this.#emit = options.emit;
     this.#approvals = new ApprovalTracker({
+      emit: this.#emit,
+    });
+    this.#userInputs = new UserInputRequestTracker({
       emit: this.#emit,
     });
     this.#workspaceCommands = new WorkspaceCommandHandler({
@@ -208,6 +213,9 @@ export class SessionManager {
       case "resolveApproval":
         this.resolveApproval(command.approvalId, command.approved);
         return;
+      case "resolveUserInput":
+        this.resolveUserInput(command.sessionId, command.content);
+        return;
       case "controlSignal":
         this.control(command.sessionId, command.signal);
         return;
@@ -277,6 +285,11 @@ export class SessionManager {
         })),
         emit: (event) => this.#handleAgentEvent(session.id, event),
         requestApproval: (draft) => this.#approvals.request(session, draft),
+        requestUserInput: (draft) =>
+          this.#userInputs.request(
+            { id: session.id, agent: session.agent },
+            draft,
+          ),
         ...(resumeThreadId ? { resumeThreadId } : {}),
       });
       const running: RunningSession = {
@@ -441,6 +454,10 @@ export class SessionManager {
 
   public resolveApproval(approvalId: string, approved: boolean): void {
     this.#approvals.resolve(approvalId, approved);
+  }
+
+  public resolveUserInput(sessionId: string, content: string): void {
+    this.#userInputs.resolve(sessionId, content);
   }
 
   public control(
@@ -624,6 +641,7 @@ export class SessionManager {
     }
     this.#sessions.delete(sessionId);
     this.#approvals.clear(sessionId);
+    this.#userInputs.clear(sessionId);
     if (running.stopTimer !== undefined) {
       clearTimeout(running.stopTimer);
     }

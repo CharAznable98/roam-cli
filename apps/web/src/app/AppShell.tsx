@@ -1559,6 +1559,7 @@ const ACTIVE_RUNNER_STATUSES = new Set<SessionStatus>([
   "pending",
   "running",
   "waiting_approval",
+  "waiting_input",
 ]);
 
 function hasActiveRunnerWork(session: Session): boolean {
@@ -2822,8 +2823,8 @@ function MobileSessionSwitcher({
   ).length;
   const selectedSessionPinDisabled = Boolean(
     selectedSession &&
-      !selectedSessionPinned &&
-      pinnedSessionCount >= MAX_PINNED_SESSIONS_PER_PROJECT,
+    !selectedSessionPinned &&
+    pinnedSessionCount >= MAX_PINNED_SESSIONS_PER_PROJECT,
   );
   const hasSessionOverflow =
     orderedSessions.length > DEFAULT_VISIBLE_SESSIONS_PER_PROJECT;
@@ -2880,12 +2881,11 @@ function MobileSessionSwitcher({
                   selectedProject.pinnedAt ? "Unpin project" : "Pin project"
                 }
                 onClick={() =>
-                  runAsyncAction(
-                    () =>
-                      onToggleProjectPinned(
-                        selectedProject.id,
-                        !selectedProject.pinnedAt,
-                      ),
+                  runAsyncAction(() =>
+                    onToggleProjectPinned(
+                      selectedProject.id,
+                      !selectedProject.pinnedAt,
+                    ),
                   )
                 }
               >
@@ -2975,20 +2975,15 @@ function MobileSessionSwitcher({
                     : "Pin session"
               }
               onClick={() =>
-                runAsyncAction(
-                  () =>
-                    onToggleSessionPinned(
-                      selectedSession.id,
-                      !selectedSessionPinned,
-                    ),
+                runAsyncAction(() =>
+                  onToggleSessionPinned(
+                    selectedSession.id,
+                    !selectedSessionPinned,
+                  ),
                 )
               }
             >
-              {selectedSessionPinned ? (
-                <PinOff size={15} />
-              ) : (
-                <Pin size={15} />
-              )}
+              {selectedSessionPinned ? <PinOff size={15} /> : <Pin size={15} />}
             </button>
           ) : null}
         </div>

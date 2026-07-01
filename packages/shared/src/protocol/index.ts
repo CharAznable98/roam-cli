@@ -105,6 +105,7 @@ export const SessionStatusSchema = z.enum([
   "pending",
   "running",
   "waiting_approval",
+  "waiting_input",
   "completed",
   "failed",
   "stopped",
@@ -981,6 +982,11 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("resolveApproval"),
     approvalId: z.string().min(1),
     approved: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("resolveUserInput"),
+    sessionId: z.string().min(1),
+    content: z.string().min(1),
   }),
   z.object({
     type: z.literal("controlSignal"),
