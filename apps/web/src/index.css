@@ -2481,6 +2481,11 @@
     line-height: 1.35;
   }
 
+  .activity-list .activity-list-summary {
+    color: #71869d;
+    font-style: italic;
+  }
+
   .activity-dot {
     height: 5px;
     width: 5px;

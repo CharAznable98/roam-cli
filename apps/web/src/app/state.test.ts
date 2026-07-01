@@ -1,4 +1,5 @@
 import type {
+  AgentActivity,
   Approval,
   FileNode,
   Project,
@@ -724,6 +725,83 @@ describe("app reducer", () => {
     expect(next.messages).toHaveLength(1);
     expect(next.messages[0]?.content).toBe("final answer");
     expect(next.messages[0]?.streaming).toBeUndefined();
+  });
+
+  it("bulk merges session activities across agents in chronological order", () => {
+    const next = appReducer(
+      {
+        ...initialAppState,
+        activities: [
+          makeActivity({
+            id: "activity-existing",
+            sessionId: "session-1",
+            agent: "claude-code",
+            kind: "tool",
+            label: "old label",
+            createdAt: "2026-06-05T00:00:02.000Z",
+          }),
+          makeActivity({
+            id: "activity-other-session",
+            sessionId: "session-2",
+            agent: "codex",
+            kind: "system",
+            label: "other session",
+            createdAt: "2026-06-05T00:00:03.000Z",
+          }),
+        ],
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session: makeSession("session-1", "project-1"),
+          messages: [],
+          activities: [
+            makeActivity({
+              id: "activity-late",
+              sessionId: "session-1",
+              agent: "codex",
+              kind: "tool",
+              label: "late",
+              createdAt: "2026-06-05T00:00:04.000Z",
+            }),
+            makeActivity({
+              id: "activity-existing",
+              sessionId: "session-1",
+              agent: "claude-code",
+              kind: "tool",
+              label: "updated label",
+              createdAt: "2026-06-05T00:00:02.000Z",
+            }),
+            makeActivity({
+              id: "activity-early",
+              sessionId: "session-1",
+              agent: "codex",
+              kind: "system",
+              label: "early",
+              createdAt: "2026-06-05T00:00:01.000Z",
+            }),
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.activities.map((activity) => activity.id)).toEqual([
+      "activity-early",
+      "activity-existing",
+      "activity-other-session",
+      "activity-late",
+    ]);
+    expect(
+      next.activities.find((activity) => activity.id === "activity-existing")
+        ?.label,
+    ).toBe("updated label");
+    expect(
+      next.activities.find((activity) => activity.id === "activity-existing")
+        ?.agent,
+    ).toBe("claude-code");
   });
 
   it("does not let stale session details regress fresher session or approval state", () => {
@@ -2166,6 +2244,16 @@ function makeSession(
     cwd: `/workspace/${projectId}`,
     createdAt: "2026-06-05T00:00:00.000Z",
     updatedAt: "2026-06-05T00:00:00.000Z",
+  };
+}
+
+function makeActivity(
+  activity: Pick<AgentActivity, "id" | "sessionId" | "agent" | "kind" | "label"> &
+    Partial<AgentActivity>,
+): AgentActivity {
+  return {
+    createdAt: "2026-06-05T00:00:00.000Z",
+    ...activity,
   };
 }
 

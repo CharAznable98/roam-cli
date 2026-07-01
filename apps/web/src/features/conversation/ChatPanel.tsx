@@ -59,6 +59,7 @@ import type { AgentSkillFetcher, PathSearchFetcher } from "./prompt-resources";
 import type { AsyncState } from "../../shared/types/async";
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 160;
+const MAX_RENDERED_ACTIVITY_ITEMS = 100;
 
 type ChatPanelProps = {
   session: Session;
@@ -141,9 +142,10 @@ export function ChatPanel({
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
-  const activityScrollKey = activities
-    .map((activity) => `${activity.id}:${activity.label}`)
-    .join("|");
+  const latestActivity = activities.at(-1);
+  const activityScrollKey = latestActivity
+    ? `${activities.length}:${latestActivity.id}:${latestActivity.label.length}:${latestActivity.createdAt}`
+    : "";
   const conversationLayoutKey = `${session.status}|${messageScrollKey}|${activityScrollKey}`;
   const displayItems = useMemo(
     () => getConversationDisplayItems(messages, activities, session.status),
@@ -880,6 +882,13 @@ function AgentActivityGroup({
   const [open, setOpen] = useState(false);
   const latest = group.activities.at(-1);
   const stepCountLabel = `${group.activities.length} ${group.activities.length === 1 ? "step" : "steps"}`;
+  const hiddenActivityCount = Math.max(
+    0,
+    group.activities.length - MAX_RENDERED_ACTIVITY_ITEMS,
+  );
+  const visibleActivities = open
+    ? group.activities.slice(-MAX_RENDERED_ACTIVITY_ITEMS)
+    : [];
   const title =
     group.latest && latest
       ? latest.label
@@ -918,7 +927,13 @@ function AgentActivityGroup({
       </button>
       {open ? (
         <ol className="activity-list">
-          {group.activities.map((activity) => (
+          {hiddenActivityCount > 0 ? (
+            <li className="activity-list-summary">
+              <span className="activity-dot" aria-hidden="true" />
+              <span>{`Earlier ${hiddenActivityCount} ${hiddenActivityCount === 1 ? "step" : "steps"} hidden`}</span>
+            </li>
+          ) : null}
+          {visibleActivities.map((activity) => (
             <li key={activity.id}>
               <span className="activity-dot" aria-hidden="true" />
               <span className="activity-label">{activity.label}</span>

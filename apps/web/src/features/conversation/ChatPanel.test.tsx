@@ -266,6 +266,54 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("Claude Code task progress:")).toBeNull();
   });
 
+  it("limits expanded historical activity groups to the latest rows", () => {
+    const user: UiMessage = {
+      id: "message-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "question",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+    const assistant: UiMessage = {
+      ...user,
+      id: "message-assistant",
+      role: "assistant",
+      content: "answer",
+      createdAt: "2026-06-05T00:10:00.000Z",
+    };
+    const activities: AgentActivity[] = Array.from(
+      { length: 105 },
+      (_, index) => ({
+        id: `activity-${index + 1}`,
+        sessionId: "session-1",
+        agent: index % 2 === 0 ? "codex" : "claude-code",
+        kind: "tool",
+        label: `step ${index + 1}`,
+        createdAt: new Date(
+          Date.parse("2026-06-05T00:00:01.000Z") + index * 1000,
+        ).toISOString(),
+      }),
+    );
+
+    render(
+      <ChatPanel
+        session={{ ...baseSession, status: "completed" }}
+        messages={[user, assistant]}
+        activities={activities}
+        onSend={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity (105)" }));
+
+    expect(screen.getByText("Earlier 5 steps hidden")).toBeInTheDocument();
+    expect(screen.queryByText("step 1")).toBeNull();
+    expect(screen.queryByText("step 5")).toBeNull();
+    expect(screen.getByText("step 6")).toBeInTheDocument();
+    expect(screen.getByText("step 105")).toBeInTheDocument();
+  });
+
   it("collapses an expanded latest activity group when it becomes historical", async () => {
     const user: UiMessage = {
       id: "message-user",
