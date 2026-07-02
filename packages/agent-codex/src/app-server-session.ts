@@ -1,10 +1,8 @@
 import {
-  execFile,
   spawn as spawnChild,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import type {
   AgentInput,
   AgentLaunchAttachment,
@@ -17,10 +15,7 @@ import type {
   UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
 import type { RunnerProfile } from "@roamcli/shared/protocol";
-import {
-  CodexAppServerClient,
-  type CodexAppServerTransport,
-} from "./app-server-client.js";
+import { CodexAppServerClient } from "./app-server-client.js";
 import type {
   AskForApproval,
   AgentMessageDeltaNotification,
@@ -42,8 +37,6 @@ import type {
 import { asString, isRecord } from "./app-server-protocol.js";
 import { parseTextDirectives } from "./directives.js";
 
-const execFileAsync = promisify(execFile);
-
 interface ApprovalDecision {
   approvalId: string;
   approved: boolean;
@@ -54,8 +47,6 @@ interface ApprovalDecision {
 interface CodexAppServerSessionOptions {
   command: string;
   args: readonly string[];
-  ensureAppServerDaemon: boolean;
-  transport: CodexAppServerTransport;
   context: AgentSessionContext;
 }
 
@@ -67,8 +58,6 @@ interface QueuedInput {
 export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
   readonly #args: readonly string[];
-  readonly #ensureAppServerDaemonEnabled: boolean;
-  readonly #transport: CodexAppServerTransport;
   readonly #context: AgentSessionContext;
   readonly #queue: QueuedInput[] = [];
   readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
@@ -102,13 +91,10 @@ export class CodexAppServerSession implements AgentSession {
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
     this.#args = options.args;
-    this.#ensureAppServerDaemonEnabled = options.ensureAppServerDaemon;
-    this.#transport = options.transport;
     this.#context = options.context;
   }
 
   public async start(): Promise<void> {
-    await this.#ensureAppServerDaemon();
     if (this.#closed || this.#stopRequested) {
       return;
     }
@@ -152,7 +138,6 @@ export class CodexAppServerSession implements AgentSession {
 
     this.#client = new CodexAppServerClient({
       child: this.#child,
-      transport: this.#transport,
       onNotification: (notification) =>
         this.#handleNotification(notification.method, notification.params),
       onRequest: (request) => this.#handleRequest(request),
@@ -176,25 +161,6 @@ export class CodexAppServerSession implements AgentSession {
         : {}),
     });
     this.#startDrain();
-  }
-
-  async #ensureAppServerDaemon(): Promise<void> {
-    if (!this.#shouldEnsureAppServerDaemon()) {
-      return;
-    }
-    try {
-      await execFileAsync(this.#command, ["app-server", "daemon", "start"], {
-        cwd: this.#context.cwd,
-        env: this.#context.env,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Codex app-server daemon start failed: ${message}`);
-    }
-  }
-
-  #shouldEnsureAppServerDaemon(): boolean {
-    return this.#ensureAppServerDaemonEnabled;
   }
 
   public deliverInput(input: AgentInput): void {

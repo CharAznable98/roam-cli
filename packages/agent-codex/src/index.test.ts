@@ -27,14 +27,6 @@ import {
 } from "./index.js";
 
 const execFileAsync = promisify(execFile);
-const STDIO_APP_SERVER_ENV = {
-  ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
-    "app-server",
-    "--stdio",
-    "-c",
-    "skip_git_repo_check=true",
-  ]),
-};
 
 describe("codex agent plugin", () => {
   it("builds the default codex capability", () => {
@@ -44,7 +36,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "proxy", "-c", "skip_git_repo_check=true"],
+      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -55,31 +47,19 @@ describe("codex agent plugin", () => {
     });
   });
 
-  it("uses stdio app-server by default on Windows", async () => {
-    await withProcessPlatform("win32", async () => {
-      expect(
-        codexAgent.buildCapability({ profile: "trusted", env: {} }),
-      ).toMatchObject({
-        args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
-        parser: "codex-app-server",
-      });
-    });
-  });
-
-  it("uses app-server args overrides as a full replacement", () => {
+  it("ignores legacy app-server args overrides", () => {
     expect(
       codexAgent.buildCapability({
         profile: "trusted",
         env: {
           ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
             "app-server",
-            "--stdio",
-            "--custom",
+            "proxy",
           ]),
         },
       }),
     ).toMatchObject({
-      args: ["app-server", "--stdio", "--custom"],
+      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
     });
   });
@@ -307,7 +287,6 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -355,7 +334,6 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -410,7 +388,6 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -450,7 +427,6 @@ describe("codex agent plugin", () => {
         env: {
           ROAMCLI_AGENT_CODEX_MODE: "exec-json",
           ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
           ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
         },
         session: makeSession(workspace),
@@ -505,7 +481,6 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([
           script,
           "--dangerously-bypass-approvals-and-sandbox",
@@ -584,7 +559,6 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -637,7 +611,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -686,7 +659,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -723,7 +695,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -752,268 +723,6 @@ describe("codex agent plugin", () => {
     expect(events).not.toContainEqual({ type: "status", status: "failed" });
   });
 
-  it("does not spawn an explicit daemon-managed proxy when stopped during daemon startup", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-daemon-stop-");
-    const script = join(workspace, "app-server");
-    const daemonMarker = join(workspace, "daemon.txt");
-    const releaseMarker = join(workspace, "release.txt");
-    const proxyMarker = join(workspace, "proxy.txt");
-    await writeFile(
-      script,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
-        `const releaseMarker = ${JSON.stringify(releaseMarker)};`,
-        `const proxyMarker = ${JSON.stringify(proxyMarker)};`,
-        "const args = process.argv.slice(2);",
-        "if (args.join(' ') === 'daemon start') {",
-        "  fs.writeFileSync(daemonMarker, 'daemon');",
-        "  const buffer = new SharedArrayBuffer(4);",
-        "  const view = new Int32Array(buffer);",
-        "  const started = Date.now();",
-        "  while (!fs.existsSync(releaseMarker) && Date.now() - started < 5000) {",
-        "    Atomics.wait(view, 0, 0, 50);",
-        "  }",
-        "  process.exit(0);",
-        "}",
-        "fs.writeFileSync(proxyMarker, args.join(' '));",
-        "setInterval(() => undefined, 1000);",
-      ].join("\n"),
-    );
-    await chmod(script, 0o755);
-    const events: AgentRuntimeEvent[] = [];
-    const session = codexAgent.createSession({
-      profile: "standard",
-      env: {
-        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
-          "app-server",
-          "proxy",
-          "-c",
-          "skip_git_repo_check=true",
-        ]),
-      },
-      session: makeSession(workspace),
-      cwd: workspace,
-      prompt: "hello",
-      emit: async (event) => {
-        events.push(event);
-      },
-      requestApproval: async () => ({
-        approvalId: "approval-1",
-        approved: true,
-        signedAt: "2026-06-21T00:00:00.000Z",
-        signature: "sig",
-      }),
-    });
-
-    const startPromise = session.start();
-    await vi.waitFor(async () => {
-      await expect(readFile(daemonMarker, "utf8")).resolves.toBe("daemon");
-    });
-    await session.control("stop");
-    await writeFile(releaseMarker, "release");
-
-    await expect(startPromise).resolves.toBeUndefined();
-    expect(events).toContainEqual({ type: "status", status: "stopped" });
-    await expect(readFile(proxyMarker, "utf8")).rejects.toThrow();
-  });
-
-  it("does not start the daemon for default Windows app-server args", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-win32-stdio-");
-    const script = join(workspace, "app-server");
-    const argsMarker = join(workspace, "args.txt");
-    const daemonMarker = join(workspace, "daemon.txt");
-    await writeFile(
-      script,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        `const argsMarker = ${JSON.stringify(argsMarker)};`,
-        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
-        "const args = process.argv.slice(2);",
-        "if (args.join(' ') === 'daemon start') {",
-        "  fs.writeFileSync(daemonMarker, 'daemon');",
-        "  process.exit(0);",
-        "}",
-        "fs.writeFileSync(argsMarker, args.join(' '));",
-        "process.stdin.setEncoding('utf8');",
-        "let buffer = '';",
-        "function write(message) { process.stdout.write(`${JSON.stringify(message)}\\n`); }",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const lines = buffer.split(/\\r?\\n/);",
-        "  buffer = lines.pop() ?? '';",
-        "  for (const line of lines) {",
-        "    if (!line) continue;",
-        "    const message = JSON.parse(line);",
-        "    if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "    if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "    if (message.method === 'turn/start') {",
-        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "    }",
-        "  }",
-        "});",
-      ].join("\n"),
-    );
-    await chmod(script, 0o755);
-    const session = await withProcessPlatform("win32", async () =>
-      codexAgent.createSession({
-        profile: "standard",
-        env: {
-          ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        },
-        session: makeSession(workspace),
-        cwd: workspace,
-        prompt: "hello",
-        emit: async () => undefined,
-        requestApproval: async () => ({
-          approvalId: "approval-1",
-          approved: true,
-          signedAt: "2026-06-21T00:00:00.000Z",
-          signature: "sig",
-        }),
-      }),
-    );
-
-    await session.start();
-
-    await vi.waitFor(async () => {
-      await expect(readFile(argsMarker, "utf8")).resolves.toBe(
-        "--stdio -c skip_git_repo_check=true",
-      );
-    });
-    session.close();
-    await expect(readFile(daemonMarker, "utf8")).rejects.toThrow();
-  });
-
-  it("does not start the daemon for custom app-server proxy args", async () => {
-    const workspace = await mkdirTemp("roam-codex-app-server-custom-proxy-");
-    const script = join(workspace, "app-server");
-    const daemonMarker = join(workspace, "daemon.txt");
-    const proxyMarker = join(workspace, "proxy.txt");
-    await writeFile(
-      script,
-      [
-        "#!/usr/bin/env node",
-        "const crypto = require('node:crypto');",
-        "const fs = require('node:fs');",
-        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
-        `const proxyMarker = ${JSON.stringify(proxyMarker)};`,
-        "const args = process.argv.slice(2);",
-        "if (args.join(' ') === 'daemon start') {",
-        "  fs.writeFileSync(daemonMarker, 'daemon');",
-        "  process.exit(0);",
-        "}",
-        "fs.writeFileSync(proxyMarker, args.join(' '));",
-        "let buffer = Buffer.alloc(0);",
-        "let handshakeDone = false;",
-        "function acceptKey(key) {",
-        "  return crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');",
-        "}",
-        "function write(message) {",
-        "  const payload = Buffer.from(JSON.stringify(message), 'utf8');",
-        "  const header = payload.length < 126",
-        "    ? Buffer.from([0x81, payload.length])",
-        "    : Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff]);",
-        "  process.stdout.write(Buffer.concat([header, payload]));",
-        "}",
-        "function handleMessage(message) {",
-        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "  if (message.method === 'turn/start') {",
-        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "  }",
-        "}",
-        "function processFrames() {",
-        "  while (buffer.length >= 2) {",
-        "    const second = buffer[1];",
-        "    const masked = (second & 0x80) !== 0;",
-        "    let length = second & 0x7f;",
-        "    let offset = 2;",
-        "    if (length === 126) {",
-        "      if (buffer.length < offset + 2) return;",
-        "      length = buffer.readUInt16BE(offset);",
-        "      offset += 2;",
-        "    } else if (length === 127) {",
-        "      if (buffer.length < offset + 8) return;",
-        "      length = Number(buffer.readBigUInt64BE(offset));",
-        "      offset += 8;",
-        "    }",
-        "    const mask = masked ? buffer.subarray(offset, offset + 4) : undefined;",
-        "    if (masked) offset += 4;",
-        "    if (buffer.length < offset + length) return;",
-        "    const payload = Buffer.from(buffer.subarray(offset, offset + length));",
-        "    buffer = buffer.subarray(offset + length);",
-        "    if (mask) {",
-        "      for (let index = 0; index < payload.length; index += 1) {",
-        "        payload[index] ^= mask[index % 4];",
-        "      }",
-        "    }",
-        "    handleMessage(JSON.parse(payload.toString('utf8')));",
-        "  }",
-        "}",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer = Buffer.concat([buffer, Buffer.from(chunk)]);",
-        "  if (!handshakeDone) {",
-        "    const headerEnd = buffer.indexOf('\\r\\n\\r\\n');",
-        "    if (headerEnd < 0) return;",
-        "    const header = buffer.subarray(0, headerEnd).toString('utf8');",
-        "    const key = header.split(/\\r?\\n/).find((line) => line.toLowerCase().startsWith('sec-websocket-key:'))?.split(':').slice(1).join(':').trim() ?? '';",
-        "    process.stdout.write([",
-        "      'HTTP/1.1 101 Switching Protocols',",
-        "      'Upgrade: websocket',",
-        "      'Connection: Upgrade',",
-        "      `Sec-WebSocket-Accept: ${acceptKey(key)}`,",
-        "      '',",
-        "      '',",
-        "    ].join('\\r\\n'));",
-        "    buffer = buffer.subarray(headerEnd + 4);",
-        "    handshakeDone = true;",
-        "  }",
-        "  processFrames();",
-        "});",
-      ].join("\n"),
-    );
-    await chmod(script, 0o755);
-    const session = codexAgent.createSession({
-      profile: "standard",
-      env: {
-        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
-          "app-server",
-          "proxy",
-          "--sock",
-          "custom.sock",
-        ]),
-      },
-      session: makeSession(workspace),
-      cwd: workspace,
-      prompt: "hello",
-      emit: async () => undefined,
-      requestApproval: async () => ({
-        approvalId: "approval-1",
-        approved: true,
-        signedAt: "2026-06-21T00:00:00.000Z",
-        signature: "sig",
-      }),
-    });
-
-    const startPromise = session.start();
-
-    await vi.waitFor(async () => {
-      await expect(readFile(proxyMarker, "utf8")).resolves.toBe(
-        "proxy --sock custom.sock",
-      );
-    });
-    await expect(startPromise).resolves.toBeUndefined();
-    session.close();
-    await expect(readFile(daemonMarker, "utf8")).rejects.toThrow();
-  });
-
   it("passes trusted runner permissions to app-server turns", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-profile-");
     const capturedPath = join(workspace, "captured.jsonl");
@@ -1040,7 +749,6 @@ describe("codex agent plugin", () => {
       profile: "trusted",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1113,7 +821,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1167,7 +874,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1224,7 +930,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1286,7 +991,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1370,7 +1074,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1431,7 +1134,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1487,7 +1189,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1541,7 +1242,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1594,7 +1294,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1652,7 +1351,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1712,7 +1410,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1786,7 +1483,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1855,7 +1551,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1942,7 +1637,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1997,7 +1691,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2056,7 +1749,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2116,7 +1808,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2181,7 +1872,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2242,7 +1932,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2294,7 +1983,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2351,7 +2039,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2424,7 +2111,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2485,7 +2171,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2550,7 +2235,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2617,7 +2301,6 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2809,25 +2492,6 @@ async function mkdirTemp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
 }
 
-async function withProcessPlatform<T>(
-  platform: NodeJS.Platform,
-  callback: () => Promise<T> | T,
-): Promise<T> {
-  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    enumerable: descriptor?.enumerable ?? true,
-    value: platform,
-  });
-  try {
-    return await callback();
-  } finally {
-    if (descriptor) {
-      Object.defineProperty(process, "platform", descriptor);
-    }
-  }
-}
-
 async function writeAppServerScript(
   workspace: string,
   name: string,
@@ -2840,7 +2504,6 @@ async function writeAppServerScript(
     [
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
-      "if (process.argv.slice(2).join(' ') === 'daemon start') process.exit(0);",
       "process.stdin.setEncoding('utf8');",
       "let buffer = '';",
       "let handleMessage = () => undefined;",
