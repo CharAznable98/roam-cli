@@ -78,6 +78,42 @@ describe("CodexAppServerSession", () => {
     expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
 
+  it("queues follow-up input when root idle arrives before turn completion", async () => {
+    const { child, events, session } = await launchSession();
+
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    await settle();
+
+    session.deliverInput({ content: "next prompt" });
+    await settle();
+
+    expect(child.requests("turn/steer")).toHaveLength(0);
+    expect(child.requests("turn/start")).toHaveLength(1);
+
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    const secondTurn = await waitForRequest(child, "turn/start", 2);
+    expect(statusEvents(events)).toEqual([]);
+    child.respond(secondTurn.id, { turn: { id: "turn-2" } });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-2", status: "completed" },
+    });
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+  });
+
   it("ignores non-root thread idle notifications", async () => {
     const { child, events } = await launchSession();
 
@@ -93,6 +129,26 @@ describe("CodexAppServerSession", () => {
 
     expect(statusEvents(events)).toEqual([]);
     expect(child.killedSignals).toEqual([]);
+  });
+
+  it("keeps root idle gating on the original thread after child threads start", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("thread/started", {
+      thread: { id: "child-thread" },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
 
   it("queues the next turn until the root thread becomes idle", async () => {

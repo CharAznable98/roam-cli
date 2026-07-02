@@ -174,6 +174,7 @@ export class CodexAppServerSession implements AgentSession {
     if (
       this.#threadId &&
       this.#activeTurnId &&
+      !this.#rootThreadIdle &&
       !this.#turnCompletedSuccessfully
     ) {
       const queued = { content: input.content };
@@ -340,7 +341,7 @@ export class CodexAppServerSession implements AgentSession {
   async #handleNotification(method: string, params: unknown): Promise<void> {
     if (method === "thread/started") {
       const threadId = threadIdFrom(params);
-      if (threadId) {
+      if (threadId && this.#threadId === undefined) {
         this.#threadId = threadId;
         await this.#emit({ type: "thread", threadId });
       }
