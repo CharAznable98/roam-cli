@@ -76,6 +76,19 @@ export interface TurnNotification {
   };
 }
 
+export interface ThreadStatusChangedNotification {
+  threadId?: string;
+  status?:
+    | string
+    | {
+        type?: string;
+        message?: string;
+        error?: {
+          message?: string;
+        } | null;
+      };
+}
+
 export interface AgentMessageDeltaNotification {
   itemId?: string;
   delta?: string;

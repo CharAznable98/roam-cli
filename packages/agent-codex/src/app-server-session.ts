@@ -27,6 +27,7 @@ import type {
   McpServerElicitationRequestParams,
   PermissionApprovalParams,
   SandboxPolicy,
+  ThreadStatusChangedNotification,
   ThreadResponse,
   ToolRequestUserInputOption,
   ToolRequestUserInputParams,
@@ -73,7 +74,10 @@ export class CodexAppServerSession implements AgentSession {
   #interruptRequested = false;
   #interruptSent = false;
   #stoppedEmitted = false;
-  #pendingTerminalStatus: "completed" | "stopped" | undefined;
+  #pendingTerminalStatus: "stopped" | undefined;
+  #turnCompletedSuccessfully = false;
+  #rootThreadIdle = false;
+  readonly #threadIdleWaiters = new Set<() => void>();
   #turnDone:
     | {
         resolve: () => void;
@@ -167,7 +171,12 @@ export class CodexAppServerSession implements AgentSession {
     if (this.#closed || this.#pendingTerminalStatus === "stopped") {
       return;
     }
-    if (this.#threadId && this.#activeTurnId) {
+    if (
+      this.#threadId &&
+      this.#activeTurnId &&
+      !this.#rootThreadIdle &&
+      !this.#turnCompletedSuccessfully
+    ) {
       const queued = { content: input.content };
       this.#queue.push(queued);
       void this.#steerTurn(input).then(
@@ -205,6 +214,7 @@ export class CodexAppServerSession implements AgentSession {
       this.#stopRequested = true;
       this.#closed = true;
       this.#queue.length = 0;
+      this.#resolveThreadIdleWaiters();
       if (this.#threadId && this.#activeTurnId) {
         void this.#client
           ?.request("turn/interrupt", {
@@ -223,6 +233,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#closed = true;
     this.#queue.length = 0;
     this.#pendingTerminalStatus = undefined;
+    this.#resolveThreadIdleWaiters();
     this.#client?.close();
     this.#child?.kill("SIGKILL");
   }
@@ -281,10 +292,17 @@ export class CodexAppServerSession implements AgentSession {
         await this.#emitPendingTerminalStatus();
         return;
       }
+      if (this.#queue.length === 0) {
+        await this.#emitCompletedIfReady();
+        return;
+      }
+      await this.#awaitRootThreadIdleBeforeNextTurn();
+      if (this.#closed) {
+        return;
+      }
       const input = this.#queue.shift();
       if (input === undefined) {
-        await this.#emitPendingTerminalStatus();
-        return;
+        continue;
       }
       await this.#runTurn(input);
     }
@@ -297,6 +315,8 @@ export class CodexAppServerSession implements AgentSession {
     }
     this.#turnSequence += 1;
     this.#interruptSent = false;
+    this.#turnCompletedSuccessfully = false;
+    this.#rootThreadIdle = false;
     this.#streamedOutputIds.clear();
     const response = (await this.#request("turn/start", {
       threadId,
@@ -315,12 +335,13 @@ export class CodexAppServerSession implements AgentSession {
     this.#activeTurnId = undefined;
     this.#interruptRequested = false;
     this.#interruptSent = false;
+    await this.#emitCompletedIfReady();
   }
 
   async #handleNotification(method: string, params: unknown): Promise<void> {
     if (method === "thread/started") {
       const threadId = threadIdFrom(params);
-      if (threadId) {
+      if (threadId && this.#threadId === undefined) {
         this.#threadId = threadId;
         await this.#emit({ type: "thread", threadId });
       }
@@ -346,6 +367,12 @@ export class CodexAppServerSession implements AgentSession {
     }
     if (method === "turn/completed") {
       await this.#handleTurnCompleted(params as TurnNotification);
+      return;
+    }
+    if (method === "thread/status/changed") {
+      await this.#handleThreadStatusChanged(
+        params as ThreadStatusChangedNotification,
+      );
       return;
     }
     if (method === "error") {
@@ -692,6 +719,9 @@ export class CodexAppServerSession implements AgentSession {
 
   async #handleTurnCompleted(notification: TurnNotification): Promise<void> {
     const status = notification.turn?.status;
+    await this.#emitLifecycleActivity(
+      `Codex app-server turn completed: ${status ?? "unknown"}`,
+    );
     const done = this.#turnDone;
     this.#turnDone = undefined;
     if (status === "failed") {
@@ -714,8 +744,72 @@ export class CodexAppServerSession implements AgentSession {
       await this.#emitError(message);
       return;
     }
-    this.#pendingTerminalStatus = "completed";
+    this.#turnCompletedSuccessfully = true;
     done?.resolve();
+    await this.#emitCompletedIfReady();
+  }
+
+  async #handleThreadStatusChanged(
+    notification: ThreadStatusChangedNotification,
+  ): Promise<void> {
+    if (
+      notification.threadId !== undefined &&
+      this.#threadId !== undefined &&
+      notification.threadId !== this.#threadId
+    ) {
+      return;
+    }
+    const statusType = threadStatusTypeFrom(notification.status);
+    await this.#emitLifecycleActivity(
+      `Codex app-server thread status changed: ${statusType ?? "unknown"}`,
+    );
+    if (statusType === "idle") {
+      this.#rootThreadIdle = true;
+      this.#resolveThreadIdleWaiters();
+      await this.#emitCompletedIfReady();
+      return;
+    }
+    this.#rootThreadIdle = false;
+    if (statusType === "systemError") {
+      await this.#fail(
+        threadStatusMessageFrom(notification.status) ??
+          "Codex app-server thread entered systemError",
+      );
+    }
+  }
+
+  async #awaitRootThreadIdleBeforeNextTurn(): Promise<void> {
+    if (this.#turnSequence === 0 || this.#rootThreadIdle) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.#threadIdleWaiters.add(resolve);
+    });
+  }
+
+  #resolveThreadIdleWaiters(): void {
+    const waiters = [...this.#threadIdleWaiters];
+    this.#threadIdleWaiters.clear();
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  async #emitCompletedIfReady(): Promise<boolean> {
+    if (
+      this.#closed ||
+      !this.#turnCompletedSuccessfully ||
+      !this.#rootThreadIdle ||
+      this.#activeTurnId !== undefined ||
+      this.#queue.length > 0 ||
+      this.#pendingDirectiveApprovals.size > 0
+    ) {
+      return false;
+    }
+    this.#turnCompletedSuccessfully = false;
+    await this.#emit({ type: "status", status: "completed" });
+    this.#closeAppServer("SIGTERM");
+    return true;
   }
 
   async #emitPendingTerminalStatus(): Promise<void> {
@@ -816,6 +910,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#closed = true;
     this.#queue.length = 0;
     this.#pendingTerminalStatus = undefined;
+    this.#resolveThreadIdleWaiters();
     this.#turnDone?.reject(new Error(message));
     this.#turnDone = undefined;
     this.#closeAppServer("SIGTERM");
@@ -828,6 +923,10 @@ export class CodexAppServerSession implements AgentSession {
     code = "CODEX_APP_SERVER_ERROR",
   ): Promise<void> {
     await this.#emit({ type: "error", message, code });
+  }
+
+  async #emitLifecycleActivity(label: string): Promise<void> {
+    await this.#emit({ type: "activity", kind: "status", label });
   }
 
   async #emit(event: AgentRuntimeEvent): Promise<boolean> {
@@ -871,6 +970,7 @@ export class CodexAppServerSession implements AgentSession {
   #closeAppServer(signal: NodeJS.Signals): void {
     this.#closed = true;
     this.#queue.length = 0;
+    this.#resolveThreadIdleWaiters();
     this.#client?.close();
     this.#child?.kill(signal);
   }
@@ -959,6 +1059,29 @@ function errorWillRetryFrom(value: unknown): boolean {
     return value.willRetry;
   }
   return isRecord(value.error) && value.error.willRetry === true;
+}
+
+function threadStatusTypeFrom(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return asString(value.type);
+}
+
+function threadStatusMessageFrom(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (typeof value.message === "string" && value.message.length > 0) {
+    return value.message;
+  }
+  if (isRecord(value.error)) {
+    return asString(value.error.message);
+  }
+  return undefined;
 }
 
 function outputDeltaFrom(value: unknown): string | undefined {
