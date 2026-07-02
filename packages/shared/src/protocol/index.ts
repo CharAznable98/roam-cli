@@ -72,6 +72,7 @@ export type AccountSecurityState = z.infer<typeof AccountSecurityStateSchema>;
 
 export const InstallAgentPluginSchema = z.object({
   packageName: z.string().min(1),
+  packageSpec: z.string().min(1).optional(),
   label: z.string().min(1),
   description: z.string().min(1).optional(),
 });
@@ -79,6 +80,7 @@ export type InstallAgentPlugin = z.infer<typeof InstallAgentPluginSchema>;
 
 export const InstallMetadataSchema = z.object({
   runnerPackageName: z.string().min(1),
+  runnerPackageSpec: z.string().min(1).optional(),
   officialAgentPlugins: z.array(InstallAgentPluginSchema),
 });
 export type InstallMetadata = z.infer<typeof InstallMetadataSchema>;

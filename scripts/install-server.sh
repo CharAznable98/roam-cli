@@ -4,6 +4,7 @@ set -eu
 REPO_URL="${ROAMCLI_REPO_URL:-https://github.com/CharAznable98/roam-cli.git}"
 INSTALL_DIR="${ROAMCLI_INSTALL_DIR:-$HOME/.roamcli/server}"
 DATA_DIR=""
+DATA_DIR_OVERRIDE="0"
 BIND="0.0.0.0"
 PORT="8787"
 PUBLIC_ORIGIN=""
@@ -52,6 +53,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --data-dir)
       DATA_DIR="${2:?missing --data-dir value}"
+      DATA_DIR_OVERRIDE="1"
       shift 2
       ;;
     --bind)
@@ -106,10 +108,25 @@ resolve_path() {
 }
 
 INSTALL_DIR="$(resolve_path "$INSTALL_DIR")"
-DATA_DIR="$(resolve_path "$DATA_DIR")"
 
 COMPOSE_FILE="$INSTALL_DIR/compose.yml"
 ENV_FILE="$INSTALL_DIR/.env"
+
+recorded_data_dir() {
+  if [ ! -f "$ENV_FILE" ]; then
+    return 0
+  fi
+  awk 'BEGIN { FS = "=" } $1 == "ROAMCLI_DATA_DIR" { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
+}
+
+if [ "$UNINSTALL" = "1" ] && [ "$DATA_DIR_OVERRIDE" = "0" ]; then
+  RECORDED_DATA_DIR="$(recorded_data_dir)"
+  if [ -n "$RECORDED_DATA_DIR" ]; then
+    DATA_DIR="$RECORDED_DATA_DIR"
+  fi
+fi
+
+DATA_DIR="$(resolve_path "$DATA_DIR")"
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then

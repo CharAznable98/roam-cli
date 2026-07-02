@@ -222,9 +222,11 @@ describe("createRoamApiClient", () => {
         return Response.json({
           install: {
             runnerPackageName: "@roamcli/runner",
+            runnerPackageSpec: "@roamcli/runner@1.1.0",
             officialAgentPlugins: [
               {
                 packageName: "@roamcli/agent-codex",
+                packageSpec: "@roamcli/agent-codex@1.1.0",
                 label: "Codex",
                 description: "Runs sessions through Codex.",
               },
@@ -241,8 +243,12 @@ describe("createRoamApiClient", () => {
     expect(requestInit?.credentials).toBe("same-origin");
     expect(new Headers(requestInit?.headers).get("authorization")).toBeNull();
     expect(install.runnerPackageName).toBe("@roamcli/runner");
+    expect(install.runnerPackageSpec).toBe("@roamcli/runner@1.1.0");
     expect(install.officialAgentPlugins[0]?.packageName).toBe(
       "@roamcli/agent-codex",
+    );
+    expect(install.officialAgentPlugins[0]?.packageSpec).toBe(
+      "@roamcli/agent-codex@1.1.0",
     );
   });
 

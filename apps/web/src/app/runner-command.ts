@@ -14,7 +14,18 @@ export function buildRunnerCommand(
   const host = location.host || "127.0.0.1:8787";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const serverUrl = `${protocol}//${host}/v1/runner`;
-  const packageArgs = [install.runnerPackageName, ...agentPlugins]
+  const pluginPackageSpecs = new Map(
+    install.officialAgentPlugins.map((plugin) => [
+      plugin.packageName,
+      plugin.packageSpec ?? plugin.packageName,
+    ]),
+  );
+  const packageArgs = [
+    install.runnerPackageSpec ?? install.runnerPackageName,
+    ...agentPlugins.map(
+      (packageName) => pluginPackageSpecs.get(packageName) ?? packageName,
+    ),
+  ]
     .map((packageName) => `  --package ${shellQuote(packageName)} \\`)
     .join("\n");
   const pluginArgs = agentPlugins

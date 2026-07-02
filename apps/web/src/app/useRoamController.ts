@@ -468,14 +468,14 @@ export function useRoamController() {
         } catch {
           // The main bootstrap below will surface auth/API failures.
         }
-        try {
-          const install = await api.fetchInstallMetadata();
-          if (!cancelled) {
-            setInstallMetadata(install);
-          }
-        } catch {
-          // Install metadata only labels runner commands; account security remains usable without it.
-        }
+        void api
+          .fetchInstallMetadata()
+          .then((install) => {
+            if (!cancelled) {
+              setInstallMetadata(install);
+            }
+          })
+          .catch(() => undefined);
         loadRemoteState("bootstrap");
         connectStream();
       })

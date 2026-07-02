@@ -192,14 +192,17 @@ const accountSecurity = {
 
 const installMetadata = {
   runnerPackageName: "@roamcli/runner",
+  runnerPackageSpec: "@roamcli/runner@1.1.0",
   officialAgentPlugins: [
     {
       packageName: "@roamcli/agent-codex",
+      packageSpec: "@roamcli/agent-codex@1.1.0",
       label: "Codex",
       description: "Runs sessions through Codex.",
     },
     {
       packageName: "@roamcli/agent-claude-code",
+      packageSpec: "@roamcli/agent-claude-code@1.1.0",
       label: "Claude Code",
       description: "Runs sessions through Claude Code.",
     },
@@ -214,6 +217,7 @@ let projectPromptPresets: ProjectPromptPreset[];
 let backupProjectPromptPresets: ProjectPromptPreset[];
 let failPromptPresetFetch: boolean;
 let failInstallMetadata: boolean;
+let queuedInstallMetadataResponses: Array<Deferred<Response>>;
 let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
@@ -592,6 +596,7 @@ describe("App", () => {
     ];
     failPromptPresetFetch = false;
     failInstallMetadata = false;
+    queuedInstallMetadataResponses = [];
     queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
@@ -699,6 +704,10 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/install/metadata") {
+          const queuedResponse = queuedInstallMetadataResponses.shift();
+          if (queuedResponse) {
+            return queuedResponse.promise;
+          }
           if (failInstallMetadata) {
             return jsonResponse(
               { message: "install metadata unavailable" },
@@ -1465,7 +1474,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Codex/ }));
 
     expect(
-      screen.getByText(/--package '@roamcli\/agent-codex'/),
+      screen.getByText(/--package '@roamcli\/agent-codex@1\.1\.0'/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/--agent-plugin '@roamcli\/agent-codex'/),
@@ -1529,6 +1538,19 @@ describe("App", () => {
     );
     expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
     expect(screen.getByLabelText("Custom plugin package")).toBeInTheDocument();
+  });
+
+  it("does not block bootstrap while install metadata is still loading", async () => {
+    const stalledInstall = deferred<Response>();
+    queuedInstallMetadataResponses.push(stalledInstall);
+    render(<App />);
+
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
+
+    await act(async () => {
+      stalledInstall.resolve(jsonResponse({ install: installMetadata }));
+      await stalledInstall.promise;
+    });
   });
 
   it("refreshes account security when entering Account & Security from Settings home", async () => {

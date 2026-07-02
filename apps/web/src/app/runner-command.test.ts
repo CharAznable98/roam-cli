@@ -22,7 +22,19 @@ describe("buildRunnerCommand", () => {
         "secure-token",
         {
           runnerPackageName: "@roamcli/runner",
-          officialAgentPlugins: [],
+          runnerPackageSpec: "@roamcli/runner@1.1.0",
+          officialAgentPlugins: [
+            {
+              packageName: "@roamcli/agent-codex",
+              packageSpec: "@roamcli/agent-codex@1.1.0",
+              label: "Codex",
+            },
+            {
+              packageName: "@roamcli/agent-claude-code",
+              packageSpec: "@roamcli/agent-claude-code@1.1.0",
+              label: "Claude Code",
+            },
+          ],
         },
         ["@roamcli/agent-codex", "@roamcli/agent-claude-code"],
         {
@@ -33,9 +45,9 @@ describe("buildRunnerCommand", () => {
     ).toBe(
       [
         "npx --yes \\",
-        "  --package '@roamcli/runner' \\",
-        "  --package '@roamcli/agent-codex' \\",
-        "  --package '@roamcli/agent-claude-code' \\",
+        "  --package '@roamcli/runner@1.1.0' \\",
+        "  --package '@roamcli/agent-codex@1.1.0' \\",
+        "  --package '@roamcli/agent-claude-code@1.1.0' \\",
         "  -- roam-runner \\",
         "  --server 'wss://roam.example.com/v1/runner' \\",
         "  --token 'secure-token' \\",

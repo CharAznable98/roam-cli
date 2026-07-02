@@ -76,14 +76,17 @@ describe("server", () => {
     expect(response.json()).toEqual({
       install: {
         runnerPackageName: "@roamcli/runner",
+        runnerPackageSpec: "@roamcli/runner@1.1.0",
         officialAgentPlugins: [
           {
             packageName: "@roamcli/agent-codex",
+            packageSpec: "@roamcli/agent-codex@1.1.0",
             label: "Codex",
             description: "Runs sessions through the Codex app-server agent.",
           },
           {
             packageName: "@roamcli/agent-claude-code",
+            packageSpec: "@roamcli/agent-claude-code@1.1.0",
             label: "Claude Code",
             description: "Runs sessions through the Claude Code agent.",
           },

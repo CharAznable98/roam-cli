@@ -118,9 +118,11 @@ describe("useRoamController prompt presets", () => {
           return jsonResponse({
             install: {
               runnerPackageName: "@roamcli/runner",
+              runnerPackageSpec: "@roamcli/runner@1.1.0",
               officialAgentPlugins: [
                 {
                   packageName: "@roamcli/agent-codex",
+                  packageSpec: "@roamcli/agent-codex@1.1.0",
                   label: "Codex",
                   description: "Runs sessions through Codex.",
                 },
