@@ -114,6 +114,22 @@ describe("useRoamController prompt presets", () => {
         if (requestUrl.pathname === "/v1/auth/account") {
           return jsonResponse({ account: accountSecurity });
         }
+        if (requestUrl.pathname === "/v1/install/metadata") {
+          return jsonResponse({
+            install: {
+              runnerPackageName: "@roamcli/runner",
+              runnerPackageSpec: "@roamcli/runner@1.1.0",
+              officialAgentPlugins: [
+                {
+                  packageName: "@roamcli/agent-codex",
+                  packageSpec: "@roamcli/agent-codex@1.1.0",
+                  label: "Codex",
+                  description: "Runs sessions through Codex.",
+                },
+              ],
+            },
+          });
+        }
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [] });
         }

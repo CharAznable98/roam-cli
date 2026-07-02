@@ -886,7 +886,7 @@ async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
   vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
   vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", process.execPath);
   vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", JSON.stringify([script]));
-  return (await loadAgentRegistry("standard")).agents;
+  return (await loadAgentRegistry("standard", ["@roamcli/agent-codex"])).agents;
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

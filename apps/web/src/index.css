@@ -4191,6 +4191,71 @@
     margin: 12px auto 0;
   }
 
+  .runner-command-builder {
+    justify-items: stretch;
+  }
+
+  .runner-plugin-picker {
+    display: grid;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .runner-plugin-option {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-muted);
+    border-radius: 7px;
+    background: var(--surface-panel);
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .runner-plugin-option input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+  }
+
+  .runner-plugin-option span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .runner-plugin-option small {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .runner-custom-plugin {
+    display: grid;
+    gap: 6px;
+    width: 100%;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: left;
+  }
+
+  .runner-custom-plugin input {
+    min-height: 38px;
+    border: 1px solid var(--border-muted);
+    border-radius: 7px;
+    background: var(--surface-panel);
+    color: var(--text-primary);
+    padding: 0 10px;
+    font: inherit;
+  }
+
   .runner-command-display pre {
     width: 100%;
     margin: 0;

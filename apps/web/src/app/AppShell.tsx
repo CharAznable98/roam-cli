@@ -33,6 +33,7 @@ import {
   type ApiUpdateProjectPromptPreset,
   type FileNode,
   type GitJob,
+  type InstallMetadata,
   type Project,
   type ProjectPromptPreset,
   type Session,
@@ -86,6 +87,7 @@ import {
 } from "react";
 import { BottomTabs } from "./BottomTabs";
 import { workspaceTabs, type WorkspaceTab } from "./navigation";
+import { buildRunnerCommand, fallbackInstallMetadata } from "./runner-command";
 import type { AppNotification } from "./state";
 import type { useRoamController } from "./useRoamController";
 import { StatusPill } from "../shared/components/StatusPill";
@@ -187,12 +189,17 @@ export function AppShell({ controller }: AppShellProps) {
   const settingsAccountRefreshPendingRef = useRef(false);
   const [archiveDialog, setArchiveDialog] =
     useState<SessionArchiveDialogState | null>(null);
+  const [runnerCommandPlugins, setRunnerCommandPlugins] = useState<string[]>(
+    [],
+  );
+  const [runnerCustomPlugin, setRunnerCustomPlugin] = useState("");
   const {
     state,
     projectPromptPresetsByProject,
     projectPromptPresetStates,
     authView,
     accountSecurity,
+    installMetadata,
     streamReconnect,
     reconnectStream,
     setupOwner,
@@ -217,7 +224,6 @@ export function AppShell({ controller }: AppShellProps) {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
-    runnerCommand,
     selectProject,
     createProject,
     archiveProject,
@@ -380,6 +386,35 @@ export function AppShell({ controller }: AppShellProps) {
   const hasWorkspaceData =
     activeProjects.length > 0 ||
     state.sessions.some((session) => !session.archivedAt);
+  const runnerInstallMetadata = installMetadata ?? fallbackInstallMetadata;
+  const runnerCommandAgentPlugins = useMemo(
+    () =>
+      uniqueStrings([
+        ...runnerCommandPlugins,
+        ...(runnerCustomPlugin.trim() ? [runnerCustomPlugin.trim()] : []),
+      ]),
+    [runnerCommandPlugins, runnerCustomPlugin],
+  );
+  const runnerCommand = useMemo(
+    () =>
+      buildRunnerCommand(
+        accountSecurity?.runnerToken ?? "",
+        runnerInstallMetadata,
+        runnerCommandAgentPlugins,
+      ),
+    [
+      accountSecurity?.runnerToken,
+      runnerCommandAgentPlugins,
+      runnerInstallMetadata,
+    ],
+  );
+  const toggleRunnerCommandPlugin = useCallback((packageName: string) => {
+    setRunnerCommandPlugins((plugins) =>
+      plugins.includes(packageName)
+        ? plugins.filter((plugin) => plugin !== packageName)
+        : [...plugins, packageName],
+    );
+  }, []);
   const showWorkspace =
     state.loadState === "ready" || state.loadState === "error";
   const canUseStream = state.connectionState === "open";
@@ -911,7 +946,16 @@ export function AppShell({ controller }: AppShellProps) {
                               : `${state.runners.length} ${state.runners.length === 1 ? "runner" : "runners"} online`}
                         </p>
                         {state.runners.length === 0 && !hasWorkspaceData ? (
-                          <RunnerCommandDisplay command={runnerCommand} />
+                          <RunnerCommandBuilder
+                            command={runnerCommand}
+                            installMetadata={runnerInstallMetadata}
+                            selectedPlugins={runnerCommandPlugins}
+                            customPlugin={runnerCustomPlugin}
+                            effectivePlugins={runnerCommandAgentPlugins}
+                            tokenReady={Boolean(accountSecurity?.runnerToken)}
+                            onTogglePlugin={toggleRunnerCommandPlugin}
+                            onCustomPluginChange={setRunnerCustomPlugin}
+                          />
                         ) : (
                           <button
                             className="small-button"
@@ -1140,6 +1184,10 @@ export function AppShell({ controller }: AppShellProps) {
                   account={accountSecurity}
                   accountRefreshState={settingsAccountRefreshState}
                   runnerCommand={runnerCommand}
+                  runnerInstallMetadata={runnerInstallMetadata}
+                  runnerCommandPlugins={runnerCommandPlugins}
+                  runnerCustomPlugin={runnerCustomPlugin}
+                  runnerCommandAgentPlugins={runnerCommandAgentPlugins}
                   view={settingsView}
                   onViewChange={changeSettingsView}
                   projects={activeProjects}
@@ -1164,6 +1212,8 @@ export function AppShell({ controller }: AppShellProps) {
                   onLogoutAll={logoutAllFromAccountSecurity}
                   onChangePassword={changePasswordFromAccountSecurity}
                   onRegenerateRunnerToken={regenerateRunnerTokenFromSettings}
+                  onToggleRunnerCommandPlugin={toggleRunnerCommandPlugin}
+                  onRunnerCustomPluginChange={setRunnerCustomPlugin}
                 />
               </SheetContent>
             </Sheet>
@@ -1212,18 +1262,77 @@ export function AppShell({ controller }: AppShellProps) {
   );
 }
 
-function RunnerCommandDisplay({ command }: { command: string }) {
+function RunnerCommandBuilder({
+  command,
+  installMetadata,
+  selectedPlugins,
+  customPlugin,
+  effectivePlugins,
+  tokenReady,
+  onTogglePlugin,
+  onCustomPluginChange,
+}: {
+  command: string;
+  installMetadata: InstallMetadata;
+  selectedPlugins: string[];
+  customPlugin: string;
+  effectivePlugins: string[];
+  tokenReady: boolean;
+  onTogglePlugin: (packageName: string) => void;
+  onCustomPluginChange: (packageName: string) => void;
+}) {
+  const canCopy = tokenReady && effectivePlugins.length > 0;
   const copy = () => {
+    if (!canCopy) {
+      return;
+    }
     void navigator.clipboard?.writeText(command);
   };
 
   return (
-    <div className="runner-command-display">
+    <div className="runner-command-display runner-command-builder">
+      <div className="runner-plugin-picker" aria-label="Runner agent plugins">
+        {installMetadata.officialAgentPlugins.length > 0 ? (
+          installMetadata.officialAgentPlugins.map((plugin) => (
+            <label className="runner-plugin-option" key={plugin.packageName}>
+              <input
+                type="checkbox"
+                checked={selectedPlugins.includes(plugin.packageName)}
+                onChange={() => onTogglePlugin(plugin.packageName)}
+              />
+              <span>
+                {plugin.label}
+                <small>{plugin.packageName}</small>
+              </span>
+            </label>
+          ))
+        ) : (
+          <p className="settings-meta">
+            Official plugin metadata is unavailable.
+          </p>
+        )}
+        <label className="runner-custom-plugin">
+          <span>Custom plugin package</span>
+          <input
+            className="text-input"
+            type="text"
+            value={customPlugin}
+            onChange={(event) => onCustomPluginChange(event.target.value)}
+            placeholder="@vendor/roam-agent-plugin"
+          />
+        </label>
+      </div>
+      {effectivePlugins.length === 0 ? (
+        <p className="form-error" role="alert">
+          Select or enter at least one agent plugin before copying the command.
+        </p>
+      ) : null}
       <pre>{command}</pre>
       <button
         className="small-button runner-command-copy"
         type="button"
         onClick={copy}
+        disabled={!canCopy}
       >
         <Copy size={14} />
         Copy command
@@ -1697,6 +1806,10 @@ function SettingsPanel({
   account,
   accountRefreshState,
   runnerCommand,
+  runnerInstallMetadata,
+  runnerCommandPlugins,
+  runnerCustomPlugin,
+  runnerCommandAgentPlugins,
   view,
   onViewChange,
   projects,
@@ -1715,10 +1828,16 @@ function SettingsPanel({
   onLogoutAll,
   onChangePassword,
   onRegenerateRunnerToken,
+  onToggleRunnerCommandPlugin,
+  onRunnerCustomPluginChange,
 }: {
   account: AccountSecurityState | undefined;
   accountRefreshState: AccountRefreshState;
   runnerCommand: string;
+  runnerInstallMetadata: InstallMetadata;
+  runnerCommandPlugins: string[];
+  runnerCustomPlugin: string;
+  runnerCommandAgentPlugins: string[];
   view: SettingsView;
   onViewChange: (view: SettingsView) => void;
   projects: Project[];
@@ -1743,6 +1862,8 @@ function SettingsPanel({
   onLogoutAll: () => Promise<void>;
   onChangePassword: (input: ApiChangePassword) => Promise<void>;
   onRegenerateRunnerToken: () => Promise<void>;
+  onToggleRunnerCommandPlugin: (packageName: string) => void;
+  onRunnerCustomPluginChange: (packageName: string) => void;
 }) {
   return (
     <section className="tool-panel settings-panel" aria-label="Settings">
@@ -1785,10 +1906,16 @@ function SettingsPanel({
             <AccountSecurityPanel
               account={account}
               runnerCommand={runnerCommand}
+              runnerInstallMetadata={runnerInstallMetadata}
+              runnerCommandPlugins={runnerCommandPlugins}
+              runnerCustomPlugin={runnerCustomPlugin}
+              runnerCommandAgentPlugins={runnerCommandAgentPlugins}
               onChangePasswordOpen={() => onViewChange("change-password")}
               onLogout={onLogout}
               onLogoutAll={onLogoutAll}
               onRegenerateRunnerToken={onRegenerateRunnerToken}
+              onToggleRunnerCommandPlugin={onToggleRunnerCommandPlugin}
+              onRunnerCustomPluginChange={onRunnerCustomPluginChange}
             />
           ) : accountRefreshState === "error" ? (
             <div className="empty-state compact">
@@ -2486,17 +2613,29 @@ function SettingsDetailHeader({
 function AccountSecurityPanel({
   account,
   runnerCommand,
+  runnerInstallMetadata,
+  runnerCommandPlugins,
+  runnerCustomPlugin,
+  runnerCommandAgentPlugins,
   onChangePasswordOpen,
   onLogout,
   onLogoutAll,
   onRegenerateRunnerToken,
+  onToggleRunnerCommandPlugin,
+  onRunnerCustomPluginChange,
 }: {
   account: AccountSecurityState;
   runnerCommand: string;
+  runnerInstallMetadata: InstallMetadata;
+  runnerCommandPlugins: string[];
+  runnerCustomPlugin: string;
+  runnerCommandAgentPlugins: string[];
   onChangePasswordOpen: () => void;
   onLogout: () => Promise<void>;
   onLogoutAll: () => Promise<void>;
   onRegenerateRunnerToken: () => Promise<void>;
+  onToggleRunnerCommandPlugin: (packageName: string) => void;
+  onRunnerCustomPluginChange: (packageName: string) => void;
 }) {
   const [submitting, setSubmitting] = useState<
     "runner" | "logout" | "all" | ""
@@ -2541,7 +2680,16 @@ function AccountSecurityPanel({
         <div className="secret-display" aria-label="Runner token">
           {account.runnerToken}
         </div>
-        <pre className="command-display">{runnerCommand}</pre>
+        <RunnerCommandBuilder
+          command={runnerCommand}
+          installMetadata={runnerInstallMetadata}
+          selectedPlugins={runnerCommandPlugins}
+          customPlugin={runnerCustomPlugin}
+          effectivePlugins={runnerCommandAgentPlugins}
+          tokenReady={Boolean(account.runnerToken)}
+          onTogglePlugin={onToggleRunnerCommandPlugin}
+          onCustomPluginChange={onRunnerCustomPluginChange}
+        />
         <div className="button-row">
           <button
             className="small-button"
@@ -2550,14 +2698,6 @@ function AccountSecurityPanel({
           >
             <Copy size={14} />
             Copy token
-          </button>
-          <button
-            className="small-button"
-            type="button"
-            onClick={() => copy(runnerCommand)}
-          >
-            <Copy size={14} />
-            Copy command
           </button>
           <button
             className="small-button danger"
@@ -3088,6 +3228,12 @@ function getCompactStatusLabel(
     return { label: "Retrying", tone: "warning" };
   }
   return { label: "Offline", tone: "warning" };
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return Array.from(
+    new Set(values.map((value) => value.trim()).filter(Boolean)),
+  );
 }
 
 function errorMessage(error: unknown): string {

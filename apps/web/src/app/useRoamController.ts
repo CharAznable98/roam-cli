@@ -18,6 +18,7 @@ import type {
   ApiUpdateProjectPromptPreset,
   ExecutionMode,
   ImageAttachmentUpload,
+  InstallMetadata,
   ProjectPromptPreset,
   ServerEvent,
   Session,
@@ -53,7 +54,6 @@ import {
   getSelectedSession,
   sortSessionsForDisplay,
 } from "../features/sessions/model";
-import { buildRunnerCommand } from "./runner-command";
 import { loadLastSelection, saveLastSelection } from "./selection-storage";
 import { appReducer, initialAppState, type AppState } from "./state";
 import type { AsyncState } from "../shared/types/async";
@@ -100,6 +100,9 @@ export function useRoamController() {
   const [authEpoch, setAuthEpoch] = useState(0);
   const [accountSecurity, setAccountSecurity] = useState<
     AccountSecurityState | undefined
+  >();
+  const [installMetadata, setInstallMetadata] = useState<
+    InstallMetadata | undefined
   >();
   const [streamReconnect, setStreamReconnect] = useState<StreamReconnectInfo>({
     mode: "connecting",
@@ -148,6 +151,7 @@ export function useRoamController() {
   const clearAccountSecurity = useCallback(() => {
     accountSecurityRequestIdRef.current += 1;
     setAccountSecurity(undefined);
+    setInstallMetadata(undefined);
   }, []);
 
   const syncActiveSessionSubscription = useCallback(
@@ -464,6 +468,14 @@ export function useRoamController() {
         } catch {
           // The main bootstrap below will surface auth/API failures.
         }
+        void api
+          .fetchInstallMetadata()
+          .then((install) => {
+            if (!cancelled) {
+              setInstallMetadata(install);
+            }
+          })
+          .catch(() => undefined);
         loadRemoteState("bootstrap");
         connectStream();
       })
@@ -578,7 +590,12 @@ export function useRoamController() {
       throw new Error("API client is not ready.");
     }
     const requestId = nextAccountSecurityRequestId();
+    const installRequest = api
+      .fetchInstallMetadata()
+      .then((install) => setInstallMetadata(install))
+      .catch(() => undefined);
     const account = await api.fetchAccountSecurity();
+    void installRequest;
     return applyAccountSecurityForRequest(requestId, account);
   }, [applyAccountSecurityForRequest, nextAccountSecurityRequestId]);
 
@@ -1778,6 +1795,7 @@ export function useRoamController() {
     projectPromptPresetStates,
     authView,
     accountSecurity,
+    installMetadata,
     streamReconnect,
     reconnectStream,
     setupOwner,
@@ -1803,7 +1821,6 @@ export function useRoamController() {
     sessionFileTreeState,
     sessionFileTreePathState,
     projectPromptPresetErrorsByProject,
-    runnerCommand: buildRunnerCommand(accountSecurity?.runnerToken ?? ""),
     selectRunner,
     selectProject,
     createProject,

@@ -77,6 +77,8 @@ describe("parseCliArgs", () => {
         "t1",
         "--workspace",
         workspace,
+        "--agent-plugin",
+        "@roamcli/agent-codex",
       ],
       {},
     );
@@ -91,7 +93,7 @@ describe("parseCliArgs", () => {
       runnerId: expect.stringContaining("-"),
       workspace,
       dataDir: ".roam-runner",
-      agentPlugins: [],
+      agentPlugins: ["@roamcli/agent-codex"],
     });
   });
 
@@ -133,6 +135,8 @@ describe("parseCliArgs", () => {
         "t1",
         "--workspace",
         workspace,
+        "--agent-plugin",
+        "@roamcli/agent-codex",
       ],
       {},
     );
@@ -149,6 +153,7 @@ describe("parseCliArgs", () => {
       token: "t1",
       workspace,
       dataDir: ".roam-runner",
+      agentPlugins: ["@roamcli/agent-codex"],
     });
   });
 
@@ -164,6 +169,8 @@ describe("parseCliArgs", () => {
         workspace,
         "--data-dir",
         ".runner-state",
+        "--agent-plugin",
+        "@roamcli/agent-codex",
       ],
       {},
     );
@@ -185,6 +192,7 @@ describe("parseCliArgs", () => {
         token: "t1",
         workspace,
         dataDir: ".runner-state",
+        agentPlugins: ["@roamcli/agent-codex"],
       },
     );
 
@@ -196,6 +204,7 @@ describe("parseCliArgs", () => {
       token: "t1",
       workspace,
       dataDir: ".runner-state",
+      agentPlugins: ["@roamcli/agent-codex"],
     });
   });
 
@@ -211,6 +220,8 @@ describe("parseCliArgs", () => {
         workspace,
         "--data-dir",
         ".runner-state",
+        "--agent-plugin",
+        "@roamcli/agent-codex",
       ],
       {},
     );
@@ -225,6 +236,8 @@ describe("parseCliArgs", () => {
           "https://override.example.test/runners",
           "--token",
           "t2",
+          "--agent-plugin",
+          "@roamcli/agent-claude-code",
         ],
         {},
       );
@@ -237,6 +250,7 @@ describe("parseCliArgs", () => {
       token: "t2",
       workspace,
       dataDir: ".runner-state",
+      agentPlugins: ["@roamcli/agent-claude-code"],
     };
     expect(JSON.parse(await readFile(defaultConfigPath, "utf8"))).toMatchObject(
       expected,
@@ -297,7 +311,7 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("allows env plugin configuration to clear local config plugins", async () => {
+  it("rejects env plugin configuration that clears local config plugins", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
     await writeConfig(workspace, {
       server: "wss://config.example.test/runners",
@@ -309,11 +323,13 @@ describe("parseCliArgs", () => {
       agentPlugins: ["config-plugin"],
     });
 
-    const { options } = await resolveRunnerConfig(["--workspace", workspace], {
-      ROAMCLI_AGENT_PLUGINS: "",
-    });
-
-    expect(options.agentPlugins).toEqual([]);
+    await expect(
+      resolveRunnerConfig(["--workspace", workspace], {
+        ROAMCLI_AGENT_PLUGINS: "",
+      }),
+    ).rejects.toThrow(
+      "Missing --agent-plugin or ROAMCLI_AGENT_PLUGINS or local config agentPlugins",
+    );
   });
 
   it("fails when local config is malformed", async () => {
@@ -346,6 +362,7 @@ describe("parseCliArgs", () => {
       server: "not a url",
       token: "config-token",
       profile: "loose",
+      agentPlugins: ["config-plugin"],
     });
 
     const { options, configPath } = await resolveRunnerConfig(

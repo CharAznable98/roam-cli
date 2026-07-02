@@ -2,11 +2,6 @@ import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/
 import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
 import { getPermissionTemplate } from "./permissions.js";
 
-export const DEFAULT_AGENT_PLUGINS = [
-  "@roamcli/agent-codex",
-  "@roamcli/agent-claude-code",
-] as const;
-
 export interface LoadedAgent {
   definition: AgentDefinition;
   capability: RunnerCapability;
@@ -19,13 +14,15 @@ export interface AgentRegistry {
 
 export async function loadAgentRegistry(
   profile: RunnerProfile,
-  pluginNames: readonly string[] | undefined = DEFAULT_AGENT_PLUGINS,
+  pluginNames: readonly string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentRegistry> {
   getPermissionTemplate(profile);
+  if (pluginNames.length === 0) {
+    throw new Error("Missing --agent-plugin or ROAMCLI_AGENT_PLUGINS or local config agentPlugins");
+  }
   const context: AgentPluginContext = { profile, env };
-  const selectedPluginNames = pluginNames ?? DEFAULT_AGENT_PLUGINS;
-  const plugins = await Promise.all(selectedPluginNames.map((name) => loadAgentPlugin(name)));
+  const plugins = await Promise.all(pluginNames.map((name) => loadAgentPlugin(name)));
   const agents: LoadedAgent[] = [];
   const seen = new Set<string>();
 

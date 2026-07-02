@@ -7,8 +7,17 @@ describe("capabilities", () => {
     vi.unstubAllEnvs();
   });
 
-  it("registers the default codex plugin", async () => {
-    const registry = await loadAgentRegistry("standard");
+  it("requires at least one agent plugin", async () => {
+    await expect(loadAgentRegistry("standard", [])).rejects.toThrow(
+      "Missing --agent-plugin",
+    );
+  });
+
+  it("registers selected first-party plugins", async () => {
+    const registry = await loadAgentRegistry("standard", [
+      "@roamcli/agent-codex",
+      "@roamcli/agent-claude-code",
+    ]);
 
     expect(registry.capabilities.map((capability) => capability.kind)).toEqual([
       "codex",
@@ -29,9 +38,9 @@ describe("capabilities", () => {
   });
 
   it("uses codex app-server by default", async () => {
-    const codex = (await loadAgentRegistry("trusted")).capabilities.find(
-      (capability) => capability.kind === "codex",
-    );
+    const codex = (
+      await loadAgentRegistry("trusted", ["@roamcli/agent-codex"])
+    ).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex).toMatchObject({
       command: "codex",
@@ -47,9 +56,9 @@ describe("capabilities", () => {
     vi.stubEnv("ROAMCLI_AGENT_CODEX_COMMAND", "local-codex");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", 'exec --sandbox "danger full"');
 
-    const codex = (await loadAgentRegistry("standard")).capabilities.find(
-      (capability) => capability.kind === "codex",
-    );
+    const codex = (
+      await loadAgentRegistry("standard", ["@roamcli/agent-codex"])
+    ).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex).toMatchObject({
       command: "local-codex",
@@ -61,9 +70,9 @@ describe("capabilities", () => {
     vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
     vi.stubEnv("ROAMCLI_AGENT_CODEX_ARGS", '["--one","two words"]');
 
-    const codex = (await loadAgentRegistry("standard")).capabilities.find(
-      (capability) => capability.kind === "codex",
-    );
+    const codex = (
+      await loadAgentRegistry("standard", ["@roamcli/agent-codex"])
+    ).capabilities.find((capability) => capability.kind === "codex");
 
     expect(codex?.args).toEqual(["--one", "two words"]);
   });
@@ -88,10 +97,10 @@ describe("capabilities", () => {
     }
   });
 
-  it("registers Claude Code as a first-party default plugin", async () => {
-    const claudeCode = (await loadAgentRegistry("trusted")).capabilities.find(
-      (capability) => capability.kind === "claude-code",
-    );
+  it("registers Claude Code when selected", async () => {
+    const claudeCode = (
+      await loadAgentRegistry("trusted", ["@roamcli/agent-claude-code"])
+    ).capabilities.find((capability) => capability.kind === "claude-code");
 
     expect(claudeCode).toMatchObject({
       command: "claude",

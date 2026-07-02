@@ -1098,7 +1098,11 @@ async function runNoRunnerJourney(browser) {
   try {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await expectText(page, "No runners are online");
-    await expectText(page, "pnpm --filter @roamcli/runner dev");
+    await expectText(page, "npx --yes");
+    await expectText(page, "Select or enter at least one agent plugin");
+    await page.getByRole("checkbox", { name: /Codex/u }).click();
+    await expectText(page, "--package '@roamcli/agent-codex@");
+    await expectText(page, "--agent-plugin '@roamcli/agent-codex'");
     const runnerUrl = new URL("/v1/runner", baseUrl);
     runnerUrl.protocol = runnerUrl.protocol === "https:" ? "wss:" : "ws:";
     await expectText(page, runnerUrl.toString());
@@ -1766,6 +1770,8 @@ async function ensureRunnerOnline() {
       workspace,
       "--profile",
       "trusted",
+      "--agent-plugin",
+      "@roamcli/agent-codex",
     ],
     {
       ROAM_RUNNER_SERVER: wsUrl.toString(),

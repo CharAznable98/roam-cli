@@ -1,15 +1,20 @@
 {
   "name": "@roamcli/shared",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
   "exports": {
     "./protocol": {
-      "types": "./src/protocol/index.ts",
+      "types": "./dist/protocol/index.d.ts",
       "import": "./dist/protocol/index.js"
     },
     "./security": {
-      "types": "./src/security/index.ts",
+      "types": "./dist/security/index.d.ts",
       "import": "./dist/security/index.js"
     }
   },

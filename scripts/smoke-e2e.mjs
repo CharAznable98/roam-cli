@@ -242,6 +242,8 @@ async function ensureRunnerOnline() {
       workspace,
       "--profile",
       "trusted",
+      "--agent-plugin",
+      "@roamcli/agent-codex",
     ],
     {
       ROAM_RUNNER_SERVER: wsUrl.toString(),

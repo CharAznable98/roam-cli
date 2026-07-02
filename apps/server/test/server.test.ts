@@ -66,6 +66,35 @@ describe("server", () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("serves public install metadata for runner command generation", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/install/metadata",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      install: {
+        runnerPackageName: "@roamcli/runner",
+        runnerPackageSpec: "@roamcli/runner@1.1.0",
+        officialAgentPlugins: [
+          {
+            packageName: "@roamcli/agent-codex",
+            packageSpec: "@roamcli/agent-codex@1.1.0",
+            label: "Codex",
+            description: "Runs sessions through the Codex app-server agent.",
+          },
+          {
+            packageName: "@roamcli/agent-claude-code",
+            packageSpec: "@roamcli/agent-claude-code@1.1.0",
+            label: "Claude Code",
+            description: "Runs sessions through the Claude Code agent.",
+          },
+        ],
+      },
+    });
+  });
+
   it("requires an owner session and lists persisted sessions", async () => {
     const unauthorized = await app.inject({
       method: "GET",

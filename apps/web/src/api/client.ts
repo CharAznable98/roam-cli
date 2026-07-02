@@ -39,6 +39,7 @@ import type {
   GitJob,
   GitStatusResult,
   ImageAttachmentUpload,
+  InstallMetadata,
   Message,
   MessageAttachment,
   PatchApplyResult,
@@ -58,6 +59,7 @@ export interface RoamApiOptions {
 }
 
 export interface RoamApiClient {
+  fetchInstallMetadata(): Promise<InstallMetadata>;
   fetchAuthStatus(): Promise<AuthStatus>;
   setupOwner(input: ApiSetupOwner): Promise<{
     auth: AuthStatus;
@@ -282,6 +284,10 @@ interface AccountSecurityResponse {
   account: AccountSecurityState;
 }
 
+interface InstallMetadataResponse {
+  install: InstallMetadata;
+}
+
 export function createRoamApiClient(
   options: RoamApiOptions = {},
 ): RoamApiClient {
@@ -338,6 +344,13 @@ export function createRoamApiClient(
   }
 
   return {
+    async fetchInstallMetadata() {
+      const { install } = await request<InstallMetadataResponse>(
+        "/v1/install/metadata",
+      );
+      return install;
+    },
+
     async fetchAuthStatus() {
       const { auth } = await request<AuthStatusResponse>("/v1/auth/status");
       return auth;
