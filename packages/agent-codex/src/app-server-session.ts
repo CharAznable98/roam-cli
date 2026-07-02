@@ -17,7 +17,10 @@ import type {
   UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
 import type { RunnerProfile } from "@roamcli/shared/protocol";
-import { CodexAppServerClient } from "./app-server-client.js";
+import {
+  CodexAppServerClient,
+  type CodexAppServerTransport,
+} from "./app-server-client.js";
 import type {
   AskForApproval,
   AgentMessageDeltaNotification,
@@ -52,6 +55,7 @@ interface CodexAppServerSessionOptions {
   command: string;
   args: readonly string[];
   ensureAppServerDaemon: boolean;
+  transport: CodexAppServerTransport;
   context: AgentSessionContext;
 }
 
@@ -64,6 +68,7 @@ export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
   readonly #args: readonly string[];
   readonly #ensureAppServerDaemonEnabled: boolean;
+  readonly #transport: CodexAppServerTransport;
   readonly #context: AgentSessionContext;
   readonly #queue: QueuedInput[] = [];
   readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
@@ -98,6 +103,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#command = options.command;
     this.#args = options.args;
     this.#ensureAppServerDaemonEnabled = options.ensureAppServerDaemon;
+    this.#transport = options.transport;
     this.#context = options.context;
   }
 
@@ -146,6 +152,7 @@ export class CodexAppServerSession implements AgentSession {
 
     this.#client = new CodexAppServerClient({
       child: this.#child,
+      transport: this.#transport,
       onNotification: (notification) =>
         this.#handleNotification(notification.method, notification.params),
       onRequest: (request) => this.#handleRequest(request),

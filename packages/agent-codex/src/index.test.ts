@@ -27,6 +27,14 @@ import {
 } from "./index.js";
 
 const execFileAsync = promisify(execFile);
+const STDIO_APP_SERVER_ENV = {
+  ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
+    "app-server",
+    "--stdio",
+    "-c",
+    "skip_git_repo_check=true",
+  ]),
+};
 
 describe("codex agent plugin", () => {
   it("builds the default codex capability", () => {
@@ -36,7 +44,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
+      args: ["app-server", "proxy", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -288,6 +296,7 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -335,6 +344,7 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -389,6 +399,7 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -428,6 +439,7 @@ describe("codex agent plugin", () => {
         env: {
           ROAMCLI_AGENT_CODEX_MODE: "exec-json",
           ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
           ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
         },
         session: makeSession(workspace),
@@ -482,6 +494,7 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([
           script,
           "--dangerously-bypass-approvals-and-sandbox",
@@ -560,6 +573,7 @@ describe("codex agent plugin", () => {
       env: {
         ROAMCLI_AGENT_CODEX_MODE: "exec-json",
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
         ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
       },
       session: makeSession(workspace),
@@ -612,6 +626,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -660,6 +675,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -696,6 +712,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -801,6 +818,7 @@ describe("codex agent plugin", () => {
       script,
       [
         "#!/usr/bin/env node",
+        "const crypto = require('node:crypto');",
         "const fs = require('node:fs');",
         `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
         `const proxyMarker = ${JSON.stringify(proxyMarker)};`,
@@ -810,23 +828,73 @@ describe("codex agent plugin", () => {
         "  process.exit(0);",
         "}",
         "fs.writeFileSync(proxyMarker, args.join(' '));",
-        "process.stdin.setEncoding('utf8');",
-        "let buffer = '';",
-        "function write(message) { process.stdout.write(`${JSON.stringify(message)}\\n`); }",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const lines = buffer.split(/\\r?\\n/);",
-        "  buffer = lines.pop() ?? '';",
-        "  for (const line of lines) {",
-        "    if (!line) continue;",
-        "    const message = JSON.parse(line);",
-        "    if (message.method === 'initialize') write({ id: message.id, result: {} });",
-        "    if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
-        "    if (message.method === 'turn/start') {",
-        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
-        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-        "    }",
+        "let buffer = Buffer.alloc(0);",
+        "let handshakeDone = false;",
+        "function acceptKey(key) {",
+        "  return crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');",
+        "}",
+        "function write(message) {",
+        "  const payload = Buffer.from(JSON.stringify(message), 'utf8');",
+        "  const header = payload.length < 126",
+        "    ? Buffer.from([0x81, payload.length])",
+        "    : Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff]);",
+        "  process.stdout.write(Buffer.concat([header, payload]));",
+        "}",
+        "function handleMessage(message) {",
+        "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "  if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "  if (message.method === 'turn/start') {",
+        "    write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
         "  }",
+        "}",
+        "function processFrames() {",
+        "  while (buffer.length >= 2) {",
+        "    const second = buffer[1];",
+        "    const masked = (second & 0x80) !== 0;",
+        "    let length = second & 0x7f;",
+        "    let offset = 2;",
+        "    if (length === 126) {",
+        "      if (buffer.length < offset + 2) return;",
+        "      length = buffer.readUInt16BE(offset);",
+        "      offset += 2;",
+        "    } else if (length === 127) {",
+        "      if (buffer.length < offset + 8) return;",
+        "      length = Number(buffer.readBigUInt64BE(offset));",
+        "      offset += 8;",
+        "    }",
+        "    const mask = masked ? buffer.subarray(offset, offset + 4) : undefined;",
+        "    if (masked) offset += 4;",
+        "    if (buffer.length < offset + length) return;",
+        "    const payload = Buffer.from(buffer.subarray(offset, offset + length));",
+        "    buffer = buffer.subarray(offset + length);",
+        "    if (mask) {",
+        "      for (let index = 0; index < payload.length; index += 1) {",
+        "        payload[index] ^= mask[index % 4];",
+        "      }",
+        "    }",
+        "    handleMessage(JSON.parse(payload.toString('utf8')));",
+        "  }",
+        "}",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer = Buffer.concat([buffer, Buffer.from(chunk)]);",
+        "  if (!handshakeDone) {",
+        "    const headerEnd = buffer.indexOf('\\r\\n\\r\\n');",
+        "    if (headerEnd < 0) return;",
+        "    const header = buffer.subarray(0, headerEnd).toString('utf8');",
+        "    const key = header.split(/\\r?\\n/).find((line) => line.toLowerCase().startsWith('sec-websocket-key:'))?.split(':').slice(1).join(':').trim() ?? '';",
+        "    process.stdout.write([",
+        "      'HTTP/1.1 101 Switching Protocols',",
+        "      'Upgrade: websocket',",
+        "      'Connection: Upgrade',",
+        "      `Sec-WebSocket-Accept: ${acceptKey(key)}`,",
+        "      '',",
+        "      '',",
+        "    ].join('\\r\\n'));",
+        "    buffer = buffer.subarray(headerEnd + 4);",
+        "    handshakeDone = true;",
+        "  }",
+        "  processFrames();",
         "});",
       ].join("\n"),
     );
@@ -838,7 +906,7 @@ describe("codex agent plugin", () => {
         ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
           "app-server",
           "proxy",
-          "--socket",
+          "--sock",
           "custom.sock",
         ]),
       },
@@ -854,11 +922,14 @@ describe("codex agent plugin", () => {
       }),
     });
 
-    await session.start();
+    const startPromise = session.start();
 
-    await expect(readFile(proxyMarker, "utf8")).resolves.toBe(
-      "proxy --socket custom.sock",
-    );
+    await vi.waitFor(async () => {
+      await expect(readFile(proxyMarker, "utf8")).resolves.toBe(
+        "proxy --sock custom.sock",
+      );
+    });
+    await expect(startPromise).resolves.toBeUndefined();
     session.close();
     await expect(readFile(daemonMarker, "utf8")).rejects.toThrow();
   });
@@ -889,6 +960,7 @@ describe("codex agent plugin", () => {
       profile: "trusted",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -961,6 +1033,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1014,6 +1087,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1070,6 +1144,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1131,6 +1206,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1214,6 +1290,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1274,6 +1351,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1329,6 +1407,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1382,6 +1461,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1434,6 +1514,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1491,6 +1572,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1550,6 +1632,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1623,6 +1706,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1691,6 +1775,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1777,6 +1862,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1831,6 +1917,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1889,6 +1976,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -1948,6 +2036,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2012,6 +2101,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2072,6 +2162,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2123,6 +2214,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2179,6 +2271,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2251,6 +2344,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2311,6 +2405,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2375,6 +2470,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
@@ -2441,6 +2537,7 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ...STDIO_APP_SERVER_ENV,
       },
       session: makeSession(workspace),
       cwd: workspace,
