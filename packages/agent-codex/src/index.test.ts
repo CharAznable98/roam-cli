@@ -280,7 +280,6 @@ describe("codex agent plugin", () => {
         '    text: \'ROAMCLI_APPROVAL: {"type":"approval_request","kind":"execCommand","summary":"Run tests","payload":{"command":"pnpm test"}}\',',
         "  },",
         "}));",
-        "setInterval(() => undefined, 1000);",
       ].join("\n"),
     );
     const events: AgentRuntimeEvent[] = [];
@@ -552,6 +551,7 @@ describe("codex agent plugin", () => {
         "    }",
         "  }",
         "});",
+        "setInterval(() => undefined, 1000);",
       ].join("\n"),
     );
     const events: AgentRuntimeEvent[] = [];
@@ -784,6 +784,77 @@ describe("codex agent plugin", () => {
     await expect(startPromise).resolves.toBeUndefined();
     expect(events).toContainEqual({ type: "status", status: "stopped" });
     await expect(readFile(proxyMarker, "utf8")).rejects.toThrow();
+  });
+
+  it("does not start the daemon for custom app-server proxy args", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-custom-proxy-");
+    const script = join(workspace, "app-server");
+    const daemonMarker = join(workspace, "daemon.txt");
+    const proxyMarker = join(workspace, "proxy.txt");
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
+        `const proxyMarker = ${JSON.stringify(proxyMarker)};`,
+        "const args = process.argv.slice(2);",
+        "if (args.join(' ') === 'daemon start') {",
+        "  fs.writeFileSync(daemonMarker, 'daemon');",
+        "  process.exit(0);",
+        "}",
+        "fs.writeFileSync(proxyMarker, args.join(' '));",
+        "process.stdin.setEncoding('utf8');",
+        "let buffer = '';",
+        "function write(message) { process.stdout.write(`${JSON.stringify(message)}\\n`); }",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer += chunk;",
+        "  const lines = buffer.split(/\\r?\\n/);",
+        "  buffer = lines.pop() ?? '';",
+        "  for (const line of lines) {",
+        "    if (!line) continue;",
+        "    const message = JSON.parse(line);",
+        "    if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "    if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "    if (message.method === 'turn/start') {",
+        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "    }",
+        "  }",
+        "});",
+      ].join("\n"),
+    );
+    await chmod(script, 0o755);
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
+          "app-server",
+          "proxy",
+          "--socket",
+          "custom.sock",
+        ]),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await expect(readFile(proxyMarker, "utf8")).resolves.toBe(
+      "proxy --socket custom.sock",
+    );
+    session.close();
+    await expect(readFile(daemonMarker, "utf8")).rejects.toThrow();
   });
 
   it("passes trusted runner permissions to app-server turns", async () => {

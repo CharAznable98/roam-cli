@@ -1265,7 +1265,7 @@ describe("App", () => {
     );
     expect(screen.getByTitle("Real Runner runner")).toBeInTheDocument();
     expect(screen.getAllByText("Real session").length).toBeGreaterThan(0);
-    expect(screen.getByText("Loaded from API")).toBeInTheDocument();
+    expect(await screen.findByText("Loaded from API")).toBeInTheDocument();
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
     expect(
       screen.queryByText(/artifacts\/session-1\/changes.patch/),

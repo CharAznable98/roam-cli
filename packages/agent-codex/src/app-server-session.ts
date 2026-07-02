@@ -51,6 +51,7 @@ interface ApprovalDecision {
 interface CodexAppServerSessionOptions {
   command: string;
   args: readonly string[];
+  ensureAppServerDaemon: boolean;
   context: AgentSessionContext;
 }
 
@@ -62,6 +63,7 @@ interface QueuedInput {
 export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
   readonly #args: readonly string[];
+  readonly #ensureAppServerDaemonEnabled: boolean;
   readonly #context: AgentSessionContext;
   readonly #queue: QueuedInput[] = [];
   readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
@@ -95,6 +97,7 @@ export class CodexAppServerSession implements AgentSession {
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
     this.#args = options.args;
+    this.#ensureAppServerDaemonEnabled = options.ensureAppServerDaemon;
     this.#context = options.context;
   }
 
@@ -184,7 +187,7 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #shouldEnsureAppServerDaemon(): boolean {
-    return this.#args[0] === "app-server" && this.#args[1] === "proxy";
+    return this.#ensureAppServerDaemonEnabled;
   }
 
   public deliverInput(input: AgentInput): void {

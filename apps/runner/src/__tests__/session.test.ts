@@ -837,6 +837,11 @@ describe("SessionManager", () => {
       sessionId: "s1",
       content: "continue",
     });
+    await manager.handle({
+      type: "resolveUserInput",
+      sessionId: "s1",
+      content: "duplicate",
+    });
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({
@@ -851,6 +856,17 @@ describe("SessionManager", () => {
         sessionId: "s1",
         status: "completed",
       });
+    });
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "SESSION_NOT_WAITING_INPUT",
+      }),
+    );
+    expect(events).not.toContainEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "failed",
     });
     await started;
   });

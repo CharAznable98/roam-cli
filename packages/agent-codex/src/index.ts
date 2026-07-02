@@ -77,9 +77,11 @@ export const codexAgent: AgentDefinition = {
   },
   createSession(context: AgentSessionContext): AgentSession {
     if (modeFor(KIND, context.env) === "app-server") {
+      const args = appServerArgsFor(KIND, context.env);
       return new CodexAppServerSession({
         command: commandFor(KIND, context.env),
-        args: appServerArgsFor(KIND, context.env),
+        args,
+        ensureAppServerDaemon: argsEqual(args, DEFAULT_APP_SERVER_ARGS),
         context,
       });
     }
@@ -664,6 +666,13 @@ function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
     return parseArgs(override);
   }
   return [...DEFAULT_APP_SERVER_ARGS];
+}
+
+function argsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function modeFor(

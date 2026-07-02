@@ -67,12 +67,6 @@ export class UserInputRequestTracker {
   public resolve(sessionId: string, content: string): void {
     const pending = this.#pendingBySession.get(sessionId);
     if (pending === undefined) {
-      void this.#emit({
-        type: "error",
-        sessionId,
-        message: "Session is not waiting for user input",
-        code: "SESSION_NOT_WAITING_INPUT",
-      });
       return;
     }
     this.#pendingBySession.delete(sessionId);
