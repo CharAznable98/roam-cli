@@ -36,7 +36,7 @@ describe("codex agent plugin", () => {
       kind: "codex",
       label: "Codex",
       command: "codex",
-      args: ["app-server", "proxy", "-c", "skip_git_repo_check=true"],
+      args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
       supportsImages: true,
@@ -724,7 +724,7 @@ describe("codex agent plugin", () => {
     expect(events).not.toContainEqual({ type: "status", status: "failed" });
   });
 
-  it("does not spawn the proxy when stopped while daemon startup is pending", async () => {
+  it("does not spawn an explicit daemon-managed proxy when stopped during daemon startup", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-daemon-stop-");
     const script = join(workspace, "app-server");
     const daemonMarker = join(workspace, "daemon.txt");
@@ -759,6 +759,12 @@ describe("codex agent plugin", () => {
       profile: "standard",
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_APP_SERVER_ARGS: JSON.stringify([
+          "app-server",
+          "proxy",
+          "-c",
+          "skip_git_repo_check=true",
+        ]),
       },
       session: makeSession(workspace),
       cwd: workspace,

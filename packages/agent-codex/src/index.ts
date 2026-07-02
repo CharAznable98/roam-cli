@@ -37,6 +37,12 @@ const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
 const DEFAULT_APP_SERVER_ARGS = [
   "app-server",
+  "--stdio",
+  "-c",
+  "skip_git_repo_check=true",
+];
+const DAEMON_MANAGED_PROXY_ARGS = [
+  "app-server",
   "proxy",
   "-c",
   "skip_git_repo_check=true",
@@ -81,7 +87,7 @@ export const codexAgent: AgentDefinition = {
       return new CodexAppServerSession({
         command: commandFor(KIND, context.env),
         args,
-        ensureAppServerDaemon: argsEqual(args, DEFAULT_APP_SERVER_ARGS),
+        ensureAppServerDaemon: argsEqual(args, DAEMON_MANAGED_PROXY_ARGS),
         context,
       });
     }
