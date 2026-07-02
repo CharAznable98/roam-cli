@@ -96,10 +96,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$DATA_DIR" ]; then
-  DATA_DIR="$INSTALL_DIR/data"
-fi
-
 resolve_path() {
   case "$1" in
     /*) printf "%s" "$1" ;;
@@ -119,10 +115,12 @@ recorded_data_dir() {
   awk 'BEGIN { FS = "=" } $1 == "ROAMCLI_DATA_DIR" { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
 }
 
-if [ "$UNINSTALL" = "1" ] && [ "$DATA_DIR_OVERRIDE" = "0" ]; then
+if [ "$DATA_DIR_OVERRIDE" = "0" ]; then
   RECORDED_DATA_DIR="$(recorded_data_dir)"
   if [ -n "$RECORDED_DATA_DIR" ]; then
     DATA_DIR="$RECORDED_DATA_DIR"
+  else
+    DATA_DIR="$INSTALL_DIR/data"
   fi
 fi
 
