@@ -1,8 +1,10 @@
 {
   "name": "@roamcli/agent-claude-code",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {

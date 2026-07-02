@@ -19,9 +19,49 @@ Runners use reverse WebSocket connections, so the machine running a Runner usual
 - Node.js 24 or newer.
 - pnpm 10 or newer. This repo declares `packageManager: pnpm@10.33.0`.
 - Git.
-- A supported coding agent installed on the Runner machine. The default Runner plugin uses Codex.
+- Docker and Docker Compose for the Server installer.
+- A supported coding agent installed on the Runner machine for each selected agent plugin, for example Codex for `@roamcli/agent-codex`.
 
 ## Install
+
+### Server: Docker Installer
+
+The recommended Server install path is the release installer script. It runs on macOS and Linux, checks for Git, Docker, and Docker Compose, clones the selected release tag, builds the Server image locally, and starts it with Docker Compose. RoamCli does not require a published Docker image.
+
+```bash
+curl -fsSL https://github.com/CharAznable98/roam-cli/releases/latest/download/install-server.sh -o install-server.sh
+chmod +x install-server.sh
+./install-server.sh
+```
+
+Defaults:
+
+- Install directory: `~/.roamcli/server`
+- Server data directory: `~/.roamcli/server/data`
+- Bind address: `0.0.0.0:8787`
+- Release ref: latest GitHub release tag
+
+Install or upgrade an older/specific version with the same script:
+
+```bash
+./install-server.sh --version v1.1.0
+```
+
+Useful options:
+
+```bash
+./install-server.sh --public-origin https://roam.example.com
+./install-server.sh --dry-run
+./install-server.sh --uninstall
+```
+
+`--uninstall` stops and removes the generated Server deployment files. It asks for a second confirmation before deleting Server data; data is preserved by default.
+
+Windows users should run the installer from WSL2 with Docker Desktop integration enabled, or use the source install path below.
+
+### Server: Source Install
+
+Use source install for local development or when you want to manage the process yourself:
 
 ```bash
 pnpm install
@@ -32,7 +72,7 @@ pnpm build
 
 ## Run RoamCli
 
-Start the Server first. The Server is the central service that the Web UI and Runners connect to.
+If you installed the Server with `install-server.sh`, open the Web UI at the configured host and port. For a source checkout, start the Server first:
 
 ```bash
 HOST=127.0.0.1 \
@@ -43,22 +83,28 @@ pnpm --filter @roamcli/server dev
 
 On first start the Server prints a setup token and writes it to `.roamcli-server/setup-token.txt`. Open the Web UI, enter that setup token, and set the owner password. After setup, open **Account & Security** in the Web UI and copy the Runner token or full Runner command.
 
-In another shell, start a Runner from the directory you want to expose as the Runner workspace:
+In another shell, start a Runner from the directory you want to expose as the Runner workspace. The Web UI generates this `npx` command after you select at least one agent plugin:
 
 ```bash
-pnpm --filter @roamcli/runner dev \
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  -- roam-runner \
   --server ws://127.0.0.1:8787/v1/runner \
   --token <runner-token-from-account-security> \
-  --runner-id local-dev \
-  --workspace "$PWD" \
-  --profile trusted
+  --agent-plugin @roamcli/agent-codex
 ```
 
-The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit the persisted options:
+The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit persisted options, but the selected plugin packages still need to be available to `npx`:
 
 ```bash
-pnpm --filter @roamcli/runner dev
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  -- roam-runner
 ```
+
+If required values are missing in an interactive terminal, the Runner opens a React Ink TUI wizard and then re-execs the complete `npx` command with the selected plugin packages. In non-interactive shells, pass `--server`, `--token`, and at least one `--agent-plugin` explicitly.
 
 Open the Web UI:
 
@@ -99,11 +145,32 @@ Runner reads local config from `<workspace>/<data-dir>/config.json`. CLI options
 | `--workspace`    | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory.                                                                                    |
 | `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | Relative runner data directory under the workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths and parent traversal are rejected. |
 | `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`.                                                                                       |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                                         |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Required agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                               |
 
 ## Agent Plugins
 
-The Runner loads the Codex agent plugin by default. You can load additional agent plugins with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`.
+The Runner core is intentionally minimal and does not load a default agent plugin. Choose at least one plugin with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`; when using `npx`, include each plugin package with `--package`.
+
+Official plugin packages:
+
+- `@roamcli/agent-codex`
+- `@roamcli/agent-claude-code`
+
+Multiple plugins are supported:
+
+```bash
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  --package @roamcli/agent-claude-code \
+  -- roam-runner \
+  --server ws://127.0.0.1:8787/v1/runner \
+  --token <runner-token> \
+  --agent-plugin @roamcli/agent-codex \
+  --agent-plugin @roamcli/agent-claude-code
+```
+
+To pin old Runner/plugin versions, add npm versions to the `--package` values, for example `@roamcli/runner@1.1.0`. Local Runner config stores plugin import names only, not package versions.
 
 The Codex plugin uses `codex app-server --stdio -c skip_git_repo_check=true` by default. The Codex command can be overridden with:
 
@@ -124,7 +191,7 @@ ROAMCLI_AGENT_CODEX_ARGS
 
 ## Docker Compose
 
-Docker Compose starts the Server only. You still need to start one or more Runners separately and point them at the Server.
+The root `docker-compose.yml` is for source checkouts. It starts the Server only; you still need to start one or more Runners separately and point them at the Server. Release downloads only need `install-server.sh`; the installer generates its own Compose file locally.
 
 ```bash
 docker compose up --build
@@ -135,18 +202,22 @@ The compose setup exposes the Server on port `8787` and persists Server data in 
 Start a Runner against the compose Server:
 
 ```bash
-pnpm --filter @roamcli/runner dev \
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  -- roam-runner \
   --server ws://127.0.0.1:8787/v1/runner \
   --token <runner-token-from-account-security> \
-  --runner-id local-dev \
-  --workspace "$PWD" \
-  --profile trusted
+  --agent-plugin @roamcli/agent-codex
 ```
 
 Subsequent starts from the same workspace can use the persisted local config:
 
 ```bash
-pnpm --filter @roamcli/runner dev
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  -- roam-runner
 ```
 
 ## Repository Layout

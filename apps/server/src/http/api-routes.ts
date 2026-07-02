@@ -36,6 +36,7 @@ import { CreateArtifactRequestSchema } from "../infra/local-artifact-storage.js"
 import type { AppContext } from "../server/context.js";
 import { sendRunnerRpcError } from "./errors.js";
 import type { ServiceResult } from "../modules/result.js";
+import { installMetadata } from "../install-metadata.js";
 import type { FileTreeQuery } from "../modules/workspace/workspace-service.js";
 import {
   ApprovalParamsSchema,
@@ -75,6 +76,7 @@ export async function registerApiRoutes(
   app: FastifyInstance,
   context: AppContext,
 ): Promise<void> {
+  registerInstallRoutes(app);
   registerAuthRoutes(app, context);
   registerRunnerRoutes(app, context);
   registerProjectRoutes(app, context);
@@ -83,6 +85,12 @@ export async function registerApiRoutes(
   registerGitRoutes(app, context);
   registerApprovalRoutes(app, context);
   registerArtifactRoutes(app, context);
+}
+
+function registerInstallRoutes(app: FastifyInstance): void {
+  app.get("/v1/install/metadata", async () => ({
+    install: installMetadata,
+  }));
 }
 
 function registerAuthRoutes(app: FastifyInstance, context: AppContext): void {

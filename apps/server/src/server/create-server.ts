@@ -139,6 +139,7 @@ export async function createServer(
       pathname === "/v1/auth/status" ||
       pathname === "/v1/auth/setup" ||
       pathname === "/v1/auth/login" ||
+      pathname === "/v1/install/metadata" ||
       pathname === "/v1/stream" ||
       pathname === "/v1/runner"
     ) {

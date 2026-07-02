@@ -1,8 +1,10 @@
 {
   "name": "@roamcli/shared",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     "./protocol": {
       "types": "./src/protocol/index.ts",

@@ -70,6 +70,19 @@ export const AccountSecurityStateSchema = z.object({
 });
 export type AccountSecurityState = z.infer<typeof AccountSecurityStateSchema>;
 
+export const InstallAgentPluginSchema = z.object({
+  packageName: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().min(1).optional(),
+});
+export type InstallAgentPlugin = z.infer<typeof InstallAgentPluginSchema>;
+
+export const InstallMetadataSchema = z.object({
+  runnerPackageName: z.string().min(1),
+  officialAgentPlugins: z.array(InstallAgentPluginSchema),
+});
+export type InstallMetadata = z.infer<typeof InstallMetadataSchema>;
+
 export const ApiSetupOwnerSchema = z.object({
   setupToken: z.string().min(1),
   password: z.string().min(12).max(256),

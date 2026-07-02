@@ -45,6 +45,21 @@ export interface ResolvedRunnerConfig {
   configPath: string;
 }
 
+export interface RunnerConfigDraft {
+  server?: string;
+  token?: string;
+  profile: RunnerProfile;
+  runnerId?: string;
+  workspace: string;
+  dataDir: string;
+  agentPlugins: string[];
+}
+
+export interface ResolvedRunnerConfigDraft {
+  options: RunnerConfigDraft;
+  configPath: string;
+}
+
 export function parseCliArgs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -66,10 +81,71 @@ export async function resolveRunnerConfig(
       "Missing --token or ROAM_RUNNER_TOKEN or local config token",
     );
   }
+  if (options.agentPlugins.length === 0) {
+    throw new Error(
+      "Missing --agent-plugin or ROAMCLI_AGENT_PLUGINS or local config agentPlugins",
+    );
+  }
   return {
     options,
     configPath: locator.configPath,
   };
+}
+
+export async function resolveRunnerConfigDraft(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResolvedRunnerConfigDraft> {
+  const cli = parseRawCliArgs(argv);
+  const locator = resolveConfigLocator(cli, env);
+  const fileConfig = await readRunnerConfigFile(locator.configPath);
+  const server = cli.server ?? env.ROAM_RUNNER_SERVER ?? fileConfig?.server;
+  const profileValue =
+    cli.profile ?? env.ROAM_RUNNER_PROFILE ?? fileConfig?.profile ?? "standard";
+  const dataDirValue =
+    cli.dataDir ??
+    env.ROAM_RUNNER_DATA_DIR ??
+    fileConfig?.dataDir ??
+    DEFAULT_DATA_DIR;
+  const draft: RunnerConfigDraft = {
+    profile: withConfigErrorContext(
+      valueSource(cli.profile, env.ROAM_RUNNER_PROFILE, fileConfig?.profile),
+      locator.configPath,
+      () => RunnerProfileSchema.parse(profileValue),
+    ),
+    workspace: resolve(
+      cli.workspace ??
+        env.ROAM_RUNNER_WORKSPACE ??
+        fileConfig?.workspace ??
+        defaultWorkspace(env),
+    ),
+    dataDir: withConfigErrorContext(
+      valueSource(cli.dataDir, env.ROAM_RUNNER_DATA_DIR, fileConfig?.dataDir),
+      locator.configPath,
+      () => parseDataDir(dataDirValue),
+    ),
+    agentPlugins: parsePluginList(
+      cli.agentPlugins,
+      env.ROAMCLI_AGENT_PLUGINS,
+      fileConfig?.agentPlugins,
+    ),
+  };
+  if (server !== undefined && server.length > 0) {
+    draft.server = withConfigErrorContext(
+      valueSource(cli.server, env.ROAM_RUNNER_SERVER, fileConfig?.server),
+      locator.configPath,
+      () => normalizeServerUrl(server),
+    );
+  }
+  const token = cli.token ?? env.ROAM_RUNNER_TOKEN ?? fileConfig?.token;
+  if (token !== undefined) {
+    draft.token = token;
+  }
+  const runnerId = cli.runnerId ?? env.ROAM_RUNNER_ID ?? fileConfig?.runnerId;
+  if (runnerId !== undefined) {
+    draft.runnerId = runnerId;
+  }
+  return { options: draft, configPath: locator.configPath };
 }
 
 export async function persistRunnerConfig(
@@ -296,7 +372,7 @@ function helpText(): string {
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
     "  --workspace   Workspace root exposed to sessions. Default: package invocation cwd or cwd.",
     "  --data-dir    Relative runner state directory under workspace. Default: .roam-runner.",
-    "  --agent-plugin Agent plugin package to load. Repeatable. Default: built-in first-party agents.",
+    "  --agent-plugin Agent plugin package to load. Repeatable. Required.",
   ].join("\n");
 }
 

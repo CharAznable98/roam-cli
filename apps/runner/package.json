@@ -1,8 +1,10 @@
 {
   "name": "@roamcli/runner",
   "version": "1.1.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "roam-runner": "./dist/index.js"
   },
@@ -16,14 +18,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@roamcli/agent-claude-code": "workspace:*",
-    "@roamcli/agent-codex": "workspace:*",
     "@roamcli/agent-plugin-sdk": "workspace:*",
     "@roamcli/shared": "workspace:*",
+    "ink": "^7.1.0",
     "node-pty": "^1.1.0",
+    "react": "^19.2.7",
     "simple-git": "^3.36.0"
   },
   "devDependencies": {
+    "@roamcli/agent-claude-code": "workspace:*",
+    "@roamcli/agent-codex": "workspace:*",
+    "@types/react": "^19.2.16",
     "tsx": "^4.22.4",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

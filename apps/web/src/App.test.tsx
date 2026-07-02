@@ -190,6 +190,22 @@ const accountSecurity = {
   runnerTokenUpdatedAt: "2026-06-05T00:00:00.000Z",
 };
 
+const installMetadata = {
+  runnerPackageName: "@roamcli/runner",
+  officialAgentPlugins: [
+    {
+      packageName: "@roamcli/agent-codex",
+      label: "Codex",
+      description: "Runs sessions through Codex.",
+    },
+    {
+      packageName: "@roamcli/agent-claude-code",
+      label: "Claude Code",
+      description: "Runs sessions through Claude Code.",
+    },
+  ],
+};
+
 let authStatus: AuthStatus;
 let accountSecurityResponses: Array<typeof accountSecurity>;
 let queuedAccountSecurityResponses: Array<Deferred<Response>>;
@@ -680,6 +696,9 @@ describe("App", () => {
         fetchRequests.push(url);
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
+        if (requestUrl.pathname === "/v1/install/metadata") {
+          return jsonResponse({ install: installMetadata });
+        }
         const authResponse = authMockResponse(requestUrl.pathname, init);
         if (authResponse) {
           return authResponse;
@@ -1430,6 +1449,20 @@ describe("App", () => {
       "runner-token",
     );
     expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Select or enter at least one agent plugin/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Codex/ }));
+
+    expect(
+      screen.getByText(/--package '@roamcli\/agent-codex'/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/--agent-plugin '@roamcli\/agent-codex'/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeEnabled();
     expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Change Password/ }));

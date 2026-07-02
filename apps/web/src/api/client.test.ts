@@ -211,6 +211,41 @@ describe("createRoamApiClient", () => {
     expect(headers.get("content-type")).toBe("application/json");
   });
 
+  it("fetches install metadata with a read-only GET request", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (url, init) => {
+        requestUrl = String(url);
+        requestInit = init;
+        return Response.json({
+          install: {
+            runnerPackageName: "@roamcli/runner",
+            officialAgentPlugins: [
+              {
+                packageName: "@roamcli/agent-codex",
+                label: "Codex",
+                description: "Runs sessions through Codex.",
+              },
+            ],
+          },
+        });
+      },
+    });
+
+    const install = await client.fetchInstallMetadata();
+
+    expect(requestUrl).toBe("http://127.0.0.1:8787/v1/install/metadata");
+    expect(requestInit?.method ?? "GET").toBe("GET");
+    expect(requestInit?.credentials).toBe("same-origin");
+    expect(new Headers(requestInit?.headers).get("authorization")).toBeNull();
+    expect(install.runnerPackageName).toBe("@roamcli/runner");
+    expect(install.officialAgentPlugins[0]?.packageName).toBe(
+      "@roamcli/agent-codex",
+    );
+  });
+
   it("checks a session status with a POST request", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
