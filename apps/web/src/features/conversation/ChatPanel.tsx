@@ -166,7 +166,8 @@ export function ChatPanel({
     session.agent === "claude-code" &&
     (session.status === "pending" ||
       session.status === "running" ||
-      session.status === "waiting_approval");
+      session.status === "waiting_approval" ||
+      session.status === "waiting_input");
   const canSubmitMessage = canSend && !claudeTurnInProgress;
 
   const scrollToBottom = () => {
@@ -353,12 +354,14 @@ export function ChatPanel({
     canControl &&
     session.status !== "pending" &&
     session.status !== "running" &&
-    session.status !== "waiting_approval";
+    session.status !== "waiting_approval" &&
+    session.status !== "waiting_input";
   const canStopSession =
     canControl &&
     (session.status === "pending" ||
       session.status === "running" ||
-      session.status === "waiting_approval");
+      session.status === "waiting_approval" ||
+      session.status === "waiting_input");
   const showFailureNotice = session.status === "failed";
 
   return (

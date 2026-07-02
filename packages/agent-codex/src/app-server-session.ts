@@ -1,8 +1,10 @@
 import {
+  execFile,
   spawn as spawnChild,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import type {
   AgentInput,
   AgentLaunchAttachment,
@@ -10,9 +12,15 @@ import type {
   AgentSession,
   AgentSessionContext,
   ApprovalRequestDraft,
+  UserInputQuestion,
+  UserInputQuestionOption,
+  UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
 import type { RunnerProfile } from "@roamcli/shared/protocol";
-import { CodexAppServerClient } from "./app-server-client.js";
+import {
+  CodexAppServerClient,
+  type CodexAppServerTransport,
+} from "./app-server-client.js";
 import type {
   AskForApproval,
   AgentMessageDeltaNotification,
@@ -25,6 +33,7 @@ import type {
   PermissionApprovalParams,
   SandboxPolicy,
   ThreadResponse,
+  ToolRequestUserInputOption,
   ToolRequestUserInputParams,
   TurnNotification,
   TurnStartResponse,
@@ -32,6 +41,8 @@ import type {
 } from "./app-server-protocol.js";
 import { asString, isRecord } from "./app-server-protocol.js";
 import { parseTextDirectives } from "./directives.js";
+
+const execFileAsync = promisify(execFile);
 
 interface ApprovalDecision {
   approvalId: string;
@@ -43,6 +54,8 @@ interface ApprovalDecision {
 interface CodexAppServerSessionOptions {
   command: string;
   args: readonly string[];
+  ensureAppServerDaemon: boolean;
+  transport: CodexAppServerTransport;
   context: AgentSessionContext;
 }
 
@@ -54,6 +67,8 @@ interface QueuedInput {
 export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
   readonly #args: readonly string[];
+  readonly #ensureAppServerDaemonEnabled: boolean;
+  readonly #transport: CodexAppServerTransport;
   readonly #context: AgentSessionContext;
   readonly #queue: QueuedInput[] = [];
   readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
@@ -69,6 +84,7 @@ export class CodexAppServerSession implements AgentSession {
   #interruptRequested = false;
   #interruptSent = false;
   #stoppedEmitted = false;
+  #pendingTerminalStatus: "completed" | "stopped" | undefined;
   #turnDone:
     | {
         resolve: () => void;
@@ -77,16 +93,25 @@ export class CodexAppServerSession implements AgentSession {
     | undefined;
   readonly #streamedOutputIds = new Set<string>();
   readonly #fileChangeItems = new Map<string, unknown>();
-  readonly #commandExecutionItems = new Map<string, ItemStartedNotification["item"]>();
+  readonly #commandExecutionItems = new Map<
+    string,
+    ItemStartedNotification["item"]
+  >();
   readonly #pendingDirectiveApprovals = new Set<Promise<void>>();
 
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
     this.#args = options.args;
+    this.#ensureAppServerDaemonEnabled = options.ensureAppServerDaemon;
+    this.#transport = options.transport;
     this.#context = options.context;
   }
 
   public async start(): Promise<void> {
+    await this.#ensureAppServerDaemon();
+    if (this.#closed || this.#stopRequested) {
+      return;
+    }
     this.#child = spawnChild(this.#command, [...this.#args], {
       cwd: this.#context.cwd,
       env: this.#context.env,
@@ -94,7 +119,11 @@ export class CodexAppServerSession implements AgentSession {
     });
     this.#child.on("close", (code, signal) => {
       const client = this.#client;
-      client?.close(new Error(`Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`));
+      client?.close(
+        new Error(
+          `Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`,
+        ),
+      );
       if (this.#closed || this.#stopRequested) {
         return;
       }
@@ -123,6 +152,7 @@ export class CodexAppServerSession implements AgentSession {
 
     this.#client = new CodexAppServerClient({
       child: this.#child,
+      transport: this.#transport,
       onNotification: (notification) =>
         this.#handleNotification(notification.method, notification.params),
       onRequest: (request) => this.#handleRequest(request),
@@ -148,8 +178,27 @@ export class CodexAppServerSession implements AgentSession {
     this.#startDrain();
   }
 
+  async #ensureAppServerDaemon(): Promise<void> {
+    if (!this.#shouldEnsureAppServerDaemon()) {
+      return;
+    }
+    try {
+      await execFileAsync(this.#command, ["app-server", "daemon", "start"], {
+        cwd: this.#context.cwd,
+        env: this.#context.env,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Codex app-server daemon start failed: ${message}`);
+    }
+  }
+
+  #shouldEnsureAppServerDaemon(): boolean {
+    return this.#ensureAppServerDaemonEnabled;
+  }
+
   public deliverInput(input: AgentInput): void {
-    if (this.#closed) {
+    if (this.#closed || this.#pendingTerminalStatus === "stopped") {
       return;
     }
     if (this.#threadId && this.#activeTurnId) {
@@ -167,7 +216,7 @@ export class CodexAppServerSession implements AgentSession {
             return;
           }
           this.#startDrain();
-        }
+        },
       );
       return;
     }
@@ -207,6 +256,7 @@ export class CodexAppServerSession implements AgentSession {
   public close(): void {
     this.#closed = true;
     this.#queue.length = 0;
+    this.#pendingTerminalStatus = undefined;
     this.#client?.close();
     this.#child?.kill("SIGKILL");
   }
@@ -261,10 +311,13 @@ export class CodexAppServerSession implements AgentSession {
 
   async #drain(): Promise<void> {
     while (!this.#closed) {
+      if (this.#pendingTerminalStatus === "stopped") {
+        await this.#emitPendingTerminalStatus();
+        return;
+      }
       const input = this.#queue.shift();
       if (input === undefined) {
-        this.#closeAppServer("SIGTERM");
-        await this.#emit({ type: "status", status: "completed" });
+        await this.#emitPendingTerminalStatus();
         return;
       }
       await this.#runTurn(input);
@@ -290,7 +343,9 @@ export class CodexAppServerSession implements AgentSession {
     await new Promise<void>((resolve, reject) => {
       this.#turnDone = { resolve, reject };
     });
-    await this.#awaitPendingDirectiveApprovals();
+    if (this.#pendingTerminalStatus !== "stopped") {
+      await this.#awaitPendingDirectiveApprovals();
+    }
     this.#activeTurnId = undefined;
     this.#interruptRequested = false;
     this.#interruptSent = false;
@@ -379,7 +434,9 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (request.method === "item/permissions/requestApproval") {
-      this.#deferRequest(request, () => this.#handlePermissionApproval(request));
+      this.#deferRequest(request, () =>
+        this.#handlePermissionApproval(request),
+      );
       return;
     }
     if (
@@ -400,10 +457,7 @@ export class CodexAppServerSession implements AgentSession {
     );
   }
 
-  #deferRequest(
-    request: JsonRpcRequest,
-    handle: () => Promise<void>,
-  ): void {
+  #deferRequest(request: JsonRpcRequest, handle: () => Promise<void>): void {
     if (this.#closed) {
       this.#client?.reject(
         request.id,
@@ -531,22 +585,24 @@ export class CodexAppServerSession implements AgentSession {
 
   async #handleToolUserInput(request: JsonRpcRequest): Promise<void> {
     const params = request.params as ToolRequestUserInputParams;
-    await this.#requestApproval({
-      kind: "execCommand",
-      summary: toolUserInputSummary(params),
-      payload: {
-        source: "codex-app-server",
-        method: request.method,
-        threadId: params.threadId,
-        turnId: params.turnId,
-        itemId: params.itemId,
-        questions: params.questions,
-      },
+    const draft = toolUserInputDraft(request.method, params);
+    if (draft.questions.some((question) => question.isSecret)) {
+      const message =
+        "Codex requested secret user input, which RoamCli cannot collect safely yet";
+      this.#client?.reject(request.id, message);
+      await this.#fail(message, "CODEX_APP_SERVER_USER_INPUT_ERROR");
+      return;
+    }
+    const decision = await this.#requestUserInput(draft);
+    const answers: Record<string, { answers: string[] }> = {};
+    draft.questions.forEach((question, index) => {
+      answers[question.id] = {
+        answers: index === 0 ? [decision.content] : [],
+      };
     });
-    this.#client?.reject(
-      request.id,
-      "RoamCli does not support structured Codex tool user input yet",
-    );
+    this.#client?.respond(request.id, {
+      answers,
+    });
   }
 
   async #handleMcpElicitation(request: JsonRpcRequest): Promise<void> {
@@ -584,6 +640,19 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
+  async #requestUserInput(draft: UserInputRequestDraft) {
+    try {
+      if (this.#context.requestUserInput === undefined) {
+        throw new Error("RoamCli does not support Codex tool user input");
+      }
+      return await this.#context.requestUserInput(draft);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#fail(message, "CODEX_APP_SERVER_USER_INPUT_ERROR");
+      throw error;
+    }
+  }
+
   async #handleMessageDelta(
     notification: AgentMessageDeltaNotification,
   ): Promise<void> {
@@ -615,6 +684,14 @@ export class CodexAppServerSession implements AgentSession {
     }
     if (item.type === "commandExecution") {
       this.#commandExecutionItems.set(item.id, item);
+      return;
+    }
+    if (item.type === "collabAgentToolCall" && item.tool === "wait") {
+      void this.#emit({
+        type: "activity",
+        kind: "status",
+        label: "Waiting for agent",
+      });
     }
   }
 
@@ -658,15 +735,35 @@ export class CodexAppServerSession implements AgentSession {
       await this.#emitError(message);
       return;
     }
-    if (status === "interrupted" && (this.#stopRequested || this.#interruptRequested)) {
-      this.#closed = true;
+    if (status === "interrupted") {
       this.#queue.length = 0;
-      this.#closeAppServer("SIGTERM");
+      this.#pendingTerminalStatus = "stopped";
       done?.resolve();
-      await this.#emitStopped();
+      await this.#emitPendingTerminalStatus();
       return;
     }
+    if (status !== "completed") {
+      const message = `Codex app-server turn completed with unsupported status: ${status ?? "unknown"}`;
+      done?.reject(new Error(message));
+      await this.#emitError(message);
+      return;
+    }
+    this.#pendingTerminalStatus = "completed";
     done?.resolve();
+  }
+
+  async #emitPendingTerminalStatus(): Promise<void> {
+    const status = this.#pendingTerminalStatus;
+    if (status === undefined) {
+      return;
+    }
+    this.#pendingTerminalStatus = undefined;
+    if (status === "stopped") {
+      await this.#emitStopped();
+    } else {
+      await this.#emit({ type: "status", status });
+    }
+    this.#closeAppServer("SIGTERM");
   }
 
   async #emitStopped(): Promise<void> {
@@ -697,22 +794,25 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #handleApprovalDirective(draft: ApprovalRequestDraft): void {
-    const pending = this.#requestApproval(draft).then(
-      (decision) => {
-        return this.#sendApprovalResponse(decision);
-      },
-      (error: unknown) => {
-        if (this.#closed) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        void this.#fail(
-          `Codex app-server approval directive failed: ${message}`,
-        );
-      },
-    ).finally(() => {
-      this.#pendingDirectiveApprovals.delete(pending);
-    });
+    const pending = this.#requestApproval(draft)
+      .then(
+        (decision) => {
+          return this.#sendApprovalResponse(decision);
+        },
+        (error: unknown) => {
+          if (this.#closed) {
+            return;
+          }
+          const message =
+            error instanceof Error ? error.message : String(error);
+          void this.#fail(
+            `Codex app-server approval directive failed: ${message}`,
+          );
+        },
+      )
+      .finally(() => {
+        this.#pendingDirectiveApprovals.delete(pending);
+      });
     this.#pendingDirectiveApprovals.add(pending);
   }
 
@@ -743,15 +843,13 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
-  async #fail(
-    message: string,
-    code = "CODEX_APP_SERVER_ERROR",
-  ): Promise<void> {
+  async #fail(message: string, code = "CODEX_APP_SERVER_ERROR"): Promise<void> {
     if (this.#closed) {
       return;
     }
     this.#closed = true;
     this.#queue.length = 0;
+    this.#pendingTerminalStatus = undefined;
     this.#turnDone?.reject(new Error(message));
     this.#turnDone = undefined;
     this.#closeAppServer("SIGTERM");
@@ -827,9 +925,7 @@ function userInputFor(input: QueuedInput): UserInput[] {
   ];
 }
 
-function threadStartParamsForProfile(
-  profile: RunnerProfile,
-): {
+function threadStartParamsForProfile(profile: RunnerProfile): {
   approvalPolicy: AskForApproval;
   permissions?: never;
 } {
@@ -916,6 +1012,61 @@ function toolUserInputSummary(params: ToolRequestUserInputParams): string {
     (candidate) => typeof candidate.question === "string",
   )?.question;
   return question ?? "Codex tool requested user input";
+}
+
+function toolUserInputDraft(
+  method: string,
+  params: ToolRequestUserInputParams,
+): UserInputRequestDraft {
+  const questions = normalizeToolUserInputQuestions(params);
+  return {
+    summary: toolUserInputSummary(params),
+    questions,
+    payload: {
+      source: "codex-app-server",
+      method,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      itemId: params.itemId,
+      questions: params.questions,
+    },
+  };
+}
+
+function normalizeToolUserInputQuestions(
+  params: ToolRequestUserInputParams,
+): UserInputQuestion[] {
+  const questions = params.questions ?? [];
+  return questions.map((question, index) => {
+    const id =
+      typeof question.id === "string" && question.id.length > 0
+        ? question.id
+        : `question-${index + 1}`;
+    return {
+      id,
+      header: typeof question.header === "string" ? question.header : "",
+      question:
+        typeof question.question === "string" && question.question.length > 0
+          ? question.question
+          : "Codex requested user input",
+      isOther: question.isOther === true,
+      isSecret: question.isSecret === true,
+      options: normalizeToolUserInputOptions(question.options),
+    };
+  });
+}
+
+function normalizeToolUserInputOptions(
+  options: ToolRequestUserInputOption[] | null | undefined,
+): readonly UserInputQuestionOption[] | null {
+  if (!Array.isArray(options)) {
+    return null;
+  }
+  return options.map((option) => ({
+    label: typeof option.label === "string" ? option.label : "",
+    description:
+      typeof option.description === "string" ? option.description : "",
+  }));
 }
 
 function commandApprovalAcceptDecision(

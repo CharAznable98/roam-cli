@@ -35,7 +35,8 @@ export class RunnerEventService {
 
     if (event.type === "sessionStatus") {
       if (
-        event.status === "waiting_approval" &&
+        (event.status === "waiting_approval" ||
+          event.status === "waiting_input") &&
         this.isTerminalSession(event.sessionId)
       ) {
         return;
