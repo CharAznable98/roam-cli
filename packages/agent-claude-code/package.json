@@ -6,11 +6,10 @@
     "access": "public"
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

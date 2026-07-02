@@ -8,13 +8,14 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm -r build",
+    "build:packages": "pnpm --filter @roamcli/shared --filter @roamcli/agent-plugin-sdk --filter @roamcli/agent-codex --filter @roamcli/agent-claude-code build",
     "blackbox:browser": "pnpm build && node scripts/blackbox-browser.mjs",
     "pin-show-more:browser": "pnpm build && node scripts/pin-show-more-browser.mjs",
     "dev": "pnpm --filter @roamcli/server dev",
     "smoke:e2e": "node scripts/smoke-e2e.mjs",
     "test": "vitest run",
-    "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "lint": "pnpm build:packages && pnpm -r lint",
     "format": "prettier --write ."
   },
   "devDependencies": {

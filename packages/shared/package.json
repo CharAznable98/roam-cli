@@ -6,16 +6,15 @@
     "access": "public"
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "exports": {
     "./protocol": {
-      "types": "./src/protocol/index.ts",
+      "types": "./dist/protocol/index.d.ts",
       "import": "./dist/protocol/index.js"
     },
     "./security": {
-      "types": "./src/security/index.ts",
+      "types": "./dist/security/index.d.ts",
       "import": "./dist/security/index.js"
     }
   },
