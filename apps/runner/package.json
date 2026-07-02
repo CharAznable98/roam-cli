@@ -5,6 +5,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "files": [
+    "dist"
+  ],
   "bin": {
     "roam-runner": "./dist/index.js"
   },
@@ -18,8 +21,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@roamcli/agent-plugin-sdk": "workspace:*",
-    "@roamcli/shared": "workspace:*",
+    "@roamcli/agent-plugin-sdk": "workspace:^1.1.0",
+    "@roamcli/shared": "workspace:^1.1.0",
     "ink": "^7.1.0",
     "node-pty": "^1.1.0",
     "react": "^19.2.7",

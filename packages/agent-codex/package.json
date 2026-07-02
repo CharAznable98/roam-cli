@@ -5,8 +5,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,8 +17,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@roamcli/agent-plugin-sdk": "workspace:*",
-    "@roamcli/shared": "workspace:*"
+    "@roamcli/agent-plugin-sdk": "workspace:^1.1.0",
+    "@roamcli/shared": "workspace:^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

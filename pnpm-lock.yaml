@@ -27,10 +27,10 @@ importers:
   apps/runner:
     dependencies:
       '@roamcli/agent-plugin-sdk':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../../packages/agent-plugin-sdk
       '@roamcli/shared':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../../packages/shared
       ink:
         specifier: ^7.1.0
@@ -222,10 +222,10 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@roamcli/agent-plugin-sdk':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../agent-plugin-sdk
       '@roamcli/shared':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../shared
       zod:
         specifier: ^4.0.0
@@ -244,10 +244,10 @@ importers:
   packages/agent-codex:
     dependencies:
       '@roamcli/agent-plugin-sdk':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../agent-plugin-sdk
       '@roamcli/shared':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../shared
     devDependencies:
       '@types/node':
@@ -263,7 +263,7 @@ importers:
   packages/agent-plugin-sdk:
     dependencies:
       '@roamcli/shared':
-        specifier: workspace:*
+        specifier: workspace:^1.1.0
         version: link:../shared
     devDependencies:
       '@types/node':

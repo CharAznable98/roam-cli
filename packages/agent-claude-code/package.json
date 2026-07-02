@@ -5,8 +5,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -17,8 +20,8 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.185",
     "@anthropic-ai/sdk": ">=0.93.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@roamcli/agent-plugin-sdk": "workspace:*",
-    "@roamcli/shared": "workspace:*",
+    "@roamcli/agent-plugin-sdk": "workspace:^1.1.0",
+    "@roamcli/shared": "workspace:^1.1.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

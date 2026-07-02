@@ -213,6 +213,7 @@ let queuedRunnerTokenResponses: Array<Deferred<Response>>;
 let projectPromptPresets: ProjectPromptPreset[];
 let backupProjectPromptPresets: ProjectPromptPreset[];
 let failPromptPresetFetch: boolean;
+let failInstallMetadata: boolean;
 let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
 let sockets: TestWebSocket[];
 
@@ -590,6 +591,7 @@ describe("App", () => {
       },
     ];
     failPromptPresetFetch = false;
+    failInstallMetadata = false;
     queuedPromptPresetOrderResponses = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
@@ -697,6 +699,12 @@ describe("App", () => {
         fetchCalls.push({ url, init });
         const requestUrl = new URL(url);
         if (requestUrl.pathname === "/v1/install/metadata") {
+          if (failInstallMetadata) {
+            return jsonResponse(
+              { message: "install metadata unavailable" },
+              404,
+            );
+          }
           return jsonResponse({ install: installMetadata });
         }
         const authResponse = authMockResponse(requestUrl.pathname, init);
@@ -1506,6 +1514,21 @@ describe("App", () => {
         (call) => new URL(call.url).pathname === "/v1/auth/account",
       ),
     ).toHaveLength(2);
+  });
+
+  it("keeps account security usable when install metadata is unavailable", async () => {
+    failInstallMetadata = true;
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
+
+    expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
+      "runner-token",
+    );
+    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Custom plugin package")).toBeInTheDocument();
   });
 
   it("refreshes account security when entering Account & Security from Settings home", async () => {

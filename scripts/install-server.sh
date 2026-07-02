@@ -98,6 +98,16 @@ if [ -z "$DATA_DIR" ]; then
   DATA_DIR="$INSTALL_DIR/data"
 fi
 
+resolve_path() {
+  case "$1" in
+    /*) printf "%s" "$1" ;;
+    *) printf "%s/%s" "$(pwd -P)" "$1" ;;
+  esac
+}
+
+INSTALL_DIR="$(resolve_path "$INSTALL_DIR")"
+DATA_DIR="$(resolve_path "$DATA_DIR")"
+
 COMPOSE_FILE="$INSTALL_DIR/compose.yml"
 ENV_FILE="$INSTALL_DIR/.env"
 

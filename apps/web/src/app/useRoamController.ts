@@ -461,16 +461,20 @@ export function useRoamController() {
         setAuthView("authenticated");
         const accountRequestId = nextAccountSecurityRequestId();
         try {
-          const [account, install] = await Promise.all([
-            api.fetchAccountSecurity(),
-            api.fetchInstallMetadata(),
-          ]);
+          const account = await api.fetchAccountSecurity();
           if (!cancelled) {
             applyAccountSecurityForRequest(accountRequestId, account);
-            setInstallMetadata(install);
           }
         } catch {
           // The main bootstrap below will surface auth/API failures.
+        }
+        try {
+          const install = await api.fetchInstallMetadata();
+          if (!cancelled) {
+            setInstallMetadata(install);
+          }
+        } catch {
+          // Install metadata only labels runner commands; account security remains usable without it.
         }
         loadRemoteState("bootstrap");
         connectStream();
@@ -586,11 +590,12 @@ export function useRoamController() {
       throw new Error("API client is not ready.");
     }
     const requestId = nextAccountSecurityRequestId();
-    const [account, install] = await Promise.all([
-      api.fetchAccountSecurity(),
-      api.fetchInstallMetadata(),
-    ]);
-    setInstallMetadata(install);
+    const installRequest = api
+      .fetchInstallMetadata()
+      .then((install) => setInstallMetadata(install))
+      .catch(() => undefined);
+    const account = await api.fetchAccountSecurity();
+    void installRequest;
     return applyAccountSecurityForRequest(requestId, account);
   }, [applyAccountSecurityForRequest, nextAccountSecurityRequestId]);
 
