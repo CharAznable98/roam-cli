@@ -35,13 +35,7 @@ const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
-const DEFAULT_APP_SERVER_PROXY_ARGS = [
-  "app-server",
-  "proxy",
-  "-c",
-  "skip_git_repo_check=true",
-];
-const DEFAULT_APP_SERVER_STDIO_ARGS = [
+const DEFAULT_APP_SERVER_ARGS = [
   "app-server",
   "--stdio",
   "-c",
@@ -67,7 +61,7 @@ export const codexAgent: AgentDefinition = {
       args:
         modeFor(KIND, context.env) === "exec-json"
           ? argsFor(KIND, context.env)
-          : appServerArgsFor(KIND, context.env),
+          : appServerArgsFor(),
       parser:
         modeFor(KIND, context.env) === "exec-json"
           ? "codex-json"
@@ -83,12 +77,10 @@ export const codexAgent: AgentDefinition = {
   },
   createSession(context: AgentSessionContext): AgentSession {
     if (modeFor(KIND, context.env) === "app-server") {
-      const args = appServerArgsFor(KIND, context.env);
+      const args = appServerArgsFor();
       return new CodexAppServerSession({
         command: commandFor(KIND, context.env),
         args,
-        ensureAppServerDaemon: shouldEnsureAppServerDaemon(args),
-        transport: appServerTransportFor(args),
         context,
       });
     }
@@ -667,42 +659,8 @@ function argsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
   return [...DEFAULT_ARGS];
 }
 
-function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
-  const override = env[`ROAMCLI_AGENT_${envKey(kind)}_APP_SERVER_ARGS`];
-  if (override !== undefined) {
-    return parseArgs(override);
-  }
-  return defaultAppServerArgs();
-}
-
-function defaultAppServerArgs(): string[] {
-  const defaults =
-    process.platform === "win32"
-      ? DEFAULT_APP_SERVER_STDIO_ARGS
-      : DEFAULT_APP_SERVER_PROXY_ARGS;
-  return [...defaults];
-}
-
-function appServerTransportFor(
-  args: readonly string[],
-): "jsonl" | "websocket" {
-  return args[0] === "app-server" && args[1] === "proxy"
-    ? "websocket"
-    : "jsonl";
-}
-
-function shouldEnsureAppServerDaemon(args: readonly string[]): boolean {
-  return (
-    process.platform !== "win32" &&
-    argsEqual(args, DEFAULT_APP_SERVER_PROXY_ARGS)
-  );
-}
-
-function argsEqual(left: readonly string[], right: readonly string[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
+function appServerArgsFor(): string[] {
+  return [...DEFAULT_APP_SERVER_ARGS];
 }
 
 function modeFor(

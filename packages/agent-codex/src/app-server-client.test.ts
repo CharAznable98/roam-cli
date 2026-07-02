@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it } from "vitest";
@@ -121,48 +120,6 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
-  it("frames JSON-RPC messages over the app-server proxy websocket transport", async () => {
-    const child = fakeRawChild();
-    const client = new CodexAppServerClient({
-      child,
-      transport: "websocket",
-      onNotification: () => undefined,
-      onRequest: () => undefined,
-    });
-
-    const result = client.request("initialize", { experimentalApi: true });
-    const handshake = child.writtenBytes().toString("utf8");
-    const key = handshake.match(/Sec-WebSocket-Key: ([^\r\n]+)/)?.[1];
-    expect(handshake).toContain("GET / HTTP/1.1\r\n");
-    expect(handshake).toContain("Upgrade: websocket\r\n");
-    expect(key).toBeDefined();
-
-    child.stdout.write(
-      [
-        "HTTP/1.1 101 Switching Protocols",
-        "Upgrade: websocket",
-        "Connection: Upgrade",
-        `Sec-WebSocket-Accept: ${webSocketAcceptKey(key ?? "")}`,
-        "",
-        "",
-      ].join("\r\n"),
-    );
-
-    const framedRequest = decodeClientWebSocketTextFrame(
-      child.writtenBytes().subarray(Buffer.byteLength(handshake)),
-    );
-    expect(JSON.parse(framedRequest)).toEqual({
-      id: 1,
-      method: "initialize",
-      params: { experimentalApi: true },
-    });
-
-    child.stdout.write(
-      webSocketTextFrame(JSON.stringify({ id: 1, result: { ok: true } })),
-    );
-
-    await expect(result).resolves.toEqual({ ok: true });
-  });
 });
 
 interface FakeChild extends ChildProcessWithoutNullStreams {
@@ -190,66 +147,4 @@ function fakeChild(): FakeChild {
     stderr,
     writes: () => writes,
   } as unknown as FakeChild;
-}
-
-interface FakeRawChild extends ChildProcessWithoutNullStreams {
-  stdin: PassThrough;
-  stdout: PassThrough;
-  stderr: PassThrough;
-  writtenBytes(): Buffer;
-}
-
-function fakeRawChild(): FakeRawChild {
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const writes: Buffer[] = [];
-  stdin.on("data", (chunk) => {
-    writes.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  });
-  return {
-    stdin,
-    stdout,
-    stderr,
-    writtenBytes: () => Buffer.concat(writes),
-  } as unknown as FakeRawChild;
-}
-
-function webSocketAcceptKey(key: string): string {
-  return createHash("sha1")
-    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
-    .digest("base64");
-}
-
-function webSocketTextFrame(text: string): Buffer {
-  const payload = Buffer.from(text, "utf8");
-  if (payload.length < 126) {
-    return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
-  }
-  const header = Buffer.alloc(4);
-  header[0] = 0x81;
-  header[1] = 126;
-  header.writeUInt16BE(payload.length, 2);
-  return Buffer.concat([header, payload]);
-}
-
-function decodeClientWebSocketTextFrame(frame: Buffer): string {
-  const firstByte = frame[0] ?? 0;
-  const secondByte = frame[1] ?? 0;
-  expect(firstByte & 0x0f).toBe(0x1);
-  expect(secondByte & 0x80).toBe(0x80);
-  let length = secondByte & 0x7f;
-  let offset = 2;
-  if (length === 126) {
-    length = frame.readUInt16BE(offset);
-    offset += 2;
-  }
-  const mask = frame.subarray(offset, offset + 4);
-  offset += 4;
-  const payload = frame.subarray(offset, offset + length);
-  const unmasked = Buffer.alloc(payload.length);
-  for (let index = 0; index < payload.length; index += 1) {
-    unmasked[index] = (payload[index] ?? 0) ^ (mask[index % mask.length] ?? 0);
-  }
-  return unmasked.toString("utf8");
 }

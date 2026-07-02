@@ -4379,8 +4379,8 @@
   }
 
   .chat-header .icon-button {
-    height: 28px;
-    width: 28px;
+    height: 44px;
+    width: 44px;
   }
 
   .notification-card {
@@ -4558,9 +4558,9 @@
   }
 
   .git-action-menu > summary {
-    min-height: 28px;
-    height: 28px;
-    width: 28px;
+    min-height: 44px;
+    height: 44px;
+    width: 44px;
     border-color: var(--border-subtle);
     background: var(--surface-panel-strong);
   }
@@ -4606,8 +4606,8 @@
 
   .composer .icon-button,
   .composer .primary-icon-button {
-    height: 28px;
-    width: 28px;
+    height: 44px;
+    width: 44px;
   }
 
   .message.user .message-body {
@@ -4708,11 +4708,7 @@
   }
 
   .session-actions {
-    min-width: 28px;
-  }
-
-  .message-list {
-    padding: 10px 8px;
+    min-width: 44px;
   }
 
   .message {
@@ -4734,10 +4730,8 @@
   }
 
   .composer {
-    grid-template-columns: minmax(0, 1fr) 28px 28px;
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
     gap: 7px;
-    padding-left: 8px;
-    padding-right: 8px;
   }
 
   .composer textarea {
