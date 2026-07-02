@@ -55,6 +55,17 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("uses stdio app-server by default on Windows", async () => {
+    await withProcessPlatform("win32", async () => {
+      expect(
+        codexAgent.buildCapability({ profile: "trusted", env: {} }),
+      ).toMatchObject({
+        args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
+        parser: "codex-app-server",
+      });
+    });
+  });
+
   it("uses app-server args overrides as a full replacement", () => {
     expect(
       codexAgent.buildCapability({
@@ -807,6 +818,75 @@ describe("codex agent plugin", () => {
     await expect(startPromise).resolves.toBeUndefined();
     expect(events).toContainEqual({ type: "status", status: "stopped" });
     await expect(readFile(proxyMarker, "utf8")).rejects.toThrow();
+  });
+
+  it("does not start the daemon for default Windows app-server args", async () => {
+    const workspace = await mkdirTemp("roam-codex-app-server-win32-stdio-");
+    const script = join(workspace, "app-server");
+    const argsMarker = join(workspace, "args.txt");
+    const daemonMarker = join(workspace, "daemon.txt");
+    await writeFile(
+      script,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        `const argsMarker = ${JSON.stringify(argsMarker)};`,
+        `const daemonMarker = ${JSON.stringify(daemonMarker)};`,
+        "const args = process.argv.slice(2);",
+        "if (args.join(' ') === 'daemon start') {",
+        "  fs.writeFileSync(daemonMarker, 'daemon');",
+        "  process.exit(0);",
+        "}",
+        "fs.writeFileSync(argsMarker, args.join(' '));",
+        "process.stdin.setEncoding('utf8');",
+        "let buffer = '';",
+        "function write(message) { process.stdout.write(`${JSON.stringify(message)}\\n`); }",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer += chunk;",
+        "  const lines = buffer.split(/\\r?\\n/);",
+        "  buffer = lines.pop() ?? '';",
+        "  for (const line of lines) {",
+        "    if (!line) continue;",
+        "    const message = JSON.parse(line);",
+        "    if (message.method === 'initialize') write({ id: message.id, result: {} });",
+        "    if (message.method === 'thread/start') write({ id: message.id, result: { thread: { id: 'thread-1' } } });",
+        "    if (message.method === 'turn/start') {",
+        "      write({ id: message.id, result: { turn: { id: 'turn-1' } } });",
+        "      write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
+        "    }",
+        "  }",
+        "});",
+      ].join("\n"),
+    );
+    await chmod(script, 0o755);
+    const session = await withProcessPlatform("win32", async () =>
+      codexAgent.createSession({
+        profile: "standard",
+        env: {
+          ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        },
+        session: makeSession(workspace),
+        cwd: workspace,
+        prompt: "hello",
+        emit: async () => undefined,
+        requestApproval: async () => ({
+          approvalId: "approval-1",
+          approved: true,
+          signedAt: "2026-06-21T00:00:00.000Z",
+          signature: "sig",
+        }),
+      }),
+    );
+
+    await session.start();
+
+    await vi.waitFor(async () => {
+      await expect(readFile(argsMarker, "utf8")).resolves.toBe(
+        "--stdio -c skip_git_repo_check=true",
+      );
+    });
+    session.close();
+    await expect(readFile(daemonMarker, "utf8")).rejects.toThrow();
   });
 
   it("does not start the daemon for custom app-server proxy args", async () => {
@@ -2727,6 +2807,25 @@ describe("codex agent plugin", () => {
 
 async function mkdirTemp(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  callback: () => Promise<T> | T,
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: descriptor?.enumerable ?? true,
+    value: platform,
+  });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  }
 }
 
 async function writeAppServerScript(

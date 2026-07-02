@@ -35,9 +35,15 @@ const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
-const DEFAULT_APP_SERVER_ARGS = [
+const DEFAULT_APP_SERVER_PROXY_ARGS = [
   "app-server",
   "proxy",
+  "-c",
+  "skip_git_repo_check=true",
+];
+const DEFAULT_APP_SERVER_STDIO_ARGS = [
+  "app-server",
+  "--stdio",
   "-c",
   "skip_git_repo_check=true",
 ];
@@ -81,7 +87,7 @@ export const codexAgent: AgentDefinition = {
       return new CodexAppServerSession({
         command: commandFor(KIND, context.env),
         args,
-        ensureAppServerDaemon: argsEqual(args, DEFAULT_APP_SERVER_ARGS),
+        ensureAppServerDaemon: shouldEnsureAppServerDaemon(args),
         transport: appServerTransportFor(args),
         context,
       });
@@ -666,7 +672,15 @@ function appServerArgsFor(kind: string, env: NodeJS.ProcessEnv): string[] {
   if (override !== undefined) {
     return parseArgs(override);
   }
-  return [...DEFAULT_APP_SERVER_ARGS];
+  return defaultAppServerArgs();
+}
+
+function defaultAppServerArgs(): string[] {
+  const defaults =
+    process.platform === "win32"
+      ? DEFAULT_APP_SERVER_STDIO_ARGS
+      : DEFAULT_APP_SERVER_PROXY_ARGS;
+  return [...defaults];
 }
 
 function appServerTransportFor(
@@ -675,6 +689,13 @@ function appServerTransportFor(
   return args[0] === "app-server" && args[1] === "proxy"
     ? "websocket"
     : "jsonl";
+}
+
+function shouldEnsureAppServerDaemon(args: readonly string[]): boolean {
+  return (
+    process.platform !== "win32" &&
+    argsEqual(args, DEFAULT_APP_SERVER_PROXY_ARGS)
+  );
 }
 
 function argsEqual(left: readonly string[], right: readonly string[]): boolean {
