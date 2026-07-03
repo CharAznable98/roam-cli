@@ -2172,6 +2172,45 @@ function AgentDefaultsSettingsPanel({
       ? options.fastMode.options
       : [];
   }, [options?.fastMode, selectedModelOption]);
+  const booleanFastModeAvailable =
+    options?.fastMode.kind === "boolean" &&
+    (!selectedModelOption || selectedModelOption.supportsFastMode === true);
+  const changeModel = (nextModel: string) => {
+    const nextModelOption = options?.models.find(
+      (option) => option.value === nextModel,
+    );
+    const nextReasoningEffortOptions = nextModelOption
+      ? nextModelOption.reasoningEfforts
+      : (options?.reasoningEfforts ?? []);
+    const nextServiceTierOptions = nextModelOption
+      ? nextModelOption.serviceTiers
+      : options?.fastMode.kind === "serviceTier"
+        ? options.fastMode.options
+        : [];
+
+    setModel(nextModel);
+    if (
+      reasoningEffort &&
+      !nextReasoningEffortOptions.some(
+        (option) => option.value === reasoningEffort,
+      )
+    ) {
+      setReasoningEffort("");
+    }
+    if (
+      fastMode &&
+      options?.fastMode.kind === "boolean" &&
+      nextModelOption?.supportsFastMode === false
+    ) {
+      setFastMode("");
+    }
+    if (
+      serviceTier &&
+      !nextServiceTierOptions.some((option) => option.value === serviceTier)
+    ) {
+      setServiceTier("");
+    }
+  };
 
   useEffect(() => {
     if (optionsState !== "ready") {
@@ -2187,6 +2226,19 @@ function AgentDefaultsSettingsPanel({
     }
     setReasoningEffort("");
   }, [optionsState, reasoningEffort, reasoningEffortOptions]);
+
+  useEffect(() => {
+    if (optionsState !== "ready") {
+      return;
+    }
+    if (!fastMode) {
+      return;
+    }
+    if (booleanFastModeAvailable) {
+      return;
+    }
+    setFastMode("");
+  }, [booleanFastModeAvailable, fastMode, optionsState]);
 
   useEffect(() => {
     if (optionsState !== "ready") {
@@ -2284,9 +2336,17 @@ function AgentDefaultsSettingsPanel({
       await onSaveSetting(selectedRunner.runnerId, agent, {
         config: runtimeConfigFromFields({
           model,
-          reasoningEffort,
-          fastMode,
-          serviceTier,
+          reasoningEffort: reasoningEffortOptions.some(
+            (option) => option.value === reasoningEffort,
+          )
+            ? reasoningEffort
+            : "",
+          fastMode: booleanFastModeAvailable ? fastMode : "",
+          serviceTier: serviceTierOptions.some(
+            (option) => option.value === serviceTier,
+          )
+            ? serviceTier
+            : "",
         }),
       });
       setSaveState("ready");
@@ -2353,7 +2413,7 @@ function AgentDefaultsSettingsPanel({
           allowCustomModel={options?.allowCustomModel === true}
           value={model}
           disabled={optionsState === "loading"}
-          onChange={setModel}
+          onChange={changeModel}
         />
         <label className="field">
           <span>Thinking intensity</span>
@@ -2372,7 +2432,7 @@ function AgentDefaultsSettingsPanel({
             ))}
           </select>
         </label>
-        {options?.fastMode.kind === "boolean" ? (
+        {booleanFastModeAvailable ? (
           <label className="field">
             <span>Fast Mode</span>
             <select
@@ -2391,8 +2451,7 @@ function AgentDefaultsSettingsPanel({
             <select
               value={serviceTier}
               disabled={
-                optionsState === "loading" ||
-                serviceTierOptions.length === 0
+                optionsState === "loading" || serviceTierOptions.length === 0
               }
               onChange={(event) => setServiceTier(event.target.value)}
             >

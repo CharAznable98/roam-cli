@@ -4666,8 +4666,8 @@
 
   .notification-close,
   .modal-header .icon-button {
-    height: 28px;
-    width: 28px;
+    height: 44px;
+    width: 44px;
   }
 
   .mobile-icon-button {
@@ -4906,14 +4906,14 @@
   }
 
   .prompt-composer textarea {
-    padding-right: 42px;
+    padding-right: 56px;
   }
 
   .prompt-preset-trigger {
-    right: 6px;
-    bottom: 6px;
-    height: 28px;
-    width: 28px;
+    right: 4px;
+    bottom: 4px;
+    height: 44px;
+    width: 44px;
   }
 
   .prompt-preset-toolbar {

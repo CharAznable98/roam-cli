@@ -181,6 +181,38 @@ describe("claude code agent plugin", () => {
     expect(sdkQuery.close).toHaveBeenCalled();
   });
 
+  it("times out Claude Code model discovery and closes the SDK query", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-claude-runtime-options-timeout-"),
+    );
+    const close = vi.fn();
+    sdk.query.mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        return;
+      },
+      close,
+      interrupt: vi.fn(),
+      supportedCommands: vi.fn().mockResolvedValue([]),
+      supportedModels: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    });
+
+    const result = await claudeCodeAgent.listRuntimeConfigOptions?.({
+      profile: "standard",
+      env: { ROAMCLI_AGENT_CLAUDE_CODE_MODEL_LIST_TIMEOUT_MS: "20" },
+      workspace,
+      basePath: workspace,
+    });
+
+    expect(result).toMatchObject({
+      models: [],
+      allowCustomModel: true,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Claude Code supportedModels timed out.",
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
   it("bridges standard-profile SDK tool permissions through RoamCli approvals", async () => {
     sdk.query.mockReturnValue(fakeQuery([]));
     const approvals: unknown[] = [];

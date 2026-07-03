@@ -39,6 +39,7 @@ const KIND = "claude-code";
 const LABEL = "Claude Code";
 const PLUGIN_NAME = "@roamcli/agent-claude-code";
 const PLUGIN_VERSION = "1.1.0";
+const DEFAULT_MODEL_LIST_TIMEOUT_MS = 10_000;
 const SUPPORTED_IMAGE_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -592,9 +593,17 @@ async function listClaudeCodeRuntimeConfigOptions(
           error: "This Claude Code SDK does not expose supportedModels().",
         };
       }
-      const models = (await sdkQuery.supportedModels()).flatMap(
-        claudeModelOption,
+      const modelListTimeoutMs = positiveIntegerEnv(
+        context.env.ROAMCLI_AGENT_CLAUDE_CODE_MODEL_LIST_TIMEOUT_MS,
+        DEFAULT_MODEL_LIST_TIMEOUT_MS,
       );
+      const models = (
+        await withTimeout(
+          sdkQuery.supportedModels(),
+          modelListTimeoutMs,
+          "Claude Code supportedModels timed out.",
+        )
+      ).flatMap(claudeModelOption);
       return {
         models,
         allowCustomModel: true,
@@ -656,6 +665,39 @@ function uniqueOptions(
     }
     seen.add(option.value);
     return true;
+  });
+}
+
+function positiveIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      rejectPromise(new Error(message));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolvePromise(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        rejectPromise(error);
+      },
+    );
   });
 }
 

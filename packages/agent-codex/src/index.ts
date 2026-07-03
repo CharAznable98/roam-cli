@@ -506,22 +506,26 @@ export async function listCodexRuntimeConfigOptions(
     },
   });
 
+  const modelListTimeoutMs = positiveIntegerEnv(
+    context.env.ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS,
+    DEFAULT_MODEL_LIST_TIMEOUT_MS,
+  );
   try {
-    await client.request("initialize", {
-      clientInfo: {
-        name: "@roamcli/agent-codex",
-        version: PLUGIN_VERSION,
-      },
-      capabilities: {
-        experimentalApi: true,
-      },
-    });
+    await withTimeout(
+      client.request("initialize", {
+        clientInfo: {
+          name: "@roamcli/agent-codex",
+          version: PLUGIN_VERSION,
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+      }),
+      modelListTimeoutMs,
+      "Codex app-server initialize timed out.",
+    );
     client.notify("initialized");
 
-    const modelListTimeoutMs = positiveIntegerEnv(
-      context.env.ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS,
-      DEFAULT_MODEL_LIST_TIMEOUT_MS,
-    );
     const models: AgentRuntimeModelOption[] = [];
     let cursor: string | undefined;
     do {
@@ -572,7 +576,10 @@ export async function listCodexRuntimeConfigOptions(
   }
 }
 
-function positiveIntegerEnv(value: string | undefined, fallback: number): number {
+function positiveIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
   if (value === undefined || value.trim() === "") {
     return fallback;
   }

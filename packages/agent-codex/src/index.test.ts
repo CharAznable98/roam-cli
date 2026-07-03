@@ -288,11 +288,46 @@ describe("codex agent plugin", () => {
       basePath: workspace,
       env: {
         ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "20",
+        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "500",
       },
     });
 
     expect(result.error).toBe("Codex app-server model/list timed out.");
+    let terminated = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        terminated = await readFile(terminatedPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+      }
+    }
+    expect(terminated).toBe("terminated");
+  });
+
+  it("times out Codex app-server initialization and terminates the child", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-init-timeout-");
+    const terminatedPath = join(workspace, "terminated.txt");
+    await writeAppServerScript(workspace, "runtime-options-init-timeout.mjs", [
+      `const terminatedPath = ${JSON.stringify(terminatedPath)};`,
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(terminatedPath, 'terminated');",
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "500",
+      },
+    });
+
+    expect(result.error).toBe("Codex app-server initialize timed out.");
     let terminated = "";
     for (let attempt = 0; attempt < 50; attempt += 1) {
       try {

@@ -177,6 +177,45 @@ export function NewSessionForm({
       ? runtimeOptions.fastMode.options
       : [];
   }, [runtimeOptions?.fastMode, selectedModelOption]);
+  const booleanFastModeAvailable =
+    runtimeOptions?.fastMode.kind === "boolean" &&
+    (!selectedModelOption || selectedModelOption.supportsFastMode === true);
+  const changeModel = (nextModel: string) => {
+    const nextModelOption = runtimeOptions?.models.find(
+      (option) => option.value === nextModel,
+    );
+    const nextReasoningEffortOptions = nextModelOption
+      ? nextModelOption.reasoningEfforts
+      : (runtimeOptions?.reasoningEfforts ?? []);
+    const nextServiceTierOptions = nextModelOption
+      ? nextModelOption.serviceTiers
+      : runtimeOptions?.fastMode.kind === "serviceTier"
+        ? runtimeOptions.fastMode.options
+        : [];
+
+    setModel(nextModel);
+    if (
+      reasoningEffort &&
+      !nextReasoningEffortOptions.some(
+        (option) => option.value === reasoningEffort,
+      )
+    ) {
+      setReasoningEffort("");
+    }
+    if (
+      fastMode &&
+      runtimeOptions?.fastMode.kind === "boolean" &&
+      nextModelOption?.supportsFastMode === false
+    ) {
+      setFastMode("");
+    }
+    if (
+      serviceTier &&
+      !nextServiceTierOptions.some((option) => option.value === serviceTier)
+    ) {
+      setServiceTier("");
+    }
+  };
 
   useEffect(() => {
     if (runtimeOptionsState !== "ready") {
@@ -192,6 +231,19 @@ export function NewSessionForm({
     }
     setReasoningEffort("");
   }, [reasoningEffort, reasoningEffortOptions, runtimeOptionsState]);
+
+  useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!fastMode) {
+      return;
+    }
+    if (booleanFastModeAvailable) {
+      return;
+    }
+    setFastMode("");
+  }, [booleanFastModeAvailable, fastMode, runtimeOptionsState]);
 
   useEffect(() => {
     if (runtimeOptionsState !== "ready") {
@@ -436,9 +488,17 @@ export function NewSessionForm({
           : {}),
         agentRuntimeConfig: buildRuntimeConfig({
           model,
-          reasoningEffort,
-          fastMode,
-          serviceTier,
+          reasoningEffort: reasoningEffortOptions.some(
+            (option) => option.value === reasoningEffort,
+          )
+            ? reasoningEffort
+            : "",
+          fastMode: booleanFastModeAvailable ? fastMode : "",
+          serviceTier: serviceTierOptions.some(
+            (option) => option.value === serviceTier,
+          )
+            ? serviceTier
+            : "",
         }),
         attachments: await draftImagesToUploads(draftImages),
       });
@@ -513,7 +573,7 @@ export function NewSessionForm({
             allowCustomModel={runtimeOptions?.allowCustomModel === true}
             value={model}
             disabled={runtimeOptionsState === "loading"}
-            onChange={setModel}
+            onChange={changeModel}
           />
           <label className="field">
             <span>Thinking intensity</span>
@@ -533,7 +593,7 @@ export function NewSessionForm({
               ))}
             </select>
           </label>
-          {runtimeOptions?.fastMode.kind === "boolean" ? (
+          {booleanFastModeAvailable ? (
             <label className="field">
               <span>Fast Mode</span>
               <select
