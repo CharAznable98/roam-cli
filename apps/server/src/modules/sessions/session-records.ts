@@ -67,6 +67,11 @@ export function createSessionRecord(input: SessionCreateInput): Session {
       executionMode === "managed_worktree" ? projectDirectory : executionFolder,
     ...(branchName === undefined ? {} : { gitBranchName: branchName }),
     ...(baseRef === undefined ? {} : { gitBaseRef: baseRef }),
+    ...("agentRuntimeConfig" in input &&
+    input.agentRuntimeConfig &&
+    Object.keys(input.agentRuntimeConfig).length > 0
+      ? { agentRuntimeConfig: input.agentRuntimeConfig }
+      : {}),
     createdAt: now,
     updatedAt: now,
   };

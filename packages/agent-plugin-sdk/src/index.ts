@@ -1,4 +1,5 @@
 import type {
+  AgentRuntimeConfigOptionsResult,
   AgentActivityKind,
   AgentSkillSummary,
   RunnerCapability,
@@ -24,6 +25,11 @@ export interface AgentSessionContext extends AgentPluginContext {
 }
 
 export interface AgentSkillListContext extends AgentPluginContext {
+  workspace: string;
+  basePath: string;
+}
+
+export interface AgentRuntimeConfigOptionsContext extends AgentPluginContext {
   workspace: string;
   basePath: string;
 }
@@ -130,6 +136,14 @@ export interface AgentDefinition {
   listSkills?(
     context: AgentSkillListContext,
   ): Promise<readonly AgentSkillSummary[]>;
+  listRuntimeConfigOptions?(
+    context: AgentRuntimeConfigOptionsContext,
+  ): Promise<
+    Omit<
+      AgentRuntimeConfigOptionsResult,
+      "requestId" | "agent" | "basePath" | "queriedAt"
+    > & { queriedAt?: string }
+  >;
 }
 
 export interface AgentPlugin {

@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
@@ -15,6 +22,7 @@ const timeoutMs = Number(process.env.ROAMCLI_BLACKBOX_TIMEOUT_MS ?? 45_000);
 const runNonce = `${process.pid}-${Date.now().toString(36)}`;
 const runnerId =
   process.env.ROAMCLI_BLACKBOX_RUNNER_ID ?? `blackbox-${runNonce}`;
+const runtimeRunnerId = `${runnerId}-runtime`;
 const children = [];
 const tempDirs = [];
 const tempPaths = [];
@@ -141,6 +149,18 @@ async function run() {
     });
     await runAccountSecurityJourney(browser, {
       name: "mobile",
+      viewport: { width: 390, height: 844 },
+      mobile: true,
+    });
+    await ensureRuntimeOptionsRunnerOnline();
+    pass(`runtime options runner online: ${runtimeRunnerId}`);
+    await runRuntimeConfigJourney(browser, {
+      name: "runtime-desktop",
+      viewport: { width: 1440, height: 960 },
+      mobile: false,
+    });
+    await runRuntimeConfigJourney(browser, {
+      name: "runtime-mobile",
       viewport: { width: 390, height: 844 },
       mobile: true,
     });
@@ -1116,6 +1136,165 @@ async function runNoRunnerJourney(browser) {
   }
 }
 
+async function runRuntimeConfigJourney(browser, scenario) {
+  const context = await browser.newContext({ viewport: scenario.viewport });
+  await addAuthCookie(context);
+  const page = await context.newPage();
+  const projectDir = resolve(
+    workspace,
+    `.roamcli-runtime-config-${scenario.name}-${runNonce}`,
+  );
+  const projectName = `Runtime Config ${scenario.name} ${runNonce}`;
+  const sessionTitle = `Runtime ${scenario.name}`;
+  const prompt = `runtime config prompt ${scenario.name} ${Date.now()}`;
+  await mkdir(projectDir, { recursive: true });
+  tempDirs.push(projectDir);
+  const consoleErrors = [];
+  const browserHttpErrors = [];
+  const browserHttpErrorReads = new Set();
+  page.on("console", (message) => {
+    const text = message.text();
+    if (message.type() === "error" && !isExpectedBrowserCancellation(text)) {
+      consoleErrors.push(text);
+    }
+  });
+  page.on("pageerror", (error) => {
+    if (!isExpectedBrowserCancellation(error.message)) {
+      consoleErrors.push(error.message);
+    }
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) {
+      return;
+    }
+    const read = response
+      .text()
+      .then((body) => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}: ${body.slice(0, 500)}`,
+        );
+      })
+      .catch(() => {
+        browserHttpErrors.push(
+          `${response.status()} ${response.statusText()} ${response.request().method()} ${response.url()}`,
+        );
+      })
+      .finally(() => browserHttpErrorReads.delete(read));
+    browserHttpErrorReads.add(read);
+  });
+
+  try {
+    const project = await requestJson("/v1/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: projectName,
+        runnerId: runtimeRunnerId,
+        directory: projectDir,
+      }),
+    }).then((payload) => payload.project);
+    if (!project?.id) {
+      throw new Error("runtime config project was not created");
+    }
+
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    if (scenario.mobile) {
+      await expectText(page, "Online");
+    } else {
+      await expectText(page, "stream connected");
+    }
+
+    await saveRuntimeDefaultsFromSettings(page, scenario);
+    const setting = await waitFor(async () => {
+      const payload = await requestJson(
+        "/v1/runners/agent-runtime-config-settings",
+      );
+      return payload.settings?.find(
+        (item) => item.runnerId === runtimeRunnerId && item.agent === "codex",
+      );
+    }, `${scenario.name} runtime defaults to persist`);
+    if (
+      setting.config?.model !== "blackbox-codex-fast" ||
+      setting.config?.reasoningEffort !== "high" ||
+      setting.config?.serviceTier !== "flex"
+    ) {
+      throw new Error(
+        `unexpected persisted runtime defaults: ${JSON.stringify(setting)}`,
+      );
+    }
+
+    await page.keyboard.press("Escape");
+    await waitFor(
+      async () =>
+        (await page.getByRole("region", { name: "Settings" }).count()) === 0,
+      `${scenario.name} settings drawer to close`,
+    );
+    await createSessionFromUi(page, scenario, {
+      title: sessionTitle,
+      prompt,
+      executionMode: "direct",
+      projectId: project.id,
+      projectName: project.name,
+      runnerId: runtimeRunnerId,
+      runtimeConfig: {
+        model: "blackbox-codex-fast",
+        reasoningEffort: "high",
+        serviceTier: "flex",
+      },
+    });
+    const session = await waitFor(async () => {
+      const payload = await requestJson("/v1/sessions");
+      return payload.sessions?.find(
+        (item) =>
+          item.runnerId === runtimeRunnerId &&
+          item.projectId === project.id &&
+          item.title === sessionTitle,
+      );
+    }, `${scenario.name} runtime session to persist`);
+    if (
+      session.agentRuntimeConfig?.model !== "blackbox-codex-fast" ||
+      session.agentRuntimeConfig?.reasoningEffort !== "high" ||
+      session.agentRuntimeConfig?.serviceTier !== "flex"
+    ) {
+      throw new Error(
+        `unexpected runtime config snapshot: ${JSON.stringify(session)}`,
+      );
+    }
+    await expectText(page, prompt);
+    await waitForSessionStatus(session.id, "completed");
+    await captureScreenshot(page, scenario, "runtime-config-session");
+    await Promise.allSettled(browserHttpErrorReads);
+    if (consoleErrors.length > 0 || browserHttpErrors.length > 0) {
+      throw new Error(
+        formatBrowserErrors(scenario, consoleErrors, browserHttpErrors),
+      );
+    }
+    pass(`${scenario.name}: runtime config defaults and session snapshot`);
+  } finally {
+    await context.close();
+  }
+}
+
+async function saveRuntimeDefaultsFromSettings(page, scenario) {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("region", { name: "Settings" });
+  await settings.waitFor();
+  await settings.getByRole("button", { name: "Agent Defaults" }).click();
+  await fieldSelect(settings, "Runner").selectOption(runtimeRunnerId);
+  await fieldSelect(settings, "Agent").selectOption("codex");
+  await waitFor(
+    async () =>
+      fieldSelect(settings, "Model")
+        .isEnabled()
+        .catch(() => false),
+    `${scenario.name} runtime model options to load`,
+  );
+  await fieldSelect(settings, "Model").selectOption("blackbox-codex-fast");
+  await fieldSelect(settings, "Thinking intensity").selectOption("high");
+  await fieldSelect(settings, "Fast Mode").selectOption("flex");
+  await captureScreenshot(page, scenario, "runtime-config-settings");
+  await settings.getByRole("button", { name: "Save defaults" }).click();
+}
+
 async function runAccountSecurityJourney(browser, scenario) {
   await authenticate({});
   const context = await browser.newContext({ viewport: scenario.viewport });
@@ -1426,10 +1605,7 @@ async function createProjectFromUi(page, scenario, values) {
 }
 
 async function selectProjectRunnerFromUi(dialog) {
-  await dialog
-    .locator("label.field:visible", { hasText: "Runner" })
-    .locator("select")
-    .selectOption(runnerId);
+  await fieldSelect(dialog, "Runner").selectOption(runnerId);
 }
 
 async function fillProjectDirectoryFromUi(page, dialog, values) {
@@ -1453,8 +1629,10 @@ async function fillProjectDirectoryFromUi(page, dialog, values) {
 }
 
 async function createSessionFromUi(page, scenario, values) {
+  const expectedRunnerId = values.runnerId ?? runnerId;
   if (scenario.mobile) {
     const switcher = await openMobileSessionSwitcher(page);
+    await switcher.locator("select").first().selectOption(values.projectId);
     await switcher
       .getByRole("button", {
         name: `New session in selected project ${values.projectName}`,
@@ -1465,13 +1643,11 @@ async function createSessionFromUi(page, scenario, values) {
     });
     await dialog.waitFor();
     await waitForNewSessionFormReady(dialog);
+    await assertNewSessionAdvancedConfig(dialog, values);
     await dialog
       .locator('input[placeholder="Optional task name"]')
       .fill(values.title);
-    await dialog
-      .locator("label.field:visible", { hasText: "Execution" })
-      .locator("select")
-      .selectOption(values.executionMode);
+    await fieldSelect(dialog, "Execution").selectOption(values.executionMode);
     await dialog
       .locator('textarea[placeholder="Describe the work"]')
       .fill(values.prompt);
@@ -1481,7 +1657,7 @@ async function createSessionFromUi(page, scenario, values) {
       const payload = await requestJson("/v1/sessions");
       return payload.sessions?.find(
         (session) =>
-          session.runnerId === runnerId &&
+          session.runnerId === expectedRunnerId &&
           session.projectId === values.projectId &&
           session.title === values.title,
       );
@@ -1507,17 +1683,12 @@ async function createSessionFromUi(page, scenario, values) {
   });
   await dialog.waitFor();
   await waitForNewSessionFormReady(dialog);
+  await assertNewSessionAdvancedConfig(dialog, values);
   await dialog
     .locator('input[placeholder="Optional task name"]')
     .fill(values.title);
-  await dialog
-    .locator("label.field:visible", { hasText: "Agent" })
-    .locator("select")
-    .selectOption("codex");
-  await dialog
-    .locator("label.field:visible", { hasText: "Execution" })
-    .locator("select")
-    .selectOption(values.executionMode);
+  await fieldSelect(dialog, "Agent").selectOption("codex");
+  await fieldSelect(dialog, "Execution").selectOption(values.executionMode);
   await dialog
     .locator('textarea[placeholder="Describe the work"]')
     .fill(values.prompt);
@@ -1527,11 +1698,43 @@ async function createSessionFromUi(page, scenario, values) {
     const payload = await requestJson("/v1/sessions");
     return payload.sessions?.find(
       (session) =>
-        session.runnerId === runnerId &&
+        session.runnerId === expectedRunnerId &&
         session.projectId === values.projectId &&
         session.title === values.title,
     );
   }, `session ${values.title} to be persisted`);
+}
+
+async function assertNewSessionAdvancedConfig(dialog, values) {
+  if ((await dialog.getByLabel("Project directory").count()) !== 0) {
+    throw new Error("new session form still exposes Project directory");
+  }
+  const advanced = dialog.locator("details.advanced-session-config");
+  await advanced.waitFor();
+  const modelField = field(dialog, "Model");
+  if ((await modelField.count()) !== 0) {
+    throw new Error("advanced runtime fields are expanded by default");
+  }
+  await advanced.locator("summary").click();
+  await modelField.waitFor();
+  if (!values.runtimeConfig) {
+    return;
+  }
+  await waitFor(
+    async () =>
+      modelField
+        .locator("select")
+        .isEnabled()
+        .catch(() => false),
+    "runtime model field to load options",
+  );
+  await modelField.locator("select").selectOption(values.runtimeConfig.model);
+  await fieldSelect(dialog, "Thinking intensity").selectOption(
+    values.runtimeConfig.reasoningEffort,
+  );
+  await fieldSelect(dialog, "Fast Mode").selectOption(
+    values.runtimeConfig.serviceTier,
+  );
 }
 
 async function waitForNewSessionFormReady(dialog) {
@@ -1543,12 +1746,20 @@ async function waitForNewSessionFormReady(dialog) {
     if (loading) {
       return false;
     }
-    return dialog
-      .locator("label.field:visible", { hasText: "Execution" })
-      .locator("select")
+    return fieldSelect(dialog, "Execution")
       .isVisible()
       .catch(() => false);
   }, "new session form to finish loading");
+}
+
+function field(scope, label) {
+  return scope.locator(
+    `label.field:visible:has(> span:text-is("${label.replaceAll('"', '\\"')}"))`,
+  );
+}
+
+function fieldSelect(scope, label) {
+  return field(scope, label).locator("select");
 }
 
 async function assertMobileConnectionSheet(page) {
@@ -1791,6 +2002,57 @@ async function ensureRunnerOnline() {
   }, `runner ${runnerId} to come online`);
 }
 
+async function ensureRuntimeOptionsRunnerOnline() {
+  const existing = await requestJson("/v1/runners");
+  const requested = existing.runners?.find(
+    (runner) => runner.runnerId === runtimeRunnerId,
+  );
+  if (requested !== undefined) {
+    return requested;
+  }
+
+  const wsUrl = new URL("/v1/runner", baseUrl);
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  const fakeCodex = await createFakeCodexAppServerCommand();
+  startChild(
+    "runtime-runner",
+    "pnpm",
+    [
+      "--filter",
+      "@roamcli/runner",
+      "dev",
+      "--server",
+      wsUrl.toString(),
+      "--token",
+      runnerToken,
+      "--runner-id",
+      runtimeRunnerId,
+      "--workspace",
+      workspace,
+      "--profile",
+      "trusted",
+      "--agent-plugin",
+      "@roamcli/agent-codex",
+    ],
+    {
+      ROAM_RUNNER_SERVER: wsUrl.toString(),
+      ROAM_RUNNER_TOKEN: runnerToken,
+      ROAM_RUNNER_ID: runtimeRunnerId,
+      ROAM_RUNNER_WORKSPACE: workspace,
+      ROAM_RUNNER_PROFILE: "trusted",
+      ROAMCLI_AGENT_CODEX_MODE: "app-server",
+      ROAMCLI_AGENT_CODEX_COMMAND: fakeCodex,
+    },
+  );
+
+  return waitFor(async () => {
+    const payload = await requestJson("/v1/runners");
+    return payload.runners?.find(
+      (runner) => runner.runnerId === runtimeRunnerId,
+    );
+  }, `runner ${runtimeRunnerId} to come online`);
+}
+
 async function createFakeCodexCommand() {
   const dir = await mkdtemp(resolve(tmpdir(), "roamcli-blackbox-codex-"));
   tempDirs.push(dir);
@@ -1829,6 +2091,71 @@ async function createFakeCodexCommand() {
     ].join("\n"),
     "utf8",
   );
+  return script;
+}
+
+async function createFakeCodexAppServerCommand() {
+  const dir = await mkdtemp(resolve(tmpdir(), "roamcli-blackbox-app-server-"));
+  tempDirs.push(dir);
+  const script = resolve(dir, "fake-codex-app-server");
+  await writeFile(
+    script,
+    [
+      "#!/usr/bin/env node",
+      "let buffer = '';",
+      "let threadId = `runtime-thread-${process.pid}`;",
+      "let turn = 0;",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  buffer += chunk;",
+      "  const lines = buffer.split(/\\r?\\n/);",
+      "  buffer = lines.pop() ?? '';",
+      "  for (const line of lines) handleLine(line);",
+      "});",
+      "process.stdin.on('end', () => process.exit(0));",
+      "function handleLine(line) {",
+      "  if (!line.trim()) return;",
+      "  const message = JSON.parse(line);",
+      "  if (!('id' in message)) return;",
+      "  if (message.method === 'initialize') {",
+      "    respond(message.id, {});",
+      "    return;",
+      "  }",
+      "  if (message.method === 'model/list') {",
+      "    respond(message.id, { data: [{ model: 'blackbox-codex-fast', displayName: 'Blackbox Codex Fast', description: 'Blackbox runtime config model', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }], defaultReasoningEffort: 'medium', serviceTiers: [{ id: 'default', name: 'Standard' }, { id: 'flex', name: 'Fast' }], defaultServiceTier: 'default' }] });",
+      "    return;",
+      "  }",
+      "  if (message.method === 'thread/start') {",
+      "    respond(message.id, { thread: { id: threadId } });",
+      "    notify('thread/started', { thread: { id: threadId } });",
+      "    return;",
+      "  }",
+      "  if (message.method === 'turn/start' || message.method === 'turn/steer') {",
+      "    turn += 1;",
+      "    const turnId = `runtime-turn-${turn}`;",
+      "    respond(message.id, { turn: { id: turnId } });",
+      "    setTimeout(() => completeTurn(turnId, message.params), 10);",
+      "    return;",
+      "  }",
+      "  respond(message.id, {});",
+      "}",
+      "function completeTurn(turnId, params) {",
+      "  const itemId = `runtime-item-${turn}`;",
+      "  const text = `runtime app-server completed ${params?.model ?? ''} ${params?.effort ?? ''} ${params?.serviceTier ?? ''}`.trim();",
+      "  notify('item/completed', { threadId, turnId, item: { id: itemId, type: 'agentMessage', text } });",
+      "  notify('turn/completed', { threadId, turn: { id: turnId, status: 'completed' } });",
+      "  notify('thread/status/changed', { threadId, status: { type: 'idle' } });",
+      "}",
+      "function respond(id, result) {",
+      "  process.stdout.write(`${JSON.stringify({ id, result })}\\n`);",
+      "}",
+      "function notify(method, params) {",
+      "  process.stdout.write(`${JSON.stringify({ method, params })}\\n`);",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  await chmod(script, 0o755);
   return script;
 }
 

@@ -97,6 +97,9 @@ export class SessionManager {
       case "listAgentSkills":
         await this.#listAgentSkills(command);
         return;
+      case "listAgentRuntimeConfigOptions":
+        await this.#listAgentRuntimeConfigOptions(command);
+        return;
       case "searchWorkspacePaths":
         await this.#workspaceCommands.searchWorkspacePaths(command);
         return;
@@ -368,6 +371,63 @@ export class SessionManager {
         requestId: command.requestId,
         message,
         code: "SKILL_LIST_ERROR",
+      });
+    }
+  }
+
+  async #listAgentRuntimeConfigOptions(
+    command: Extract<RunnerCommand, { type: "listAgentRuntimeConfigOptions" }>,
+  ): Promise<void> {
+    const agent = this.#agents.get(command.agent);
+    if (!agent?.definition.listRuntimeConfigOptions) {
+      await this.#emit({
+        type: "agentRuntimeConfigOptionsResult",
+        result: {
+          requestId: command.requestId,
+          agent: command.agent,
+          basePath: command.basePath,
+          queriedAt: new Date().toISOString(),
+          models: [],
+          allowCustomModel: false,
+          reasoningEfforts: [],
+          fastMode: { kind: "unsupported", supported: false },
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await agent.definition.listRuntimeConfigOptions({
+        profile: this.#profile,
+        env: process.env,
+        workspace: this.#workspace,
+        basePath: command.basePath,
+      });
+      await this.#emit({
+        type: "agentRuntimeConfigOptionsResult",
+        result: {
+          ...result,
+          requestId: command.requestId,
+          agent: command.agent,
+          basePath: command.basePath,
+          queriedAt: result.queriedAt ?? new Date().toISOString(),
+        },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#emit({
+        type: "agentRuntimeConfigOptionsResult",
+        result: {
+          requestId: command.requestId,
+          agent: command.agent,
+          basePath: command.basePath,
+          queriedAt: new Date().toISOString(),
+          models: [],
+          allowCustomModel: false,
+          reasoningEfforts: [],
+          fastMode: { kind: "unsupported", supported: false },
+          error: message,
+        },
       });
     }
   }

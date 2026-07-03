@@ -159,6 +159,74 @@ describe("codex agent plugin", () => {
     ]);
   });
 
+  it("passes stored runtime config to codex exec-json invocations", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-config-");
+    const script = join(workspace, "argv-codex.mjs");
+    await writeFile(
+      script,
+      [
+        "const args = process.argv.slice(2);",
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: JSON.stringify(args),",
+        "  },",
+        "}));",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: {
+        ...makeSession(workspace),
+        agentRuntimeConfig: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          serviceTier: "flex",
+        },
+      },
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content ===
+              JSON.stringify([
+                "--model",
+                "gpt-5.4-codex",
+                "-c",
+                'model_reasoning_effort="high"',
+                "-c",
+                'service_tier="flex"',
+                "hello",
+              ]),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("extracts complete assistant messages from codex json events", () => {
     const parser = new CodexJsonParser();
 

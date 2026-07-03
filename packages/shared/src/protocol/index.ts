@@ -6,6 +6,82 @@ export type AgentKind = z.infer<typeof AgentKindSchema>;
 export const RunnerProfileSchema = z.enum(["strict", "standard", "trusted"]);
 export type RunnerProfile = z.infer<typeof RunnerProfileSchema>;
 
+export const AgentRuntimeConfigSchema = z.object({
+  model: z.string().min(1).optional(),
+  reasoningEffort: z.string().min(1).optional(),
+  fastMode: z.boolean().optional(),
+  serviceTier: z.string().min(1).optional(),
+});
+export type AgentRuntimeConfig = z.infer<typeof AgentRuntimeConfigSchema>;
+
+export const AgentRuntimeConfigOptionSchema = z.object({
+  value: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+});
+export type AgentRuntimeConfigOption = z.infer<
+  typeof AgentRuntimeConfigOptionSchema
+>;
+
+export const AgentRuntimeModelOptionSchema =
+  AgentRuntimeConfigOptionSchema.extend({
+    reasoningEfforts: z.array(AgentRuntimeConfigOptionSchema).default([]),
+    defaultReasoningEffort: z.string().min(1).optional(),
+    serviceTiers: z.array(AgentRuntimeConfigOptionSchema).default([]),
+    defaultServiceTier: z.string().min(1).optional(),
+    supportsFastMode: z.boolean().optional(),
+  });
+export type AgentRuntimeModelOption = z.infer<
+  typeof AgentRuntimeModelOptionSchema
+>;
+
+export const AgentRuntimeFastModeOptionsSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("unsupported"),
+    supported: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("boolean"),
+    supported: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("serviceTier"),
+    supported: z.literal(true),
+    options: z.array(AgentRuntimeConfigOptionSchema),
+  }),
+]);
+export type AgentRuntimeFastModeOptions = z.infer<
+  typeof AgentRuntimeFastModeOptionsSchema
+>;
+
+export const AgentRuntimeConfigOptionsResultSchema = z.object({
+  requestId: z.string().min(1),
+  agent: AgentKindSchema,
+  basePath: z.string().min(1),
+  queriedAt: z.string().datetime(),
+  models: z.array(AgentRuntimeModelOptionSchema).default([]),
+  allowCustomModel: z.boolean().default(false),
+  reasoningEfforts: z.array(AgentRuntimeConfigOptionSchema).default([]),
+  fastMode: AgentRuntimeFastModeOptionsSchema.default({
+    kind: "unsupported",
+    supported: false,
+  }),
+  error: z.string().optional(),
+});
+export type AgentRuntimeConfigOptionsResult = z.infer<
+  typeof AgentRuntimeConfigOptionsResultSchema
+>;
+
+export const RunnerAgentRuntimeConfigSettingSchema = z.object({
+  runnerId: z.string().min(1),
+  agent: AgentKindSchema,
+  config: AgentRuntimeConfigSchema,
+  updatedAt: z.string().datetime(),
+});
+export type RunnerAgentRuntimeConfigSetting = z.infer<
+  typeof RunnerAgentRuntimeConfigSettingSchema
+>;
+
 export const DEFAULT_MAX_IMAGES_PER_TURN = 5;
 export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -400,6 +476,7 @@ export const SessionSchema = z.object({
   agentThreadId: z.string().min(1).optional(),
   pinnedAt: z.string().datetime().optional(),
   archivedAt: z.string().datetime().optional(),
+  agentRuntimeConfig: AgentRuntimeConfigSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -607,6 +684,22 @@ export const AgentSkillListResultSchema = z.object({
 });
 export type AgentSkillListResult = z.infer<typeof AgentSkillListResultSchema>;
 
+export const ApiAgentRuntimeConfigOptionsSchema = z.object({
+  runnerId: z.string().min(1),
+  agent: AgentKindSchema,
+  basePath: z.string().min(1),
+});
+export type ApiAgentRuntimeConfigOptions = z.infer<
+  typeof ApiAgentRuntimeConfigOptionsSchema
+>;
+
+export const ApiRunnerAgentRuntimeConfigSettingSchema = z.object({
+  config: AgentRuntimeConfigSchema.default({}),
+});
+export type ApiRunnerAgentRuntimeConfigSetting = z.infer<
+  typeof ApiRunnerAgentRuntimeConfigSettingSchema
+>;
+
 export const PathSearchEntrySchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
@@ -795,6 +888,12 @@ export const RunnerCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("listAgentSkills"),
+    requestId: z.string().min(1),
+    agent: AgentKindSchema,
+    basePath: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("listAgentRuntimeConfigOptions"),
     requestId: z.string().min(1),
     agent: AgentKindSchema,
     basePath: z.string().min(1),
@@ -1092,6 +1191,10 @@ export const RunnerEventSchema = z.discriminatedUnion("type", [
     result: AgentSkillListResultSchema,
   }),
   z.object({
+    type: z.literal("agentRuntimeConfigOptionsResult"),
+    result: AgentRuntimeConfigOptionsResultSchema,
+  }),
+  z.object({
     type: z.literal("pathSearchResult"),
     result: PathSearchResultSchema,
   }),
@@ -1179,6 +1282,7 @@ export const ApiCreateSessionSchema = z.object({
   gitBranchName: z.string().min(1).optional(),
   prompt: z.string().min(1),
   title: z.string().min(1).optional(),
+  agentRuntimeConfig: AgentRuntimeConfigSchema.optional(),
   attachments: z.array(ImageAttachmentUploadSchema).default([]),
 });
 export type ApiCreateSession = z.infer<typeof ApiCreateSessionSchema>;

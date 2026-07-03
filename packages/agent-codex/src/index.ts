@@ -15,6 +15,7 @@ import type {
   AgentParseResult,
   AgentPlugin,
   AgentPluginContext,
+  AgentRuntimeConfigOptionsContext,
   AgentSession,
   AgentSessionContext,
   AssistantOutputEvent,
@@ -22,11 +23,15 @@ import type {
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
 import {
+  type AgentRuntimeConfig,
+  type AgentRuntimeConfigOption,
+  type AgentRuntimeModelOption,
   type AgentSkillSummary,
   DEFAULT_MAX_IMAGE_BYTES,
   DEFAULT_MAX_IMAGES_PER_TURN,
   type RunnerCapability,
 } from "@roamcli/shared/protocol";
+import { CodexAppServerClient } from "./app-server-client.js";
 import { CodexAppServerSession } from "./app-server-session.js";
 import { parseJsonObject, parseTextDirectives } from "./directives.js";
 
@@ -91,6 +96,7 @@ export const codexAgent: AgentDefinition = {
         context.prompt,
         context.resumeThreadId,
         imagePaths(context),
+        codexRuntimeConfigArgs(context.session.agentRuntimeConfig),
       ),
       cwd: context.cwd,
       env: context.env,
@@ -100,6 +106,9 @@ export const codexAgent: AgentDefinition = {
   },
   async listSkills(context) {
     return listCodexSkills(context.workspace, context.basePath, context.env);
+  },
+  async listRuntimeConfigOptions(context) {
+    return listCodexRuntimeConfigOptions(context);
   },
 };
 
@@ -389,10 +398,11 @@ export function codexJsonArgs(
   prompt: string,
   resumeThreadId: string | undefined,
   images: readonly string[] = [],
+  runtimeArgs: readonly string[] = [],
 ): string[] {
   const imageArgs = images.flatMap((image) => ["--image", image]);
   if (resumeThreadId === undefined) {
-    return [...baseArgs, prompt, ...imageArgs];
+    return [...baseArgs, ...runtimeArgs, prompt, ...imageArgs];
   }
 
   const [subcommand, ...rest] = baseArgs;
@@ -400,9 +410,30 @@ export function codexJsonArgs(
     subcommand ?? "exec",
     "resume",
     ...withoutExecOnlyArgs(rest),
+    ...runtimeArgs,
     resumeThreadId,
     prompt,
     ...imageArgs,
+  ];
+}
+
+function codexRuntimeConfigArgs(
+  config: AgentRuntimeConfig | undefined,
+): string[] {
+  if (!config) {
+    return [];
+  }
+  return [
+    ...(config.model ? ["--model", config.model] : []),
+    ...(config.reasoningEffort
+      ? [
+          "-c",
+          `model_reasoning_effort=${JSON.stringify(config.reasoningEffort)}`,
+        ]
+      : []),
+    ...(config.serviceTier
+      ? ["-c", `service_tier=${JSON.stringify(config.serviceTier)}`]
+      : []),
   ];
 }
 
@@ -410,6 +441,193 @@ function imagePaths(context: AgentSessionContext): string[] {
   return (context.attachments ?? [])
     .filter((attachment) => attachment.kind === "image")
     .map((attachment) => attachment.localPath);
+}
+
+export async function listCodexRuntimeConfigOptions(
+  context: AgentRuntimeConfigOptionsContext,
+): Promise<{
+  models: AgentRuntimeModelOption[];
+  allowCustomModel: boolean;
+  reasoningEfforts: AgentRuntimeConfigOption[];
+  fastMode:
+    | { kind: "unsupported"; supported: false }
+    | {
+        kind: "serviceTier";
+        supported: true;
+        options: AgentRuntimeConfigOption[];
+      };
+  error?: string;
+}> {
+  if (modeFor(KIND, context.env) !== "app-server") {
+    return {
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Codex runtime options require app-server mode.",
+    };
+  }
+
+  const child = spawnChild(commandFor(KIND, context.env), appServerArgsFor(), {
+    cwd: context.basePath,
+    env: context.env,
+    stdio: "pipe",
+  });
+  let client: CodexAppServerClient | undefined;
+  const closeWithError = (error: Error) => client?.close(error);
+  child.on("error", closeWithError);
+  child.on("close", (code, signal) => {
+    closeWithError(
+      new Error(
+        `Codex app-server exited while listing models: code=${code ?? "null"} signal=${signal ?? "null"}`,
+      ),
+    );
+  });
+  client = new CodexAppServerClient({
+    child,
+    onNotification: () => undefined,
+    onRequest: (request) => {
+      client?.reject(
+        request.id,
+        "RoamCli does not handle app-server requests during model listing.",
+      );
+    },
+  });
+
+  try {
+    await client.request("initialize", {
+      clientInfo: {
+        name: "@roamcli/agent-codex",
+        version: PLUGIN_VERSION,
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+    client.notify("initialized");
+
+    const models: AgentRuntimeModelOption[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = await client.request("model/list", {
+        includeHidden: false,
+        ...(cursor ? { cursor } : {}),
+      });
+      const response = isRecord(result) ? result : {};
+      const data = Array.isArray(response.data) ? response.data : [];
+      models.push(...data.flatMap((item) => codexModelOption(item)));
+      cursor =
+        typeof response.nextCursor === "string" &&
+        response.nextCursor.length > 0
+          ? response.nextCursor
+          : undefined;
+    } while (cursor);
+
+    const reasoningEfforts = uniqueOptions(
+      models.flatMap((model) => model.reasoningEfforts),
+    );
+    const serviceTiers = uniqueOptions(
+      models.flatMap((model) => model.serviceTiers),
+    );
+    return {
+      models,
+      allowCustomModel: false,
+      reasoningEfforts,
+      fastMode:
+        serviceTiers.length > 0
+          ? { kind: "serviceTier", supported: true, options: serviceTiers }
+          : { kind: "unsupported", supported: false },
+    };
+  } catch (error: unknown) {
+    return {
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    client?.close();
+    child.kill("SIGTERM");
+  }
+}
+
+function codexModelOption(value: unknown): AgentRuntimeModelOption[] {
+  if (!isRecord(value) || typeof value.model !== "string") {
+    return [];
+  }
+  const reasoningEfforts = Array.isArray(value.supportedReasoningEfforts)
+    ? value.supportedReasoningEfforts.flatMap((item) =>
+        codexReasoningEffortOption(item),
+      )
+    : [];
+  const serviceTiers = Array.isArray(value.serviceTiers)
+    ? value.serviceTiers.flatMap((item) => codexOption(item))
+    : [];
+  return [
+    {
+      value: value.model,
+      label:
+        typeof value.displayName === "string" ? value.displayName : value.model,
+      ...(typeof value.description === "string"
+        ? { description: value.description }
+        : {}),
+      reasoningEfforts,
+      ...(typeof value.defaultReasoningEffort === "string"
+        ? { defaultReasoningEffort: value.defaultReasoningEffort }
+        : {}),
+      serviceTiers,
+      ...(typeof value.defaultServiceTier === "string"
+        ? { defaultServiceTier: value.defaultServiceTier }
+        : {}),
+      supportsFastMode: serviceTiers.length > 0,
+    },
+  ];
+}
+
+function codexReasoningEffortOption(
+  value: unknown,
+): AgentRuntimeConfigOption[] {
+  if (!isRecord(value) || typeof value.reasoningEffort !== "string") {
+    return [];
+  }
+  return [
+    {
+      value: value.reasoningEffort,
+      label: value.reasoningEffort,
+      ...(typeof value.description === "string"
+        ? { description: value.description }
+        : {}),
+    },
+  ];
+}
+
+function codexOption(value: unknown): AgentRuntimeConfigOption[] {
+  if (!isRecord(value) || typeof value.id !== "string") {
+    return [];
+  }
+  return [
+    {
+      value: value.id,
+      label: typeof value.name === "string" ? value.name : value.id,
+      ...(typeof value.description === "string"
+        ? { description: value.description }
+        : {}),
+    },
+  ];
+}
+
+function uniqueOptions(
+  options: readonly AgentRuntimeConfigOption[],
+): AgentRuntimeConfigOption[] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    if (seen.has(option.value)) {
+      return false;
+    }
+    seen.add(option.value);
+    return true;
+  });
 }
 
 export async function listCodexSkills(

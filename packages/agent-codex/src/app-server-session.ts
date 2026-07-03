@@ -259,6 +259,7 @@ export class CodexAppServerSession implements AgentSession {
         ...(this.#context.resumeThreadId
           ? { threadId: this.#context.resumeThreadId }
           : threadStartParamsForProfile(this.#context.profile)),
+        ...runtimeThreadParams(this.#context.session.agentRuntimeConfig),
         cwd: this.#context.cwd,
       },
     )) as ThreadResponse;
@@ -324,6 +325,7 @@ export class CodexAppServerSession implements AgentSession {
       cwd: this.#context.cwd,
       input: userInputFor(input),
       ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
+      ...runtimeTurnParams(this.#context.session.agentRuntimeConfig),
     })) as TurnStartResponse;
     this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
     this.#sendPendingInterrupt();
@@ -1095,6 +1097,31 @@ function turnStartParamsForProfile(
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
     },
+  };
+}
+
+function runtimeThreadParams(
+  config: AgentSessionContext["session"]["agentRuntimeConfig"],
+): { model?: string; serviceTier?: string } {
+  if (!config) {
+    return {};
+  }
+  return {
+    ...(config.model ? { model: config.model } : {}),
+    ...(config.serviceTier ? { serviceTier: config.serviceTier } : {}),
+  };
+}
+
+function runtimeTurnParams(
+  config: AgentSessionContext["session"]["agentRuntimeConfig"],
+): { model?: string; serviceTier?: string; effort?: string } {
+  if (!config) {
+    return {};
+  }
+  return {
+    ...(config.model ? { model: config.model } : {}),
+    ...(config.serviceTier ? { serviceTier: config.serviceTier } : {}),
+    ...(config.reasoningEffort ? { effort: config.reasoningEffort } : {}),
   };
 }
 

@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AgentActivity,
   AgentActivityKind,
+  AgentRuntimeConfig,
+  RunnerAgentRuntimeConfigSetting,
   AgentKind,
   Approval,
   ApprovalKind,
@@ -22,6 +24,7 @@ import type {
   Session,
   SessionStatus,
 } from "@roamcli/shared/protocol";
+import { AgentRuntimeConfigSchema } from "@roamcli/shared/protocol";
 
 interface ProjectRow {
   id: string;
@@ -63,6 +66,7 @@ interface SessionRow {
   pinned_at: string | null;
   archived_at: string | null;
   archived_by_project_id: string | null;
+  agent_runtime_config_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -133,6 +137,13 @@ interface RunnerRow {
   registration_json: string;
   online: number;
   last_seen_at: string;
+}
+
+interface RunnerAgentRuntimeConfigSettingRow {
+  runner_id: string;
+  agent: AgentKind;
+  config_json: string;
+  updated_at: string;
 }
 
 interface GitJobRow {
@@ -531,8 +542,8 @@ export class ServerStore {
   createSession(session: Session): Session {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, git_branch_name, git_base_ref, git_base_sha, worktree_deleted_at, agent_thread_id, pinned_at, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, title, project_id, runner_id, agent, status, execution_mode, execution_folder, cwd, git_branch_name, git_base_ref, git_base_sha, worktree_deleted_at, agent_thread_id, pinned_at, archived_at, agent_runtime_config_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -551,6 +562,10 @@ export class ServerStore {
         session.agentThreadId ?? null,
         session.pinnedAt ?? null,
         session.archivedAt ?? null,
+        session.agentRuntimeConfig &&
+          Object.keys(session.agentRuntimeConfig).length > 0
+          ? JSON.stringify(session.agentRuntimeConfig)
+          : null,
         session.createdAt,
         session.updatedAt,
       );
@@ -995,6 +1010,58 @@ export class ServerStore {
     );
   }
 
+  listRunnerAgentRuntimeConfigSettings(): RunnerAgentRuntimeConfigSetting[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM runner_agent_runtime_config_settings ORDER BY runner_id ASC, agent ASC",
+      )
+      .all() as unknown as RunnerAgentRuntimeConfigSettingRow[];
+    return rows.map(toRunnerAgentRuntimeConfigSetting);
+  }
+
+  getRunnerAgentRuntimeConfigSetting(
+    runnerId: string,
+    agent: AgentKind,
+  ): RunnerAgentRuntimeConfigSetting | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM runner_agent_runtime_config_settings WHERE runner_id = ? AND agent = ?",
+      )
+      .get(runnerId, agent) as RunnerAgentRuntimeConfigSettingRow | undefined;
+    return row ? toRunnerAgentRuntimeConfigSetting(row) : undefined;
+  }
+
+  setRunnerAgentRuntimeConfigSetting(
+    runnerId: string,
+    agent: AgentKind,
+    config: AgentRuntimeConfig,
+    updatedAt: string,
+  ): RunnerAgentRuntimeConfigSetting | undefined {
+    if (Object.keys(config).length === 0) {
+      this.db
+        .prepare(
+          "DELETE FROM runner_agent_runtime_config_settings WHERE runner_id = ? AND agent = ?",
+        )
+        .run(runnerId, agent);
+      return undefined;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO runner_agent_runtime_config_settings (runner_id, agent, config_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(runner_id, agent) DO UPDATE SET
+           config_json = excluded.config_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run(runnerId, agent, JSON.stringify(config), updatedAt);
+    return {
+      runnerId,
+      agent,
+      config,
+      updatedAt,
+    };
+  }
+
   upsertGitJob(job: GitJob): GitJob {
     this.db
       .prepare(
@@ -1153,6 +1220,14 @@ export class ServerStore {
         last_seen_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS runner_agent_runtime_config_settings (
+        runner_id TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(runner_id, agent)
+      );
+
       CREATE TABLE IF NOT EXISTS git_jobs (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -1207,6 +1282,7 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "pinned_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
+    this.addColumnIfMissing("sessions", "agent_runtime_config_json", "TEXT");
     this.addColumnIfMissing("projects", "pinned_at", "TEXT");
     this.addColumnIfMissing(
       "messages",
@@ -1279,9 +1355,35 @@ function toSession(row: SessionRow): Session {
     ...(row.agent_thread_id ? { agentThreadId: row.agent_thread_id } : {}),
     ...(row.pinned_at ? { pinnedAt: row.pinned_at } : {}),
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    ...(row.agent_runtime_config_json
+      ? {
+          agentRuntimeConfig: parseAgentRuntimeConfig(
+            row.agent_runtime_config_json,
+          ),
+        }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function toRunnerAgentRuntimeConfigSetting(
+  row: RunnerAgentRuntimeConfigSettingRow,
+): RunnerAgentRuntimeConfigSetting {
+  return {
+    runnerId: row.runner_id,
+    agent: row.agent,
+    config: parseAgentRuntimeConfig(row.config_json),
+    updatedAt: row.updated_at,
+  };
+}
+
+function parseAgentRuntimeConfig(value: string): AgentRuntimeConfig {
+  try {
+    return AgentRuntimeConfigSchema.parse(JSON.parse(value));
+  } catch {
+    return {};
+  }
 }
 
 function toMessage(row: MessageRow): Message {

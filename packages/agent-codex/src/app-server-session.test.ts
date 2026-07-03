@@ -368,10 +368,36 @@ describe("CodexAppServerSession", () => {
     ).toBe(true);
     expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
+
+  it("passes stored runtime config to thread and turn requests", async () => {
+    const { child } = await launchSession({
+      session: {
+        id: "session-1",
+        agent: "codex",
+        agentRuntimeConfig: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          serviceTier: "flex",
+        },
+      } as Session,
+    });
+
+    const threadStart = child.requests("thread/start")[0];
+    expect(threadStart?.params).toMatchObject({
+      model: "gpt-5.4-codex",
+      serviceTier: "flex",
+    });
+    const turnStart = child.requests("turn/start")[0];
+    expect(turnStart?.params).toMatchObject({
+      model: "gpt-5.4-codex",
+      serviceTier: "flex",
+      effort: "high",
+    });
+  });
 });
 
 async function launchSession(
-  options: { turnStartResult?: unknown } = {},
+  options: { session?: Session; turnStartResult?: unknown } = {},
 ): Promise<{
   child: FakeChild;
   events: AgentRuntimeEvent[];
@@ -381,7 +407,7 @@ async function launchSession(
   const session = new CodexAppServerSession({
     command: "codex",
     args: ["app-server"],
-    context: makeContext(events),
+    context: makeContext(events, options.session),
   });
 
   const start = session.start();
@@ -402,11 +428,14 @@ async function launchSession(
   return { child, events, session };
 }
 
-function makeContext(events: AgentRuntimeEvent[]): AgentSessionContext {
+function makeContext(
+  events: AgentRuntimeEvent[],
+  session: Session = { id: "session-1", agent: "codex" } as Session,
+): AgentSessionContext {
   return {
     profile: "standard",
     env: {},
-    session: { id: "session-1", agent: "codex" } as Session,
+    session,
     cwd: "/workspace",
     prompt: "hello",
     emit: async (event) => {

@@ -58,6 +58,48 @@ declare module "@roamcli/shared/protocol" {
   export const DEFAULT_MAX_IMAGES_PER_TURN: number;
   export const DEFAULT_MAX_IMAGE_BYTES: number;
 
+  export interface AgentRuntimeConfig {
+    model?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    serviceTier?: string;
+  }
+
+  export interface AgentRuntimeConfigOption {
+    value: string;
+    label: string;
+    description?: string;
+  }
+
+  export interface AgentRuntimeModelOption extends AgentRuntimeConfigOption {
+    reasoningEfforts: AgentRuntimeConfigOption[];
+    defaultReasoningEffort?: string;
+    serviceTiers: AgentRuntimeConfigOption[];
+    defaultServiceTier?: string;
+    supportsFastMode?: boolean;
+  }
+
+  export type AgentRuntimeFastModeOptions =
+    | { kind: "unsupported"; supported: false }
+    | { kind: "boolean"; supported: true }
+    | {
+        kind: "serviceTier";
+        supported: true;
+        options: AgentRuntimeConfigOption[];
+      };
+
+  export interface AgentRuntimeConfigOptionsResult {
+    requestId: string;
+    agent: AgentKind;
+    basePath: string;
+    queriedAt: string;
+    models: AgentRuntimeModelOption[];
+    allowCustomModel: boolean;
+    reasoningEfforts: AgentRuntimeConfigOption[];
+    fastMode: AgentRuntimeFastModeOptions;
+    error?: string;
+  }
+
   export interface RunnerCapability {
     kind: AgentKind;
     label: string;
@@ -107,6 +149,7 @@ declare module "@roamcli/shared/protocol" {
     worktreeDeletedAt?: string;
     agentThreadId?: string;
     archivedAt?: string;
+    agentRuntimeConfig?: AgentRuntimeConfig;
     createdAt: string;
     updatedAt: string;
   }
@@ -242,6 +285,12 @@ declare module "@roamcli/shared/protocol" {
     queriedAt: string;
     skills: AgentSkillSummary[];
   }
+
+  export type ApiAgentRuntimeConfigOptions = {
+    runnerId: string;
+    agent: AgentKind;
+    basePath: string;
+  };
 
   export interface PathSearchEntry {
     path: string;
@@ -486,6 +535,12 @@ declare module "@roamcli/shared/protocol" {
         basePath: string;
       }
     | {
+        type: "listAgentRuntimeConfigOptions";
+        requestId: string;
+        agent: AgentKind;
+        basePath: string;
+      }
+    | {
         type: "searchWorkspacePaths";
         requestId: string;
         basePath: string;
@@ -604,6 +659,10 @@ declare module "@roamcli/shared/protocol" {
     | { type: "sessionThread"; sessionId: string; threadId: string }
     | { type: "sessionStatusCheckResult"; result: SessionStatusCheckResult }
     | { type: "agentSkillListResult"; result: AgentSkillListResult }
+    | {
+        type: "agentRuntimeConfigOptionsResult";
+        result: AgentRuntimeConfigOptionsResult;
+      }
     | { type: "pathSearchResult"; result: PathSearchResult }
     | {
         type: "assistantOutput";

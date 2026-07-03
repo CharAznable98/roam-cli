@@ -91,6 +91,96 @@ describe("claude code agent plugin", () => {
     );
   });
 
+  it("uses stored runtime config for SDK model, effort, and Fast Mode", async () => {
+    sdk.query.mockReturnValue(fakeQuery([]));
+    const context = makeContext({
+      env: {
+        ROAMCLI_AGENT_CLAUDE_CODE_MODEL: "claude-env-model",
+      },
+      session: {
+        ...makeSession(),
+        agentRuntimeConfig: {
+          model: "claude-opus-runtime",
+          reasoningEffort: "xhigh",
+          fastMode: true,
+        },
+      },
+    });
+
+    await claudeCodeAgent.createSession(context).start();
+
+    expect(sdk.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          model: "claude-opus-runtime",
+          effort: "xhigh",
+          settings: { fastMode: true },
+        }),
+      }),
+    );
+  });
+
+  it("lists runtime config options from Claude Code supportedModels metadata", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-claude-runtime-options-"),
+    );
+    const sdkQuery = fakeQuery(
+      [],
+      [],
+      [
+        {
+          value: "claude-opus-4-6",
+          displayName: "Claude Opus 4.6",
+          description: "Frontier Claude model.",
+          supportedEffortLevels: ["low", "high"],
+          supportsFastMode: true,
+        },
+      ],
+    );
+    sdk.query.mockReturnValue(sdkQuery);
+    const realWorkspace = await realpath(workspace);
+
+    const result = await claudeCodeAgent.listRuntimeConfigOptions?.({
+      profile: "standard",
+      env: {},
+      workspace,
+      basePath: workspace,
+    });
+
+    expect(sdk.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: " ",
+        options: expect.objectContaining({
+          cwd: realWorkspace,
+          permissionMode: "plan",
+          maxTurns: 1,
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      models: [
+        {
+          value: "claude-opus-4-6",
+          label: "Claude Opus 4.6",
+          description: "Frontier Claude model.",
+          reasoningEfforts: [
+            { value: "low", label: "low" },
+            { value: "high", label: "high" },
+          ],
+          serviceTiers: [],
+          supportsFastMode: true,
+        },
+      ],
+      allowCustomModel: true,
+      reasoningEfforts: [
+        { value: "low", label: "low" },
+        { value: "high", label: "high" },
+      ],
+      fastMode: { kind: "boolean", supported: true },
+    });
+    expect(sdkQuery.close).toHaveBeenCalled();
+  });
+
   it("bridges standard-profile SDK tool permissions through RoamCli approvals", async () => {
     sdk.query.mockReturnValue(fakeQuery([]));
     const approvals: unknown[] = [];
@@ -175,9 +265,7 @@ describe("claude code agent plugin", () => {
       });
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -303,9 +391,7 @@ describe("claude code agent plugin", () => {
         content: "Follow-up response",
         mode: "replace",
         done: true,
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-2$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-2$/),
       });
       expect(
         events.filter(
@@ -437,9 +523,7 @@ describe("claude code agent plugin", () => {
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "Claude response",
         mode: "append",
         done: false,
@@ -449,23 +533,17 @@ describe("claude code agent plugin", () => {
         status: "completed",
       });
     });
-    expect(
-      events.filter((event) => event.type === "assistantOutput"),
-    ).toEqual([
+    expect(events.filter((event) => event.type === "assistantOutput")).toEqual([
       {
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "Claude response",
         mode: "append",
         done: false,
       },
       {
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -497,10 +575,7 @@ describe("claude code agent plugin", () => {
       .createSession(
         makeContext({
           emit: async (event) => {
-            if (
-              event.type === "assistantOutput" &&
-              event.mode === "append"
-            ) {
+            if (event.type === "assistantOutput" && event.mode === "append") {
               throw new Error("sink down");
             }
             events.push(event);
@@ -512,9 +587,7 @@ describe("claude code agent plugin", () => {
     await vi.waitFor(() => {
       expect(events).toContainEqual({
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "Claude response",
         mode: "replace",
         done: true,
@@ -605,23 +678,17 @@ describe("claude code agent plugin", () => {
       ).toHaveLength(2);
     });
 
-    expect(
-      events.filter((event) => event.type === "assistantOutput"),
-    ).toEqual([
+    expect(events.filter((event) => event.type === "assistantOutput")).toEqual([
       {
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-1$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-1$/),
         content: "First",
         mode: "replace",
         done: true,
       },
       {
         type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^claude-run-[^:]+:claude-output-2$/,
-        ),
+        outputId: expect.stringMatching(/^claude-run-[^:]+:claude-output-2$/),
         content: "Second",
         mode: "replace",
         done: true,
@@ -738,6 +805,7 @@ describe("claude code agent plugin", () => {
 function fakeQuery(
   messages: readonly unknown[],
   supportedCommands: readonly { name: string; description?: string }[] = [],
+  supportedModels?: readonly unknown[],
 ) {
   return {
     async *[Symbol.asyncIterator]() {
@@ -748,6 +816,9 @@ function fakeQuery(
     close: vi.fn(),
     interrupt: vi.fn(),
     supportedCommands: vi.fn().mockResolvedValue(supportedCommands),
+    ...(supportedModels === undefined
+      ? {}
+      : { supportedModels: vi.fn().mockResolvedValue(supportedModels) }),
   };
 }
 

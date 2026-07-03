@@ -28,14 +28,21 @@ import {
   PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
   PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
   type AccountSecurityState,
+  type AgentKind,
+  type AgentRuntimeConfig,
+  type AgentRuntimeConfigOptionsResult,
+  type AgentRuntimeModelOption,
   type ApiChangePassword,
   type ApiCreateProjectPromptPreset,
+  type ApiRunnerAgentRuntimeConfigSetting,
   type ApiUpdateProjectPromptPreset,
   type FileNode,
   type GitJob,
   type InstallMetadata,
   type Project,
   type ProjectPromptPreset,
+  type RunnerAgentRuntimeConfigSetting,
+  type RunnerRegistration,
   type Session,
   type SessionStatus,
 } from "@roamcli/shared/protocol";
@@ -61,6 +68,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Wifi,
   WifiOff,
@@ -125,6 +133,7 @@ type SettingsView =
   | "account"
   | "change-password"
   | "web-push"
+  | "agent-defaults"
   | "project";
 type AccountRefreshState = "idle" | "loading" | "ready" | "error";
 
@@ -187,6 +196,10 @@ export function AppShell({ controller }: AppShellProps) {
     useState<AccountRefreshState>("idle");
   const [settingsAccountRefreshKey, setSettingsAccountRefreshKey] = useState(0);
   const settingsAccountRefreshPendingRef = useRef(false);
+  const [
+    runnerAgentRuntimeConfigSettings,
+    setRunnerAgentRuntimeConfigSettings,
+  ] = useState<RunnerAgentRuntimeConfigSetting[]>([]);
   const [archiveDialog, setArchiveDialog] =
     useState<SessionArchiveDialogState | null>(null);
   const [runnerCommandPlugins, setRunnerCommandPlugins] = useState<string[]>(
@@ -256,6 +269,9 @@ export function AppShell({ controller }: AppShellProps) {
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
     listAgentSkills,
+    listAgentRuntimeConfigOptions,
+    fetchRunnerAgentRuntimeConfigSettings,
+    saveRunnerAgentRuntimeConfigSetting,
     searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,
@@ -275,6 +291,48 @@ export function AppShell({ controller }: AppShellProps) {
   useEffect(() => {
     gitJobsRef.current = state.gitJobs;
   }, [state.gitJobs]);
+  useEffect(() => {
+    setRunnerAgentRuntimeConfigSettings(state.runnerAgentRuntimeConfigSettings);
+  }, [state.runnerAgentRuntimeConfigSettings]);
+  const agentRuntimeConfigDefaultsByRunner = useMemo(
+    () =>
+      runnerAgentRuntimeConfigSettings.reduce<
+        Record<string, Record<string, AgentRuntimeConfig>>
+      >((defaults, setting) => {
+        defaults[setting.runnerId] = {
+          ...(defaults[setting.runnerId] ?? {}),
+          [setting.agent]: setting.config,
+        };
+        return defaults;
+      }, {}),
+    [runnerAgentRuntimeConfigSettings],
+  );
+  const refreshRunnerAgentRuntimeConfigSettings = useCallback(async () => {
+    const settings = await fetchRunnerAgentRuntimeConfigSettings();
+    setRunnerAgentRuntimeConfigSettings(settings);
+    return settings;
+  }, [fetchRunnerAgentRuntimeConfigSettings]);
+  const saveAgentRuntimeConfigSetting = useCallback(
+    async (
+      runnerId: string,
+      agent: AgentKind,
+      input: ApiRunnerAgentRuntimeConfigSetting,
+    ) => {
+      const setting = await saveRunnerAgentRuntimeConfigSetting(
+        runnerId,
+        agent,
+        input,
+      );
+      setRunnerAgentRuntimeConfigSettings((current) => {
+        const rest = current.filter(
+          (item) => item.runnerId !== runnerId || item.agent !== agent,
+        );
+        return setting ? [...rest, setting] : rest;
+      });
+      return setting;
+    },
+    [saveRunnerAgentRuntimeConfigSetting],
+  );
   const requestSettingsAccountRefresh = useCallback(() => {
     if (settingsAccountRefreshPendingRef.current) {
       return;
@@ -857,6 +915,10 @@ export function AppShell({ controller }: AppShellProps) {
                 onManagePromptPresets={openPromptPresetManager}
                 onFetchGitStatus={fetchGitStatus}
                 onFetchGitBranches={fetchGitBranches}
+                onListAgentRuntimeConfigOptions={listAgentRuntimeConfigOptions}
+                agentRuntimeConfigDefaultsByRunner={
+                  agentRuntimeConfigDefaultsByRunner
+                }
               />
               {selectedSession ? (
                 <ChatPanel
@@ -1134,6 +1196,14 @@ export function AppShell({ controller }: AppShellProps) {
                     }}
                     onFetchGitStatus={fetchGitStatus}
                     onFetchGitBranches={fetchGitBranches}
+                    onListAgentRuntimeConfigOptions={
+                      listAgentRuntimeConfigOptions
+                    }
+                    agentRuntimeConfigDefaults={
+                      agentRuntimeConfigDefaultsByRunner[
+                        selectedRunner.runnerId
+                      ] ?? {}
+                    }
                     onCreate={(values) =>
                       createSession(selectedProject.id, values)
                     }
@@ -1208,6 +1278,19 @@ export function AppShell({ controller }: AppShellProps) {
                   }
                   onDeletePromptPreset={removePromptPreset}
                   onReorderPromptPresets={reorderPromptPresets}
+                  runners={state.runners}
+                  runnerAgentRuntimeConfigSettings={
+                    runnerAgentRuntimeConfigSettings
+                  }
+                  onRefreshRunnerAgentRuntimeConfigSettings={
+                    refreshRunnerAgentRuntimeConfigSettings
+                  }
+                  onListAgentRuntimeConfigOptions={
+                    listAgentRuntimeConfigOptions
+                  }
+                  onSaveAgentRuntimeConfigSetting={
+                    saveAgentRuntimeConfigSetting
+                  }
                   onLogout={logoutFromAccountSecurity}
                   onLogoutAll={logoutAllFromAccountSecurity}
                   onChangePassword={changePasswordFromAccountSecurity}
@@ -1824,6 +1907,11 @@ function SettingsPanel({
   onEditPromptPreset,
   onDeletePromptPreset,
   onReorderPromptPresets,
+  runners,
+  runnerAgentRuntimeConfigSettings,
+  onRefreshRunnerAgentRuntimeConfigSettings,
+  onListAgentRuntimeConfigOptions,
+  onSaveAgentRuntimeConfigSetting,
   onLogout,
   onLogoutAll,
   onChangePassword,
@@ -1858,6 +1946,21 @@ function SettingsPanel({
     projectId: string,
     presetIds: string[],
   ) => Promise<void>;
+  runners: RunnerRegistration[];
+  runnerAgentRuntimeConfigSettings: RunnerAgentRuntimeConfigSetting[];
+  onRefreshRunnerAgentRuntimeConfigSettings: () => Promise<
+    RunnerAgentRuntimeConfigSetting[]
+  >;
+  onListAgentRuntimeConfigOptions: (input: {
+    runnerId: string;
+    agent: AgentKind;
+    basePath: string;
+  }) => Promise<AgentRuntimeConfigOptionsResult>;
+  onSaveAgentRuntimeConfigSetting: (
+    runnerId: string,
+    agent: AgentKind,
+    input: ApiRunnerAgentRuntimeConfigSetting,
+  ) => Promise<RunnerAgentRuntimeConfigSetting | null>;
   onLogout: () => Promise<void>;
   onLogoutAll: () => Promise<void>;
   onChangePassword: (input: ApiChangePassword) => Promise<void>;
@@ -1884,6 +1987,12 @@ function SettingsPanel({
               title="Project Settings"
               description="Project prompt presets and reusable instructions"
               onClick={() => onViewChange("project")}
+            />
+            <SettingsListItem
+              icon={<SlidersHorizontal size={18} />}
+              title="Agent Defaults"
+              description="Runner-level model, thinking, and Fast Mode defaults"
+              onClick={() => onViewChange("agent-defaults")}
             />
             <SettingsListItem
               icon={<Bell size={18} />}
@@ -1974,8 +2083,385 @@ function SettingsPanel({
           />
         </>
       ) : null}
+
+      {view === "agent-defaults" ? (
+        <>
+          <SettingsDetailHeader
+            title="Agent Defaults"
+            onBack={() => onViewChange("home")}
+          />
+          <AgentDefaultsSettingsPanel
+            runners={runners}
+            settings={runnerAgentRuntimeConfigSettings}
+            onRefreshSettings={onRefreshRunnerAgentRuntimeConfigSettings}
+            onListAgentRuntimeConfigOptions={onListAgentRuntimeConfigOptions}
+            onSaveSetting={onSaveAgentRuntimeConfigSetting}
+          />
+        </>
+      ) : null}
     </section>
   );
+}
+
+function AgentDefaultsSettingsPanel({
+  runners,
+  settings,
+  onRefreshSettings,
+  onListAgentRuntimeConfigOptions,
+  onSaveSetting,
+}: {
+  runners: RunnerRegistration[];
+  settings: RunnerAgentRuntimeConfigSetting[];
+  onRefreshSettings: () => Promise<RunnerAgentRuntimeConfigSetting[]>;
+  onListAgentRuntimeConfigOptions: (input: {
+    runnerId: string;
+    agent: AgentKind;
+    basePath: string;
+  }) => Promise<AgentRuntimeConfigOptionsResult>;
+  onSaveSetting: (
+    runnerId: string,
+    agent: AgentKind,
+    input: ApiRunnerAgentRuntimeConfigSetting,
+  ) => Promise<RunnerAgentRuntimeConfigSetting | null>;
+}) {
+  const [runnerId, setRunnerId] = useState(runners[0]?.runnerId ?? "");
+  const selectedRunner = runners.find((runner) => runner.runnerId === runnerId);
+  const [agent, setAgent] = useState<AgentKind>(
+    selectedRunner?.capabilities[0]?.kind ?? "",
+  );
+  const [options, setOptions] = useState<AgentRuntimeConfigOptionsResult>();
+  const [optionsState, setOptionsState] = useState<AsyncState>("idle");
+  const [optionsError, setOptionsError] = useState("");
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
+  const [fastMode, setFastMode] = useState("");
+  const [serviceTier, setServiceTier] = useState("");
+  const [saveState, setSaveState] = useState<AsyncState>("idle");
+  const [saveError, setSaveError] = useState("");
+  const setting = settings.find(
+    (item) => item.runnerId === runnerId && item.agent === agent,
+  );
+  const selectedModelOption = options?.models.find(
+    (option) => option.value === model,
+  );
+  const reasoningEffortOptions =
+    selectedModelOption && selectedModelOption.reasoningEfforts.length > 0
+      ? selectedModelOption.reasoningEfforts
+      : (options?.reasoningEfforts ?? []);
+
+  useEffect(() => {
+    if (!selectedRunner) {
+      setRunnerId(runners[0]?.runnerId ?? "");
+      return;
+    }
+    if (
+      !selectedRunner.capabilities.some(
+        (capability) => capability.kind === agent,
+      )
+    ) {
+      setAgent(selectedRunner.capabilities[0]?.kind ?? "");
+    }
+  }, [agent, runners, selectedRunner]);
+
+  useEffect(() => {
+    const config = setting?.config ?? {};
+    setModel(config.model ?? "");
+    setReasoningEffort(config.reasoningEffort ?? "");
+    setFastMode(
+      config.fastMode === undefined ? "" : config.fastMode ? "on" : "off",
+    );
+    setServiceTier(config.serviceTier ?? "");
+    setSaveError("");
+  }, [
+    setting?.config.fastMode,
+    setting?.config.model,
+    setting?.config.reasoningEffort,
+    setting?.config.serviceTier,
+  ]);
+
+  useEffect(() => {
+    if (!selectedRunner || !agent) {
+      setOptions(undefined);
+      setOptionsState("idle");
+      setOptionsError("");
+      return;
+    }
+    let cancelled = false;
+    setOptions(undefined);
+    setOptionsState("loading");
+    setOptionsError("");
+    void onListAgentRuntimeConfigOptions({
+      runnerId: selectedRunner.runnerId,
+      agent,
+      basePath: selectedRunner.workspaceRoot,
+    })
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        setOptions(result);
+        setOptionsState(result.error ? "error" : "ready");
+        setOptionsError(result.error ?? "");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setOptions(undefined);
+        setOptionsState("error");
+        setOptionsError(errorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, onListAgentRuntimeConfigOptions, selectedRunner]);
+
+  const refresh = async () => {
+    await onRefreshSettings();
+  };
+
+  const save = async () => {
+    if (!selectedRunner || !agent) {
+      return;
+    }
+    setSaveState("loading");
+    setSaveError("");
+    try {
+      await onSaveSetting(selectedRunner.runnerId, agent, {
+        config: runtimeConfigFromFields({
+          model,
+          reasoningEffort,
+          fastMode,
+          serviceTier,
+        }),
+      });
+      setSaveState("ready");
+    } catch (error: unknown) {
+      setSaveState("error");
+      setSaveError(errorMessage(error));
+    }
+  };
+
+  if (runners.length === 0) {
+    return (
+      <div className="settings-detail agent-defaults-panel">
+        <div className="empty-state compact">No online runners.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-detail agent-defaults-panel">
+      <section className="settings-section">
+        <label className="field">
+          <span>Runner</span>
+          <select
+            value={runnerId}
+            onChange={(event) => setRunnerId(event.target.value)}
+          >
+            {runners.map((runner) => (
+              <option key={runner.runnerId} value={runner.runnerId}>
+                {runner.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Agent</span>
+          <select
+            value={agent}
+            onChange={(event) => setAgent(event.target.value as AgentKind)}
+          >
+            {(selectedRunner?.capabilities ?? []).map((capability) => (
+              <option key={capability.kind} value={capability.kind}>
+                {capability.kind}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="settings-section agent-default-fields">
+        <div className="settings-section-heading">
+          <h3>Defaults</h3>
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        </div>
+        <AgentRuntimeModelField
+          agent={agent}
+          models={options?.models ?? []}
+          allowCustomModel={options?.allowCustomModel === true}
+          value={model}
+          disabled={optionsState === "loading"}
+          onChange={setModel}
+        />
+        <label className="field">
+          <span>Thinking intensity</span>
+          <select
+            value={reasoningEffort}
+            disabled={
+              optionsState === "loading" || reasoningEffortOptions.length === 0
+            }
+            onChange={(event) => setReasoningEffort(event.target.value)}
+          >
+            <option value="">Use agent default</option>
+            {reasoningEffortOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {options?.fastMode.kind === "boolean" ? (
+          <label className="field">
+            <span>Fast Mode</span>
+            <select
+              value={fastMode}
+              disabled={optionsState === "loading"}
+              onChange={(event) => setFastMode(event.target.value)}
+            >
+              <option value="">Use agent default</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+        ) : options?.fastMode.kind === "serviceTier" ? (
+          <label className="field">
+            <span>Fast Mode</span>
+            <select
+              value={serviceTier}
+              disabled={
+                optionsState === "loading" ||
+                options.fastMode.options.length === 0
+              }
+              onChange={(event) => setServiceTier(event.target.value)}
+            >
+              <option value="">Use agent default</option>
+              {options.fastMode.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {optionsState === "loading" ? (
+          <p className="field-help">Loading agent options...</p>
+        ) : optionsState === "error" ? (
+          <p className="field-help warning">{optionsError}</p>
+        ) : null}
+        {saveError ? (
+          <p className="form-error" role="alert">
+            {saveError}
+          </p>
+        ) : null}
+        <div className="form-actions">
+          <button
+            className="small-button"
+            type="button"
+            onClick={() => void save()}
+            disabled={saveState === "loading"}
+          >
+            {saveState === "loading" ? "Saving..." : "Save defaults"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AgentRuntimeModelField({
+  agent,
+  models,
+  allowCustomModel,
+  value,
+  disabled,
+  onChange,
+}: {
+  agent: AgentKind;
+  models: AgentRuntimeModelOption[];
+  allowCustomModel: boolean;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const listId = `settings-agent-model-options-${agent.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  if (allowCustomModel) {
+    return (
+      <label className="field">
+        <span>Model</span>
+        <input
+          value={value}
+          list={models.length > 0 ? listId : undefined}
+          disabled={disabled}
+          placeholder="Use agent default"
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {models.length > 0 ? (
+          <datalist id={listId}>
+            {models.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </datalist>
+        ) : null}
+      </label>
+    );
+  }
+
+  const hasSelectedOption = models.some((option) => option.value === value);
+  return (
+    <label className="field">
+      <span>Model</span>
+      <select
+        value={value}
+        disabled={disabled || (models.length === 0 && !value)}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">Use agent default</option>
+        {value && !hasSelectedOption ? (
+          <option value={value}>{value}</option>
+        ) : null}
+        {models.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function runtimeConfigFromFields(input: {
+  model: string;
+  reasoningEffort: string;
+  fastMode: string;
+  serviceTier: string;
+}): AgentRuntimeConfig {
+  const config: AgentRuntimeConfig = {};
+  if (input.model.trim()) {
+    config.model = input.model.trim();
+  }
+  if (input.reasoningEffort.trim()) {
+    config.reasoningEffort = input.reasoningEffort.trim();
+  }
+  if (input.fastMode === "on") {
+    config.fastMode = true;
+  }
+  if (input.fastMode === "off") {
+    config.fastMode = false;
+  }
+  if (input.serviceTier.trim()) {
+    config.serviceTier = input.serviceTier.trim();
+  }
+  return config;
 }
 
 function ProjectSettingsPanel({

@@ -644,6 +644,18 @@
     font-size: 14px;
   }
 
+  .settings-section-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .agent-default-fields {
+    align-content: start;
+  }
+
   .secret-display,
   .command-display {
     max-width: 100%;
@@ -1602,6 +1614,28 @@
   .field-help.warning {
     color: var(--signal-amber);
     font-weight: 600;
+  }
+
+  .advanced-session-config {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-muted);
+  }
+
+  .advanced-session-config summary {
+    cursor: pointer;
+    color: var(--text-strong);
+    font-size: 12px;
+    font-weight: 700;
+    list-style-position: inside;
+    padding: 9px 10px;
+  }
+
+  .advanced-session-fields {
+    display: grid;
+    gap: 10px;
+    border-top: 1px solid var(--border-subtle);
+    padding: 10px;
   }
 
   .new-session-loading {

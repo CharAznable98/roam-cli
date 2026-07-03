@@ -766,6 +766,89 @@ describe("SessionManager", () => {
     manager.control("s1", "stop");
   });
 
+  it("lists agent runtime config options from the selected agent definition", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-runtime-options-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [runtimeConfigCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.handle({
+      type: "listAgentRuntimeConfigOptions",
+      requestId: "runtime-options-1",
+      agent: "codex",
+      basePath: workspace,
+    });
+
+    expect(events).toContainEqual({
+      type: "agentRuntimeConfigOptionsResult",
+      result: {
+        requestId: "runtime-options-1",
+        agent: "codex",
+        basePath: workspace,
+        queriedAt: "2026-07-03T00:00:00.000Z",
+        models: [
+          {
+            value: "gpt-5.4-codex",
+            label: "GPT-5.4 Codex",
+            reasoningEfforts: [{ value: "high", label: "High" }],
+            serviceTiers: [{ value: "flex", label: "Flex" }],
+            supportsFastMode: true,
+          },
+        ],
+        allowCustomModel: false,
+        reasoningEfforts: [{ value: "high", label: "High" }],
+        fastMode: {
+          kind: "serviceTier",
+          supported: true,
+          options: [{ value: "flex", label: "Flex" }],
+        },
+      },
+    });
+  });
+
+  it("returns unsupported runtime config options for agents without dynamic metadata", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-runtime-options-empty-"),
+    );
+    const events: RunnerEvent[] = [];
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [longRunningCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.handle({
+      type: "listAgentRuntimeConfigOptions",
+      requestId: "runtime-options-empty",
+      agent: "codex",
+      basePath: workspace,
+    });
+
+    expect(events).toContainEqual({
+      type: "agentRuntimeConfigOptionsResult",
+      result: expect.objectContaining({
+        requestId: "runtime-options-empty",
+        agent: "codex",
+        basePath: workspace,
+        models: [],
+        allowCustomModel: false,
+        reasoningEfforts: [],
+        fastMode: { kind: "unsupported", supported: false },
+      }),
+    });
+  });
+
   it("handles patch commands with structured results", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-session-patch-"),
@@ -1209,6 +1292,57 @@ function longRunningCodexAgent(): LoadedAgent {
       },
       createSession(context) {
         return new TestAgentSession(context);
+      },
+    },
+  };
+}
+
+function runtimeConfigCodexAgent(): LoadedAgent {
+  const capability = {
+    kind: "codex",
+    label: "Codex",
+    command: process.execPath,
+    args: [],
+    parser: "test-runtime-config",
+    supportsResume: true,
+    supportsImages: false,
+    supportedImageMimeTypes: [],
+    maxImagesPerTurn: 0,
+    maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+    pluginName: "test-codex",
+    pluginVersion: "1.0.0",
+  } satisfies LoadedAgent["capability"];
+  return {
+    capability,
+    definition: {
+      kind: "codex",
+      label: "Codex",
+      buildCapability() {
+        return capability;
+      },
+      createSession(context) {
+        return new TestAgentSession(context);
+      },
+      async listRuntimeConfigOptions() {
+        return {
+          queriedAt: "2026-07-03T00:00:00.000Z",
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [{ value: "high", label: "High" }],
+              serviceTiers: [{ value: "flex", label: "Flex" }],
+              supportsFastMode: true,
+            },
+          ],
+          allowCustomModel: false,
+          reasoningEfforts: [{ value: "high", label: "High" }],
+          fastMode: {
+            kind: "serviceTier" as const,
+            supported: true as const,
+            options: [{ value: "flex", label: "Flex" }],
+          },
+        };
       },
     },
   };

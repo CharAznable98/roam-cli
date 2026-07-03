@@ -2,6 +2,7 @@
 import "../../test/setup.js";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
+  AgentRuntimeConfigOptionsResult,
   GitBranchList,
   Project,
   RunnerRegistration,
@@ -299,23 +300,25 @@ describe("NewSessionForm Git options", () => {
     expect(
       screen.getByRole("option", { name: "Current branch (main)" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Loading branch refs...")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Loading branch refs..."),
+    ).toBeInTheDocument();
 
     resolveBranches({
       requestId: "git-branches-1",
       context: { kind: "project", projectId: project.id },
-          branches: [
-            { name: "main", current: true, remote: false },
-            { name: "feature/git-ui", current: false, remote: false },
-            { name: "origin/main", current: false, remote: true },
-            {
-              name: "origin/HEAD -> origin/main",
-              current: false,
-              remote: true,
-            },
-            { name: "origin/HEAD", current: false, remote: true },
-          ],
-        });
+      branches: [
+        { name: "main", current: true, remote: false },
+        { name: "feature/git-ui", current: false, remote: false },
+        { name: "origin/main", current: false, remote: true },
+        {
+          name: "origin/HEAD -> origin/main",
+          current: false,
+          remote: true,
+        },
+        { name: "origin/HEAD", current: false, remote: true },
+      ],
+    });
 
     expect(
       await screen.findByRole("option", { name: "feature/git-ui (local)" }),
@@ -334,6 +337,120 @@ describe("NewSessionForm Git options", () => {
     expect(baseRef).toHaveValue("main");
   });
 });
+
+describe("NewSessionForm runtime configuration", () => {
+  it("keeps runtime fields collapsed under advanced config and submits selected overrides", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const onListAgentRuntimeConfigOptions = vi
+      .fn()
+      .mockResolvedValue(runtimeOptions());
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={onListAgentRuntimeConfigOptions}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    expect(screen.queryByText("Project directory")).not.toBeInTheDocument();
+    expect(onListAgentRuntimeConfigOptions).toHaveBeenCalledWith({
+      runnerId: "runner-1",
+      agent: "codex",
+      basePath: "/workspace",
+    });
+    const advanced = screen
+      .getByText("Advanced configuration")
+      .closest("details");
+    expect(advanced).toBeInstanceOf(HTMLDetailsElement);
+    expect((advanced as HTMLDetailsElement).open).toBe(false);
+
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(screen.getByLabelText("Fast Mode"), {
+      target: { value: "on" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "build runtime config support" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "build runtime config support",
+        agentRuntimeConfig: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      }),
+    );
+  });
+
+  it("keeps session creation usable when runtime options fail to load", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => {
+          throw new Error("runner metadata unavailable");
+        }}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByText("runner metadata unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "start anyway" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "start anyway",
+        agentRuntimeConfig: {},
+      }),
+    );
+  });
+});
+
+function runtimeOptions(): AgentRuntimeConfigOptionsResult {
+  return {
+    requestId: "runtime-options-1",
+    agent: "codex",
+    basePath: "/workspace",
+    queriedAt: "2026-07-03T00:00:00.000Z",
+    models: [
+      {
+        value: "gpt-5.4-codex",
+        label: "GPT-5.4 Codex",
+        reasoningEfforts: [{ value: "high", label: "High" }],
+        serviceTiers: [],
+        supportsFastMode: true,
+      },
+    ],
+    allowCustomModel: false,
+    reasoningEfforts: [{ value: "medium", label: "Medium" }],
+    fastMode: { kind: "boolean", supported: true },
+  };
+}
 
 function fileInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector('input[type="file"]');

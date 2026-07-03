@@ -21,6 +21,7 @@ import type {
   MessageAttachment,
   Project,
   ProjectPromptPreset,
+  RunnerAgentRuntimeConfigSetting,
   Session,
 } from "@roamcli/shared/protocol";
 import { App } from "./App";
@@ -219,6 +220,7 @@ let failPromptPresetFetch: boolean;
 let failInstallMetadata: boolean;
 let queuedInstallMetadataResponses: Array<Deferred<Response>>;
 let queuedPromptPresetOrderResponses: Array<Deferred<Response>>;
+let runnerAgentRuntimeConfigSettings: RunnerAgentRuntimeConfigSetting[];
 let sockets: TestWebSocket[];
 
 type Deferred<T> = {
@@ -598,6 +600,7 @@ describe("App", () => {
     failInstallMetadata = false;
     queuedInstallMetadataResponses = [];
     queuedPromptPresetOrderResponses = [];
+    runnerAgentRuntimeConfigSettings = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -729,6 +732,62 @@ describe("App", () => {
             return jsonResponse({ message: "backend route unavailable" }, 503);
           }
           return jsonResponse({ runners: runnerOnline ? [runner] : [] });
+        }
+        if (
+          requestUrl.pathname === "/v1/runners/agent-runtime-config-settings"
+        ) {
+          return jsonResponse({ settings: runnerAgentRuntimeConfigSettings });
+        }
+        if (
+          requestUrl.pathname ===
+            "/v1/runners/real-runner/agents/codex/runtime-config-setting" &&
+          init?.method === "PUT"
+        ) {
+          const body = JSON.parse(String(init.body ?? "{}")) as {
+            config?: RunnerAgentRuntimeConfigSetting["config"];
+          };
+          const config = body.config ?? {};
+          if (Object.keys(config).length === 0) {
+            runnerAgentRuntimeConfigSettings = [];
+            return jsonResponse({ setting: null });
+          }
+          const setting = {
+            runnerId: "real-runner",
+            agent: "codex",
+            config,
+            updatedAt: "2026-07-03T00:00:00.000Z",
+          } satisfies RunnerAgentRuntimeConfigSetting;
+          runnerAgentRuntimeConfigSettings = [setting];
+          return jsonResponse({ setting });
+        }
+        if (
+          requestUrl.pathname === "/v1/agent/runtime-config/options" &&
+          init?.method === "POST"
+        ) {
+          const body = JSON.parse(String(init.body ?? "{}")) as {
+            agent?: string;
+            basePath?: string;
+          };
+          return jsonResponse({
+            result: {
+              requestId: "runtime-options-1",
+              agent: body.agent ?? "codex",
+              basePath: body.basePath ?? "/workspace",
+              queriedAt: "2026-07-03T00:00:00.000Z",
+              models: [
+                {
+                  value: "gpt-5.4-codex",
+                  label: "GPT-5.4 Codex",
+                  reasoningEfforts: [{ value: "high", label: "High" }],
+                  serviceTiers: [],
+                  supportsFastMode: true,
+                },
+              ],
+              allowCustomModel: false,
+              reasoningEfforts: [{ value: "medium", label: "Medium" }],
+              fastMode: { kind: "boolean", supported: true },
+            },
+          });
         }
         if (requestUrl.pathname === "/v1/runners/real-runner/directories") {
           if (init?.method === "POST") {
@@ -1707,6 +1766,56 @@ describe("App", () => {
     expect(
       screen.queryByRole("button", { name: "Regenerate" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("saves runner-level agent defaults from Settings", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(settings.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(settings.getByLabelText("Fast Mode"), {
+      target: { value: "on" },
+    });
+    fireEvent.click(settings.getByRole("button", { name: "Save defaults" }));
+
+    await waitFor(() =>
+      expect(runnerAgentRuntimeConfigSettings).toEqual([
+        {
+          runnerId: "real-runner",
+          agent: "codex",
+          config: {
+            model: "gpt-5.4-codex",
+            reasoningEffort: "high",
+            fastMode: true,
+          },
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+      ]),
+    );
+    const saveCall = fetchCalls.find(
+      (call) =>
+        new URL(call.url).pathname ===
+        "/v1/runners/real-runner/agents/codex/runtime-config-setting",
+    );
+    expect(JSON.parse(String(saveCall?.init?.body))).toEqual({
+      config: {
+        model: "gpt-5.4-codex",
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
   });
 
   it("keeps Settings reachable before runners connect", async () => {
@@ -3253,6 +3362,11 @@ describe("App", () => {
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [runner] });
         }
+        if (
+          requestUrl.pathname === "/v1/runners/agent-runtime-config-settings"
+        ) {
+          return jsonResponse({ settings: [] });
+        }
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({ projects: [offlineProject] });
         }
@@ -3668,8 +3782,8 @@ describe("App", () => {
       name: "New Session - Real Project",
     });
     expect(
-      await within(dialog).findByDisplayValue("/workspace"),
-    ).toBeInTheDocument();
+      within(dialog).queryByLabelText("Project directory"),
+    ).not.toBeInTheDocument();
     fireEvent.change(await within(dialog).findByLabelText("Prompt"), {
       target: { value: "Run the focused task" },
     });

@@ -27,6 +27,9 @@ describe("createRoamApiClient", () => {
         if (String(url).endsWith("/v1/sessions")) {
           return Response.json({ sessions: [] });
         }
+        if (String(url).endsWith("/v1/runners/agent-runtime-config-settings")) {
+          return Response.json({ settings: [] });
+        }
         return new Response(null, { status: 204 });
       },
     });
@@ -34,8 +37,9 @@ describe("createRoamApiClient", () => {
     await client.loadInitialState();
     await client.deleteSession("session-1");
 
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(5);
     expect(requests.map((request) => request.method)).toEqual([
+      "GET",
       "GET",
       "GET",
       "GET",
@@ -103,6 +107,18 @@ describe("createRoamApiClient", () => {
             ],
           });
         }
+        if (path === "/v1/runners/agent-runtime-config-settings") {
+          return Response.json({
+            settings: [
+              {
+                runnerId: "runner-1",
+                agent: "codex",
+                config: { model: "gpt-5.4-codex" },
+                updatedAt: "2026-07-03T00:00:00.000Z",
+              },
+            ],
+          });
+        }
         return Response.json(
           { error: "unexpected detail request" },
           { status: 500 },
@@ -114,7 +130,20 @@ describe("createRoamApiClient", () => {
 
     expect(initialState.sessions).toHaveLength(1);
     expect(initialState.messages).toEqual([]);
-    expect(requests).toEqual(["/v1/runners", "/v1/projects", "/v1/sessions"]);
+    expect(initialState.runnerAgentRuntimeConfigSettings).toEqual([
+      {
+        runnerId: "runner-1",
+        agent: "codex",
+        config: { model: "gpt-5.4-codex" },
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      },
+    ]);
+    expect(requests).toEqual([
+      "/v1/runners",
+      "/v1/projects",
+      "/v1/sessions",
+      "/v1/runners/agent-runtime-config-settings",
+    ]);
   });
 
   it("formats worktree archive failures as user-facing messages", async () => {
@@ -209,6 +238,47 @@ describe("createRoamApiClient", () => {
     });
 
     expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("sends explicit empty agent runtime config when creating a session", async () => {
+    let body: unknown;
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return Response.json({
+          session: {
+            id: "session-1",
+            title: "Test",
+            projectId: "project-1",
+            runnerId: "runner-1",
+            agent: "codex",
+            status: "pending",
+            executionMode: "direct",
+            executionFolder: ".",
+            cwd: ".",
+            createdAt: "2026-06-10T00:00:00.000Z",
+            updatedAt: "2026-06-10T00:00:00.000Z",
+          },
+        });
+      },
+    });
+
+    await client.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "hello",
+      agentRuntimeConfig: {},
+    });
+
+    expect(body).toEqual(
+      expect.objectContaining({
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "hello",
+        agentRuntimeConfig: {},
+      }),
+    );
   });
 
   it("fetches install metadata with a read-only GET request", async () => {

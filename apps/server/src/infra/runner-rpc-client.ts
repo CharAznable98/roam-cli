@@ -1,5 +1,6 @@
 import type {
   AgentSkillListResult,
+  AgentRuntimeConfigOptionsResult,
   AttachmentContentResult,
   AttachmentDeleteResult,
   AttachmentWriteResult,
@@ -23,6 +24,7 @@ import type { ConnectionHub } from "./connection-hub.js";
 
 type RunnerRpcResult =
   | AgentSkillListResult
+  | AgentRuntimeConfigOptionsResult
   | AttachmentWriteResult
   | AttachmentContentResult
   | AttachmentDeleteResult
@@ -50,6 +52,7 @@ export type RunnerRpcCommand = Extract<
       | "writeFileContent"
       | "createDirectory"
       | "listAgentSkills"
+      | "listAgentRuntimeConfigOptions"
       | "searchWorkspacePaths"
       | "checkSessionStatus"
       | "writeSessionAttachments"

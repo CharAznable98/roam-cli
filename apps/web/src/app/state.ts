@@ -9,6 +9,7 @@ import type {
   Message,
   MessageAttachment,
   Project,
+  RunnerAgentRuntimeConfigSetting,
   RunnerRegistration,
   ServerEvent,
   Session,
@@ -47,6 +48,7 @@ export interface AppState {
   activeTab: WorkspaceTab;
   projects: Project[];
   runners: RunnerRegistration[];
+  runnerAgentRuntimeConfigSettings: RunnerAgentRuntimeConfigSetting[];
   sessions: Session[];
   messages: UiMessage[];
   activities: AgentActivity[];
@@ -81,6 +83,7 @@ export const initialAppState: AppState = {
   activeTab: "chat",
   projects: [],
   runners: [],
+  runnerAgentRuntimeConfigSettings: [],
   sessions: [],
   messages: [],
   activities: [],
@@ -267,6 +270,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         projects,
         runners: action.remote.runners,
+        runnerAgentRuntimeConfigSettings:
+          action.remote.runnerAgentRuntimeConfigSettings ?? [],
         sessions,
         ...bootstrapDetailState(state, action.remote),
         selectedRunnerId,
@@ -645,7 +650,12 @@ function bootstrapDetailState(
   remote: InitialRemoteState,
 ): Pick<
   AppState,
-  "messages" | "activities" | "messageAttachments" | "approvals" | "artifacts" | "hunks"
+  | "messages"
+  | "activities"
+  | "messageAttachments"
+  | "approvals"
+  | "artifacts"
+  | "hunks"
 > {
   if (hasRemoteDetail(remote)) {
     return {
@@ -658,7 +668,9 @@ function bootstrapDetailState(
     };
   }
 
-  const remoteSessionIds = new Set(remote.sessions.map((session) => session.id));
+  const remoteSessionIds = new Set(
+    remote.sessions.map((session) => session.id),
+  );
   const approvals = state.approvals.filter((approval) =>
     remoteSessionIds.has(approval.sessionId),
   );

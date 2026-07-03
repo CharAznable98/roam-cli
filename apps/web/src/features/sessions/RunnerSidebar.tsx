@@ -1,4 +1,7 @@
 import type {
+  AgentKind,
+  AgentRuntimeConfig,
+  AgentRuntimeConfigOptionsResult,
   ApiGitContext,
   DirectoryCreateResult,
   FileNode,
@@ -73,6 +76,11 @@ type CreateRunnerDirectory = (
 
 type GitStatusFetcher = (context: ApiGitContext) => Promise<GitStatusResult>;
 type GitBranchesFetcher = (context: ApiGitContext) => Promise<GitBranchList>;
+type AgentRuntimeConfigOptionsFetcher = (input: {
+  runnerId: string;
+  agent: AgentKind;
+  basePath: string;
+}) => Promise<AgentRuntimeConfigOptionsResult>;
 
 type RunnerSidebarProps = {
   projects: Project[];
@@ -115,6 +123,11 @@ type RunnerSidebarProps = {
   onManagePromptPresets?: ((projectId: string) => void) | undefined;
   onFetchGitStatus: GitStatusFetcher;
   onFetchGitBranches: GitBranchesFetcher;
+  onListAgentRuntimeConfigOptions?: AgentRuntimeConfigOptionsFetcher;
+  agentRuntimeConfigDefaultsByRunner?: Record<
+    string,
+    Record<string, AgentRuntimeConfig>
+  >;
 };
 
 export function RunnerSidebar({
@@ -143,6 +156,8 @@ export function RunnerSidebar({
   onManagePromptPresets,
   onFetchGitStatus,
   onFetchGitBranches,
+  onListAgentRuntimeConfigOptions,
+  agentRuntimeConfigDefaultsByRunner = {},
 }: RunnerSidebarProps) {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [sessionProjectId, setSessionProjectId] = useState<
@@ -217,13 +232,17 @@ export function RunnerSidebar({
     const selectedSession = sessions.find(
       (session) => session.id === selectedSessionId && !session.archivedAt,
     );
-    if (!selectedSession || !expandedProjectIds.has(selectedSession.projectId)) {
+    if (
+      !selectedSession ||
+      !expandedProjectIds.has(selectedSession.projectId)
+    ) {
       return;
     }
     const projectSessions = sortSessionsForDisplay(
       sessions.filter(
         (session) =>
-          session.projectId === selectedSession.projectId && !session.archivedAt,
+          session.projectId === selectedSession.projectId &&
+          !session.archivedAt,
       ),
     );
     const selectedIndex = projectSessions.findIndex(
@@ -351,12 +370,8 @@ export function RunnerSidebar({
                       aria-label={`${project.pinnedAt ? "Unpin" : "Pin"} project ${project.name}`}
                       title={project.pinnedAt ? "Unpin project" : "Pin project"}
                       onClick={() =>
-                        runAsyncAction(
-                          () =>
-                            onToggleProjectPinned(
-                              project.id,
-                              !project.pinnedAt,
-                            ),
+                        runAsyncAction(() =>
+                          onToggleProjectPinned(project.id, !project.pinnedAt),
                         )
                       }
                     >
@@ -440,12 +455,11 @@ export function RunnerSidebar({
                                       : "Pin session"
                                 }
                                 onClick={() =>
-                                  runAsyncAction(
-                                    () =>
-                                      onToggleSessionPinned(
-                                        session.id,
-                                        !isPinned,
-                                      ),
+                                  runAsyncAction(() =>
+                                    onToggleSessionPinned(
+                                      session.id,
+                                      !isPinned,
+                                    ),
                                   )
                                 }
                               >
@@ -532,6 +546,10 @@ export function RunnerSidebar({
               }
               onFetchGitStatus={onFetchGitStatus}
               onFetchGitBranches={onFetchGitBranches}
+              onListAgentRuntimeConfigOptions={onListAgentRuntimeConfigOptions}
+              agentRuntimeConfigDefaults={
+                agentRuntimeConfigDefaultsByRunner[sessionRunner.runnerId] ?? {}
+              }
               onCreate={async (values) => {
                 await onCreateSession(sessionProject.id, values);
                 setExpandedProjectIds((current) => {
