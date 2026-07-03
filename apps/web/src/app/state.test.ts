@@ -2259,7 +2259,127 @@ describe("app reducer", () => {
       status: "ready",
       hasLoaded: true,
       showRefreshIndicator: false,
+      requestId: "detail-1",
     });
+  });
+
+  it("keeps ignoring stale detail responses after a newer request completes", () => {
+    const session = makeSession("session-1", "project-1");
+    const oldLoading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "old-detail",
+      },
+    );
+    const newLoading = appReducer(oldLoading, {
+      type: "sessionDetailLoadStarted",
+      sessionId: "session-1",
+      requestId: "new-detail",
+    });
+    const fresh = appReducer(newLoading, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "new-detail",
+      detail: {
+        session,
+        messages: [
+          {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "fresh detail",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        ],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    const stale = appReducer(fresh, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "old-detail",
+      detail: {
+        session,
+        messages: [
+          {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "stale detail",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        ],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(stale).toBe(fresh);
+    expect(stale.messages.map((message) => message.content)).toEqual([
+      "fresh detail",
+    ]);
+  });
+
+  it("marks passively merged session detail as loaded", () => {
+    const session = makeSession("session-1", "project-1");
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "error",
+            hasLoaded: false,
+            showRefreshIndicator: false,
+            requestId: "detail-1",
+            error: "network failed",
+          },
+        },
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session,
+          messages: [
+            {
+              id: "message-1",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "recovered detail",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:00.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "ready",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+      requestId: "detail-1",
+    });
+    expect(next.messages.map((message) => message.content)).toEqual([
+      "recovered detail",
+    ]);
   });
 
   it("shows a delayed refresh indicator only for the current detail request", () => {
@@ -2336,6 +2456,7 @@ describe("app reducer", () => {
       status: "error",
       hasLoaded: true,
       showRefreshIndicator: false,
+      requestId: "detail-3",
       error: "network failed",
     });
   });

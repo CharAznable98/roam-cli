@@ -690,7 +690,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         action.message,
       );
     case "sessionDetailMerged":
-      return mergeSessionDetailState(state, action.detail);
+      return mergeLoadedSessionDetailState(state, action.detail);
     case "notificationPushed":
       return pushNotification(state, action.tone, action.title, action.message);
     case "errorChanged":
@@ -878,11 +878,7 @@ function completeSessionDetailLoad(
     ...merged,
     sessionDetailLoadStates: {
       ...merged.sessionDetailLoadStates,
-      [detail.session.id]: {
-        status: "ready",
-        hasLoaded: true,
-        showRefreshIndicator: false,
-      },
+      [detail.session.id]: readySessionDetailLoadState(requestId),
     },
   };
 }
@@ -905,9 +901,36 @@ function failSessionDetailLoad(
         status: "error",
         hasLoaded: Boolean(current?.hasLoaded),
         showRefreshIndicator: false,
+        requestId,
         error: message,
       },
     },
+  };
+}
+
+function mergeLoadedSessionDetailState(
+  state: AppState,
+  detail: SessionDetailPayload,
+): AppState {
+  const merged = mergeSessionDetailState(state, detail);
+  const current = merged.sessionDetailLoadStates[detail.session.id];
+  return {
+    ...merged,
+    sessionDetailLoadStates: {
+      ...merged.sessionDetailLoadStates,
+      [detail.session.id]: readySessionDetailLoadState(current?.requestId),
+    },
+  };
+}
+
+function readySessionDetailLoadState(
+  requestId?: string,
+): SessionDetailLoadState {
+  return {
+    status: "ready",
+    hasLoaded: true,
+    showRefreshIndicator: false,
+    ...(requestId ? { requestId } : {}),
   };
 }
 
