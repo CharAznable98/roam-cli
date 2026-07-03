@@ -443,8 +443,9 @@ export function AppShell({ controller }: AppShellProps) {
         selectedSession.worktreeDeletedAt !== undefined)
     );
   const selectedSessionDetailBlocking =
-    selectedSessionDetailState.status === "loading" &&
-    !selectedSessionDetailState.hasLoaded;
+    !selectedSessionDetailState.hasLoaded &&
+    (selectedSessionDetailState.status === "loading" ||
+      selectedSessionDetailState.status === "error");
 
   useEffect(() => {
     const openOnShortcut = (event: globalThis.KeyboardEvent) => {
