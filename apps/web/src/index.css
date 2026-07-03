@@ -4636,16 +4636,16 @@
 
   .mobile-topbar-actions button[aria-label="Open command palette"],
   .mobile-topbar-actions button[aria-label="Settings"] {
-    min-height: 28px;
-    min-width: 28px;
-    height: 28px;
-    width: 28px;
-    flex: 0 0 28px;
+    min-height: 44px;
+    min-width: 44px;
+    height: 44px;
+    width: 44px;
+    flex: 0 0 44px;
   }
 
   .mobile-topbar-actions .mobile-topbar-icon-button {
-    height: 28px !important;
-    width: 28px !important;
+    height: 44px !important;
+    width: 44px !important;
   }
 
   .chat-header,
@@ -4665,9 +4665,11 @@
   }
 
   .notification-close,
-  .modal-header .icon-button {
-    height: 44px;
-    width: 44px;
+  .modal-header .icon-button,
+  [data-slot="dialog-close"][data-size="icon-sm"],
+  [data-slot="sheet-close"][data-size="icon-sm"] {
+    height: 44px !important;
+    width: 44px !important;
   }
 
   .mobile-icon-button {

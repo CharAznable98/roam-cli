@@ -180,6 +180,28 @@ export function NewSessionForm({
   const booleanFastModeAvailable =
     runtimeOptions?.fastMode.kind === "boolean" &&
     (!selectedModelOption || selectedModelOption.supportsFastMode === true);
+  const runtimeConfigForSubmit = () => {
+    const shouldValidateRuntimeFields = runtimeOptionsState === "ready";
+    return buildRuntimeConfig({
+      model,
+      reasoningEffort:
+        !shouldValidateRuntimeFields ||
+        reasoningEffortOptions.some(
+          (option) => option.value === reasoningEffort,
+        )
+          ? reasoningEffort
+          : "",
+      fastMode:
+        !shouldValidateRuntimeFields || booleanFastModeAvailable
+          ? fastMode
+          : "",
+      serviceTier:
+        !shouldValidateRuntimeFields ||
+        serviceTierOptions.some((option) => option.value === serviceTier)
+          ? serviceTier
+          : "",
+    });
+  };
   const changeModel = (nextModel: string) => {
     const nextModelOption = runtimeOptions?.models.find(
       (option) => option.value === nextModel,
@@ -486,20 +508,7 @@ export function NewSessionForm({
         ...(executionMode === "managed_worktree" && gitBranchName.trim()
           ? { gitBranchName: gitBranchName.trim() }
           : {}),
-        agentRuntimeConfig: buildRuntimeConfig({
-          model,
-          reasoningEffort: reasoningEffortOptions.some(
-            (option) => option.value === reasoningEffort,
-          )
-            ? reasoningEffort
-            : "",
-          fastMode: booleanFastModeAvailable ? fastMode : "",
-          serviceTier: serviceTierOptions.some(
-            (option) => option.value === serviceTier,
-          )
-            ? serviceTier
-            : "",
-        }),
+        agentRuntimeConfig: runtimeConfigForSubmit(),
         attachments: await draftImagesToUploads(draftImages),
       });
       draftImages.forEach(revokeDraftPreview);

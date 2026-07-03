@@ -2175,6 +2175,28 @@ function AgentDefaultsSettingsPanel({
   const booleanFastModeAvailable =
     options?.fastMode.kind === "boolean" &&
     (!selectedModelOption || selectedModelOption.supportsFastMode === true);
+  const runtimeConfigForSave = () => {
+    const shouldValidateRuntimeFields = optionsState === "ready";
+    return runtimeConfigFromFields({
+      model,
+      reasoningEffort:
+        !shouldValidateRuntimeFields ||
+        reasoningEffortOptions.some(
+          (option) => option.value === reasoningEffort,
+        )
+          ? reasoningEffort
+          : "",
+      fastMode:
+        !shouldValidateRuntimeFields || booleanFastModeAvailable
+          ? fastMode
+          : "",
+      serviceTier:
+        !shouldValidateRuntimeFields ||
+        serviceTierOptions.some((option) => option.value === serviceTier)
+          ? serviceTier
+          : "",
+    });
+  };
   const changeModel = (nextModel: string) => {
     const nextModelOption = options?.models.find(
       (option) => option.value === nextModel,
@@ -2334,21 +2356,28 @@ function AgentDefaultsSettingsPanel({
     setSaveError("");
     try {
       await onSaveSetting(selectedRunner.runnerId, agent, {
-        config: runtimeConfigFromFields({
-          model,
-          reasoningEffort: reasoningEffortOptions.some(
-            (option) => option.value === reasoningEffort,
-          )
-            ? reasoningEffort
-            : "",
-          fastMode: booleanFastModeAvailable ? fastMode : "",
-          serviceTier: serviceTierOptions.some(
-            (option) => option.value === serviceTier,
-          )
-            ? serviceTier
-            : "",
-        }),
+        config: runtimeConfigForSave(),
       });
+      setSaveState("ready");
+    } catch (error: unknown) {
+      setSaveState("error");
+      setSaveError(errorMessage(error));
+    }
+  };
+  const clearDefaults = async () => {
+    if (!selectedRunner || !agent) {
+      return;
+    }
+    setSaveState("loading");
+    setSaveError("");
+    try {
+      await onSaveSetting(selectedRunner.runnerId, agent, {
+        config: {},
+      });
+      setModel("");
+      setReasoningEffort("");
+      setFastMode("");
+      setServiceTier("");
       setSaveState("ready");
     } catch (error: unknown) {
       setSaveState("error");
@@ -2475,6 +2504,15 @@ function AgentDefaultsSettingsPanel({
           </p>
         ) : null}
         <div className="form-actions">
+          <button
+            className="small-button danger"
+            type="button"
+            onClick={() => void clearDefaults()}
+            disabled={saveState === "loading"}
+          >
+            <Trash2 size={14} />
+            Clear defaults
+          </button>
           <button
             className="small-button"
             type="button"

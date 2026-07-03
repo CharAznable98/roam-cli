@@ -93,6 +93,25 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("allows custom model overrides in legacy codex exec mode", async () => {
+    const workspace = await mkdirTemp("roam-codex-exec-options-");
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: { ROAMCLI_AGENT_CODEX_MODE: "exec-json" },
+    });
+
+    expect(result).toMatchObject({
+      models: [],
+      allowCustomModel: true,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Codex runtime options require app-server mode.",
+    });
+  });
+
   it("exposes a default plugin with one codex agent", () => {
     expect(
       agentPlugin

@@ -1874,6 +1874,114 @@ describe("App", () => {
     });
   });
 
+  it("clears saved runner-level agent defaults from Settings", async () => {
+    runnerAgentRuntimeConfigSettings = [
+      {
+        runnerId: "real-runner",
+        agent: "codex",
+        config: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      },
+    ];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    expect(settings.getByLabelText("Model")).toHaveValue("gpt-5.4-codex");
+
+    fireEvent.click(settings.getByRole("button", { name: "Clear defaults" }));
+
+    await waitFor(() => expect(runnerAgentRuntimeConfigSettings).toEqual([]));
+    await waitFor(() => {
+      expect(settings.getByLabelText("Model")).toHaveValue("");
+      expect(settings.getByLabelText("Thinking intensity")).toHaveValue("");
+      expect(settings.getByLabelText("Fast Mode")).toHaveValue("");
+    });
+    const saveCall = fetchCalls.find(
+      (call) =>
+        new URL(call.url).pathname ===
+          "/v1/runners/real-runner/agents/codex/runtime-config-setting" &&
+        String(call.init?.body ?? "") === JSON.stringify({ config: {} }),
+    );
+    expect(saveCall).toBeDefined();
+  });
+
+  it("preserves runner-level defaults when runtime options are unavailable", async () => {
+    runnerAgentRuntimeConfigSettings = [
+      {
+        runnerId: "real-runner",
+        agent: "codex",
+        config: {
+          model: "saved-model",
+          reasoningEffort: "saved-effort",
+          fastMode: true,
+          serviceTier: "saved-tier",
+        },
+        updatedAt: "2026-07-03T00:00:00.000Z",
+      },
+    ];
+    runtimeConfigOptionsOverride = {
+      ...runtimeConfigOptions("codex", "/workspace"),
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "runner metadata unavailable",
+    };
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByText("runner metadata unavailable"),
+    ).toBeInTheDocument();
+    fireEvent.click(settings.getByRole("button", { name: "Save defaults" }));
+
+    await waitFor(() => {
+      const saveCall = fetchCalls.find(
+        (call) =>
+          new URL(call.url).pathname ===
+          "/v1/runners/real-runner/agents/codex/runtime-config-setting",
+      );
+      expect(JSON.parse(String(saveCall?.init?.body))).toEqual({
+        config: {
+          model: "saved-model",
+          reasoningEffort: "saved-effort",
+          fastMode: true,
+          serviceTier: "saved-tier",
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(runnerAgentRuntimeConfigSettings).toEqual([
+        {
+          runnerId: "real-runner",
+          agent: "codex",
+          config: {
+            model: "saved-model",
+            reasoningEffort: "saved-effort",
+            fastMode: true,
+            serviceTier: "saved-tier",
+          },
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+      ]),
+    );
+  });
+
   it("clears stale runner-level thinking intensity when Settings model changes", async () => {
     render(<App />);
 

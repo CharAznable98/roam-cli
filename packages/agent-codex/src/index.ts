@@ -462,7 +462,7 @@ export async function listCodexRuntimeConfigOptions(
   if (modeFor(KIND, context.env) !== "app-server") {
     return {
       models: [],
-      allowCustomModel: false,
+      allowCustomModel: true,
       reasoningEfforts: [],
       fastMode: { kind: "unsupported", supported: false },
       error: "Codex runtime options require app-server mode.",

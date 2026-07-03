@@ -430,6 +430,51 @@ describe("NewSessionForm runtime configuration", () => {
     );
   });
 
+  it("preserves runner defaults when runtime options fail to load", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        agentRuntimeConfigDefaults={{
+          codex: {
+            model: "saved-model",
+            reasoningEffort: "saved-effort",
+            fastMode: true,
+            serviceTier: "saved-tier",
+          },
+        }}
+        onListAgentRuntimeConfigOptions={async () => {
+          throw new Error("runner metadata unavailable");
+        }}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByText("runner metadata unavailable"),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use saved defaults" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use saved defaults",
+        agentRuntimeConfig: {
+          model: "saved-model",
+          reasoningEffort: "saved-effort",
+          fastMode: true,
+          serviceTier: "saved-tier",
+        },
+      }),
+    );
+  });
+
   it("clears stale thinking intensity when the selected model changes", async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(
