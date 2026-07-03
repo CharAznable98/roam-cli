@@ -7,6 +7,7 @@ import type {
   Session,
 } from "@roamcli/shared/protocol";
 import {
+  AlertCircle,
   BookmarkPlus,
   Bot,
   CheckCircle2,
@@ -94,6 +95,15 @@ type ChatPanelProps = {
     | ((tone: "error" | "success", title: string, message: string) => void)
     | undefined;
   statusBanner?: ReactNode;
+  detailState?: SessionDetailViewState;
+  onRetrySessionDetail?: (() => void | Promise<void>) | undefined;
+};
+
+type SessionDetailViewState = {
+  status: "idle" | "loading" | "refreshing" | "ready" | "error";
+  hasLoaded: boolean;
+  showRefreshIndicator: boolean;
+  error?: string;
 };
 
 export function ChatPanel({
@@ -122,6 +132,12 @@ export function ChatPanel({
   onSaveMessageAsPrompt,
   onNotify,
   statusBanner,
+  detailState = {
+    status: "ready",
+    hasLoaded: true,
+    showRefreshIndicator: false,
+  },
+  onRetrySessionDetail,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
@@ -169,6 +185,18 @@ export function ChatPanel({
       session.status === "waiting_approval" ||
       session.status === "waiting_input");
   const canSubmitMessage = canSend && !claudeTurnInProgress;
+  const initialDetailLoading =
+    detailState.status === "loading" && !detailState.hasLoaded;
+  const initialDetailError =
+    detailState.status === "error" && !detailState.hasLoaded;
+  const refreshingDetail =
+    detailState.status === "refreshing" &&
+    detailState.hasLoaded &&
+    detailState.showRefreshIndicator;
+  const refreshDetailError =
+    detailState.status === "error" && detailState.hasLoaded;
+  const composerBlocked = initialDetailLoading || initialDetailError;
+  const canSubmitComposer = canSubmitMessage && !composerBlocked;
 
   const scrollToBottom = () => {
     const list = messageListRef.current;
@@ -269,7 +297,7 @@ export function ChatPanel({
 
   const submitDraft = async () => {
     const cleanDraft = draft.trim();
-    if (!cleanDraft || !canSubmitMessage || submitting) {
+    if (!cleanDraft || !canSubmitComposer || submitting) {
       return;
     }
 
@@ -583,6 +611,7 @@ export function ChatPanel({
         className="message-list"
         ref={messageListRef}
         onScroll={handleMessageListScroll}
+        aria-busy={initialDetailLoading ? "true" : undefined}
       >
         {showFailureNotice ? (
           <div className="session-failure-notice" role="status">
@@ -593,7 +622,14 @@ export function ChatPanel({
             </span>
           </div>
         ) : null}
-        {messages.length === 0 && activities.length === 0 ? (
+        {initialDetailLoading ? (
+          <SessionDetailSkeleton />
+        ) : initialDetailError ? (
+          <SessionDetailError
+            message={detailState.error}
+            onRetry={onRetrySessionDetail}
+          />
+        ) : messages.length === 0 && activities.length === 0 ? (
           <div className="empty-state compact">
             No messages have been recorded for this session yet.
           </div>
@@ -621,6 +657,13 @@ export function ChatPanel({
             ),
           )
         )}
+        {refreshingDetail ? <SessionDetailInlineStatus /> : null}
+        {refreshDetailError ? (
+          <SessionDetailInlineError
+            message={detailState.error}
+            onRetry={onRetrySessionDetail}
+          />
+        ) : null}
       </div>
 
       <form className="composer" onSubmit={submit}>
@@ -629,12 +672,12 @@ export function ChatPanel({
             draftImages.length > 0 ? "has-attachments" : ""
           }`}
           onDragOver={(event) => {
-            if (imageLimits.supported) {
+            if (imageLimits.supported && !composerBlocked) {
               event.preventDefault();
             }
           }}
           onDrop={(event) => {
-            if (!imageLimits.supported) {
+            if (!imageLimits.supported || composerBlocked) {
               return;
             }
             event.preventDefault();
@@ -662,6 +705,9 @@ export function ChatPanel({
             onManagePromptPresets={onManagePromptPresets}
             onKeyDown={handleComposerKeyDown}
             onPaste={(event) => {
+              if (composerBlocked) {
+                return;
+              }
               const files = Array.from(event.clipboardData.files).filter(
                 (file) => file.type.startsWith("image/"),
               );
@@ -672,15 +718,20 @@ export function ChatPanel({
             }}
             rows={2}
             placeholder={
-              canSubmitMessage
-                ? compactComposerPlaceholder
-                  ? "Message the active session"
-                  : "Message the active session, Cmd/Ctrl+Enter to send"
-                : claudeTurnInProgress
-                  ? "Waiting for Claude Code"
-                  : "Stream is reconnecting"
+              composerBlocked
+                ? initialDetailError
+                  ? "Session detail unavailable"
+                  : "Session is loading..."
+                : canSubmitMessage
+                  ? compactComposerPlaceholder
+                    ? "Message the active session"
+                    : "Message the active session, Cmd/Ctrl+Enter to send"
+                  : claudeTurnInProgress
+                    ? "Waiting for Claude Code"
+                    : "Stream is reconnecting"
             }
             ariaLabel="Chat composer"
+            disabled={composerBlocked}
           />
           {attachmentError ? (
             <p className="form-error composer-error" role="alert">
@@ -711,7 +762,7 @@ export function ChatPanel({
               ? "Attach images"
               : "This agent does not accept image input"
           }
-          disabled={!imageLimits.supported || submitting}
+          disabled={!imageLimits.supported || submitting || composerBlocked}
           onClick={() => fileInputRef.current?.click()}
         >
           <ImagePlus size={17} />
@@ -722,13 +773,112 @@ export function ChatPanel({
           aria-label="Send message"
           title="Send message"
           disabled={
-            !canSubmitMessage || submitting || draft.trim().length === 0
+            !canSubmitComposer || submitting || draft.trim().length === 0
           }
         >
           {submitting ? <LoaderCircle size={17} /> : <Send size={17} />}
         </button>
       </form>
     </section>
+  );
+}
+
+function SessionDetailSkeleton() {
+  return (
+    <div
+      className="session-detail-skeleton"
+      role="status"
+      aria-label="Loading session"
+    >
+      <div className="session-detail-loading-label">
+        <LoaderCircle size={15} />
+        <span>Loading session...</span>
+      </div>
+      <div className="message assistant skeleton-message">
+        <div className="message-avatar skeleton-avatar" />
+        <div className="message-body skeleton-bubble">
+          <span className="skeleton-line wide" />
+          <span className="skeleton-line medium" />
+          <span className="skeleton-line narrow" />
+        </div>
+      </div>
+      <div className="message user skeleton-message">
+        <div className="message-avatar skeleton-avatar" />
+        <div className="message-body skeleton-bubble">
+          <span className="skeleton-line medium" />
+          <span className="skeleton-line narrow" />
+        </div>
+      </div>
+      <div className="message assistant skeleton-message">
+        <div className="message-avatar skeleton-avatar" />
+        <div className="message-body skeleton-bubble">
+          <span className="skeleton-line wide" />
+          <span className="skeleton-line short" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionDetailError({
+  message,
+  onRetry,
+}: {
+  message: string | undefined;
+  onRetry?: (() => void | Promise<void>) | undefined;
+}) {
+  return (
+    <div className="session-detail-error" role="alert">
+      <AlertCircle size={18} />
+      <div>
+        <strong>Session detail could not be loaded.</strong>
+        <p>{message ?? "Check the connection, then retry."}</p>
+      </div>
+      {onRetry ? (
+        <button
+          className="small-button"
+          type="button"
+          onClick={() => void onRetry()}
+        >
+          <RefreshCw size={14} />
+          Retry
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionDetailInlineStatus() {
+  return (
+    <div className="session-detail-inline-status" role="status">
+      <LoaderCircle size={14} />
+      <span>Refreshing session...</span>
+    </div>
+  );
+}
+
+function SessionDetailInlineError({
+  message,
+  onRetry,
+}: {
+  message: string | undefined;
+  onRetry?: (() => void | Promise<void>) | undefined;
+}) {
+  return (
+    <div className="session-detail-inline-status error" role="status">
+      <AlertCircle size={14} />
+      <span>{message ? `Refresh failed. ${message}` : "Refresh failed."}</span>
+      {onRetry ? (
+        <button
+          className="small-button"
+          type="button"
+          onClick={() => void onRetry()}
+        >
+          <RefreshCw size={14} />
+          Retry
+        </button>
+      ) : null}
+    </div>
   );
 }
 

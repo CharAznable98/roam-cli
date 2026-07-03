@@ -2202,6 +2202,336 @@ describe("app reducer", () => {
     expect(late).toBe(unavailable);
     expect(late.filesBySession["session-2"]).toBeUndefined();
   });
+
+  it("marks the bootstrapped selected session as loading detail", () => {
+    const session = makeSession("session-1", "project-1");
+
+    const next = appReducer(initialAppState, {
+      type: "bootstrapSucceeded",
+      remote: {
+        projects: [makeProject("project-1")],
+        runners: [runner],
+        sessions: [session],
+        messages: [],
+        messageAttachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(next.selectedSessionId).toBe("session-1");
+    expect(next.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "loading",
+      hasLoaded: false,
+      showRefreshIndicator: false,
+    });
+  });
+
+  it("preserves a failed first detail load when reselecting the session", () => {
+    const session = makeSession("session-1", "project-1");
+    const errored = {
+      ...initialAppState,
+      sessions: [session],
+      selectedProjectId: "project-1",
+      selectedSessionId: "session-1",
+      sessionDetailLoadStates: {
+        "session-1": {
+          status: "error" as const,
+          hasLoaded: false,
+          showRefreshIndicator: false,
+          requestId: "detail-1",
+          error: "network failed",
+        },
+      },
+    };
+
+    const next = appReducer(errored, {
+      type: "sessionSelected",
+      sessionId: "session-1",
+    });
+
+    expect(next.sessionDetailLoadStates["session-1"]).toEqual(
+      errored.sessionDetailLoadStates["session-1"],
+    );
+  });
+
+  it("moves session detail state to ready after a successful load", () => {
+    const session = makeSession("session-1", "project-1");
+    const loading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-1",
+      },
+    );
+
+    const ready = appReducer(loading, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "detail-1",
+      detail: {
+        session,
+        messages: [],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(ready.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "ready",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+      requestId: "detail-1",
+    });
+  });
+
+  it("keeps ignoring stale detail responses after a newer request completes", () => {
+    const session = makeSession("session-1", "project-1");
+    const oldLoading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "old-detail",
+      },
+    );
+    const newLoading = appReducer(oldLoading, {
+      type: "sessionDetailLoadStarted",
+      sessionId: "session-1",
+      requestId: "new-detail",
+    });
+    const fresh = appReducer(newLoading, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "new-detail",
+      detail: {
+        session,
+        messages: [
+          {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "fresh detail",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        ],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    const stale = appReducer(fresh, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "old-detail",
+      detail: {
+        session,
+        messages: [
+          {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "assistant",
+            content: "stale detail",
+            encrypted: false,
+            createdAt: "2026-06-05T00:00:00.000Z",
+          },
+        ],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(stale).toBe(fresh);
+    expect(stale.messages.map((message) => message.content)).toEqual([
+      "fresh detail",
+    ]);
+  });
+
+  it("ignores late detail completions after the session is removed", () => {
+    const session = makeSession("session-1", "project-1");
+    const loading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-1",
+      },
+    );
+    const removed = appReducer(loading, {
+      type: "sessionDeleted",
+      sessionId: "session-1",
+    });
+
+    const lateSuccess = appReducer(removed, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "detail-1",
+      detail: {
+        session,
+        messages: [],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+    const lateFailure = appReducer(removed, {
+      type: "sessionDetailLoadFailed",
+      sessionId: "session-1",
+      requestId: "detail-1",
+      message: "network failed",
+    });
+
+    expect(lateSuccess).toBe(removed);
+    expect(lateFailure).toBe(removed);
+    expect(lateSuccess.sessions).toEqual([]);
+    expect(lateSuccess.sessionDetailLoadStates["session-1"]).toBeUndefined();
+  });
+
+  it("marks passively merged session detail as loaded", () => {
+    const session = makeSession("session-1", "project-1");
+
+    const next = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "error",
+            hasLoaded: false,
+            showRefreshIndicator: false,
+            requestId: "detail-1",
+            error: "network failed",
+          },
+        },
+      },
+      {
+        type: "sessionDetailMerged",
+        detail: {
+          session,
+          messages: [
+            {
+              id: "message-1",
+              sessionId: "session-1",
+              role: "assistant",
+              content: "recovered detail",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:00.000Z",
+            },
+          ],
+          attachments: [],
+          approvals: [],
+          artifacts: [],
+        },
+      },
+    );
+
+    expect(next.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "ready",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+      requestId: "detail-1",
+    });
+    expect(next.messages.map((message) => message.content)).toEqual([
+      "recovered detail",
+    ]);
+  });
+
+  it("shows a delayed refresh indicator only for the current detail request", () => {
+    const session = makeSession("session-1", "project-1");
+    const refreshing = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "ready",
+            hasLoaded: true,
+            showRefreshIndicator: false,
+          },
+        },
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-2",
+      },
+    );
+
+    const stale = appReducer(refreshing, {
+      type: "sessionDetailRefreshIndicatorShown",
+      sessionId: "session-1",
+      requestId: "old-detail",
+    });
+    const visible = appReducer(refreshing, {
+      type: "sessionDetailRefreshIndicatorShown",
+      sessionId: "session-1",
+      requestId: "detail-2",
+    });
+
+    expect(stale.sessionDetailLoadStates["session-1"]).toMatchObject({
+      showRefreshIndicator: false,
+    });
+    expect(visible.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "refreshing",
+      hasLoaded: true,
+      showRefreshIndicator: true,
+    });
+  });
+
+  it("keeps cached detail available when a refresh fails", () => {
+    const session = makeSession("session-1", "project-1");
+    const refreshing = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "ready",
+            hasLoaded: true,
+            showRefreshIndicator: false,
+          },
+        },
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-3",
+      },
+    );
+
+    const failed = appReducer(refreshing, {
+      type: "sessionDetailLoadFailed",
+      sessionId: "session-1",
+      requestId: "detail-3",
+      message: "network failed",
+    });
+
+    expect(failed.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "error",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+      requestId: "detail-3",
+      error: "network failed",
+    });
+  });
 });
 
 const runner: RunnerRegistration = {
@@ -2248,7 +2578,10 @@ function makeSession(
 }
 
 function makeActivity(
-  activity: Pick<AgentActivity, "id" | "sessionId" | "agent" | "kind" | "label"> &
+  activity: Pick<
+    AgentActivity,
+    "id" | "sessionId" | "agent" | "kind" | "label"
+  > &
     Partial<AgentActivity>,
 ): AgentActivity {
   return {

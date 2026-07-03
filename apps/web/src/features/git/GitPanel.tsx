@@ -50,6 +50,7 @@ import {
   type RefObject,
   type ReactNode,
 } from "react";
+import { PathTailLabel } from "../common/PathTailLabel";
 
 type AsyncState = "idle" | "loading" | "ready" | "error";
 type GitTab = "changes" | "history" | "branch";
@@ -1305,7 +1306,7 @@ function ChangeTreeNodeView({
           onClick={() => onSelectChange(node.change as GitChange)}
         >
           <span className={`git-status-dot ${node.change.status}`} />
-          <span className="truncate">{node.name}</span>
+          <PathTailLabel value={node.name} />
         </button>
         {children}
       </>
@@ -1315,7 +1316,7 @@ function ChangeTreeNodeView({
     <details className="git-tree-folder" open>
       <summary style={{ paddingLeft: 8 + depth * 14 }}>
         <ChevronRight size={13} />
-        <span className="truncate">{node.name}</span>
+        <PathTailLabel value={node.name} />
       </summary>
       {children}
     </details>
@@ -1350,6 +1351,7 @@ function GitChangeList({
               <button
                 key={`${group.id}:${change.path}:${change.staged ? "staged" : "worktree"}`}
                 type="button"
+                aria-label={change.path}
                 className={
                   selectedChange?.path === change.path &&
                   selectedChange.staged === change.staged
@@ -1359,7 +1361,7 @@ function GitChangeList({
                 onClick={() => onSelectChange(change)}
               >
                 <span className={`git-status-dot ${change.status}`} />
-                <span className="truncate">{change.path}</span>
+                <PathTailLabel value={change.path} />
               </button>
             ))}
           </section>
@@ -1720,11 +1722,12 @@ function HistoryDetails({
             <button
               key={`${commit.sha}:${file.path}`}
               type="button"
+              aria-label={file.path}
               className={selectedPath === file.path ? "is-selected" : ""}
               onClick={() => onSelectPath(file.path)}
             >
               <span className={`git-status-dot ${file.status}`} />
-              <span className="truncate">{file.path}</span>
+              <PathTailLabel value={file.path} />
             </button>
           ))
         )}
