@@ -2,8 +2,26 @@
   "name": "roamcli",
   "version": "1.1.0",
   "private": true,
-  "description": "Open-source remote AI coding agent control platform.",
-  "license": "SEE LICENSE IN LICENSE",
+  "description": "Self-hosted web control plane for Codex, Claude Code, and AI coding agents running on your own machines.",
+  "license": "MIT",
+  "homepage": "https://github.com/CharAznable98/roam-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CharAznable98/roam-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CharAznable98/roam-cli/issues"
+  },
+  "keywords": [
+    "ai-coding-agent",
+    "coding-agent",
+    "codex",
+    "claude-code",
+    "self-hosted",
+    "web-ui",
+    "agent-runner",
+    "control-plane"
+  ],
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {

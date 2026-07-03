@@ -1,7 +1,26 @@
 {
   "name": "@roamcli/runner",
   "version": "1.1.0",
+  "description": "Local runner for RoamCli self-hosted AI coding agent sessions.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/CharAznable98/roam-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CharAznable98/roam-cli.git",
+    "directory": "apps/runner"
+  },
+  "bugs": {
+    "url": "https://github.com/CharAznable98/roam-cli/issues"
+  },
+  "keywords": [
+    "ai-coding-agent",
+    "coding-agent",
+    "agent-runner",
+    "self-hosted",
+    "codex",
+    "claude-code"
+  ],
   "publishConfig": {
     "access": "public"
   },
