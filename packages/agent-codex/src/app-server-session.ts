@@ -80,6 +80,7 @@ export class CodexAppServerSession implements AgentSession {
   readonly #threadIdleWaiters = new Set<() => void>();
   #turnDone:
     | {
+        turnId: string | undefined;
         resolve: () => void;
         reject: (error: Error) => void;
       }
@@ -324,10 +325,14 @@ export class CodexAppServerSession implements AgentSession {
       input: userInputFor(input),
       ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
     })) as TurnStartResponse;
-    this.#activeTurnId = response.turn?.id ?? undefined;
+    this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
     this.#sendPendingInterrupt();
     await new Promise<void>((resolve, reject) => {
-      this.#turnDone = { resolve, reject };
+      this.#turnDone = {
+        turnId: this.#activeTurnId,
+        resolve,
+        reject,
+      };
     });
     if (this.#pendingTerminalStatus !== "stopped") {
       await this.#awaitPendingDirectiveApprovals();
@@ -348,9 +353,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (method === "turn/started") {
-      const notification = params as TurnNotification;
-      this.#activeTurnId = notification.turn?.id ?? this.#activeTurnId;
-      this.#sendPendingInterrupt();
+      this.#handleTurnStarted(params as TurnNotification);
       return;
     }
     if (method === "item/agentMessage/delta") {
@@ -718,11 +721,17 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   async #handleTurnCompleted(notification: TurnNotification): Promise<void> {
+    if (!this.#isCurrentRootTurn(notification)) {
+      return;
+    }
     const status = notification.turn?.status;
     await this.#emitLifecycleActivity(
       `Codex app-server turn completed: ${status ?? "unknown"}`,
     );
     const done = this.#turnDone;
+    if (done && done.turnId === undefined) {
+      done.turnId = notification.turn?.id;
+    }
     this.#turnDone = undefined;
     if (status === "failed") {
       const message =
@@ -747,6 +756,48 @@ export class CodexAppServerSession implements AgentSession {
     this.#turnCompletedSuccessfully = true;
     done?.resolve();
     await this.#emitCompletedIfReady();
+  }
+
+  #handleTurnStarted(notification: TurnNotification): void {
+    if (!this.#isRootTurn(notification)) {
+      return;
+    }
+    const turnId = notification.turn?.id;
+    if (!turnId) {
+      return;
+    }
+    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    if (expectedTurnId !== undefined && expectedTurnId !== turnId) {
+      return;
+    }
+    this.#activeTurnId = turnId;
+    if (this.#turnDone && this.#turnDone.turnId === undefined) {
+      this.#turnDone.turnId = turnId;
+    }
+    this.#sendPendingInterrupt();
+  }
+
+  #isCurrentRootTurn(notification: TurnNotification): boolean {
+    if (!this.#isRootTurn(notification)) {
+      return false;
+    }
+    const turnId = notification.turn?.id;
+    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    if (turnId !== undefined && expectedTurnId !== undefined) {
+      return turnId === expectedTurnId;
+    }
+    if (turnId === undefined && expectedTurnId !== undefined) {
+      return notification.threadId !== undefined;
+    }
+    return true;
+  }
+
+  #isRootTurn(notification: TurnNotification): boolean {
+    return (
+      notification.threadId === undefined ||
+      this.#threadId === undefined ||
+      notification.threadId === this.#threadId
+    );
   }
 
   async #handleThreadStatusChanged(
