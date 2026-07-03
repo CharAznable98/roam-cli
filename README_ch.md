@@ -1,8 +1,61 @@
 # RoamCli
 
-英文文档见 [README.md](README.md)。
+English documentation is available in [README.md](README.md).
 
-RoamCli 是一个自托管的 Web 控制面，用来在开发机上运行 AI 编码 Agent。它通过反向 WebSocket 连接浏览器界面、中心 TypeScript Server 和一个或多个 Runner，让你可以在 Web 里创建 Agent Session、查看项目文件、接收终端输出、处理审批，并应用 patch。
+**RoamCli 是一个自托管的 Web 控制面，用来管理运行在开发机上的 AI 编码 Agent。**
+
+你可以在浏览器里启动和监督编码 Agent Session，同时把仓库访问和代码执行留在你控制的 Runner 机器上。浏览器只访问 Server；每个 Runner 负责自己的 workspace 访问和执行，并通过反向 WebSocket 主动连接 Server。
+
+**快速导航：** [快速开始](#快速开始) · [可以做什么](#可以做什么) · [工作方式](#工作方式) · [Agent 插件](#agent-插件) · [配置](#配置)
+
+## 可以做什么
+
+- 把一个或多个开发机 Runner 连接到中心 Server，Runner 侧通常不需要开放入站端口。
+- 在浏览器里创建 Project 和 Session。
+- 在任务运行时查看 Agent 消息和终端输出。
+- 浏览和编辑当前 execution folder 内的 UTF-8 文本文件。
+- 处理审批，接受或拒绝操作，并应用已接受的 patch。
+- 通过插件加载 Agent 能力，包括 Codex 和 Claude Code。
+
+## 快速开始
+
+你需要 Node.js 24 或更新版本、pnpm 10 或更新版本、Git，以及所选插件需要的编码 Agent。Server 安装脚本还需要 Docker 和 Docker Compose。
+
+源码 checkout 后，先安装依赖并构建 workspace：
+
+```bash
+pnpm install
+pnpm build
+```
+
+启动 Server：
+
+```bash
+HOST=127.0.0.1 \
+PORT=8787 \
+ROAMCLI_DATA_DIR=.roamcli-server \
+pnpm --filter @roamcli/server dev
+```
+
+首次启动时 Server 会在日志中打印 setup token，并写入 `.roamcli-server/setup-token.txt`。打开 Web UI，输入 setup token 并设置 owner 密码：
+
+```text
+http://127.0.0.1:8787
+```
+
+在 **Account & Security** 中复制 Runner token 或完整 Runner 命令。然后在你希望暴露为 Runner workspace 的目录下，至少带一个 Agent 插件启动 Runner：
+
+```bash
+npx --yes \
+  --package @roamcli/runner \
+  --package @roamcli/agent-codex \
+  -- roam-runner \
+  --server ws://127.0.0.1:8787/v1/runner \
+  --token <runner-token-from-account-security> \
+  --agent-plugin @roamcli/agent-codex
+```
+
+之后在 Web UI 中创建 Project、创建 Session，并向已连接的 Agent 发送提示。
 
 ## 工作方式
 
@@ -12,26 +65,17 @@ RoamCli 由三个彼此独立的部分组成：
 - **Runner**：运行在开发机或任何能访问代码的机器上。Runner 会主动连接 Server，负责启动 Agent、读写 workspace 文件、转发终端输出，并应用已批准的 patch。
 - **Web UI**：由 Server 提供的浏览器界面。浏览器只需要访问 Server，不需要直接访问 Runner。
 
-Runner 使用反向 WebSocket 连接，因此运行 Runner 的机器通常只需要能出站访问 Server，不需要暴露入站端口。
+Runner 使用反向 WebSocket 连接，因此运行 Runner 的机器通常只需要能出站访问 Server。
 
-## 前置条件
+## 安装 Server
 
-- Node.js 24 或更新版本。
-- pnpm 10 或更新版本。本仓库声明 `packageManager: pnpm@10.33.0`。
-- Git。
-- Server 安装脚本需要 Docker 和 Docker Compose。
-- Runner 机器上已安装所选 Agent 插件需要的编码 Agent，例如 `@roamcli/agent-codex` 需要 Codex。
+### Docker 安装脚本
 
-## 安装
-
-### Server：Docker 安装脚本
-
-推荐的 Server 安装方式是 Release 附带的安装脚本。脚本支持 macOS 和 Linux，会检测 Git、Docker、Docker Compose，拉取选定的 release tag，在本机构建 Server 镜像，并用 Docker Compose 启动。RoamCli 不依赖发布好的 Docker image。
+推荐的 Server 安装方式是仓库内置的安装脚本。脚本支持 macOS 和 Linux，会检测 Git、Docker、Docker Compose，拉取选定的 release tag 或 ref，在本机构建 Server 镜像，并用 Docker Compose 启动。RoamCli 不依赖发布好的 Docker image。
 
 ```bash
-curl -fsSL https://github.com/CharAznable98/roam-cli/releases/latest/download/install-server.sh -o install-server.sh
-chmod +x install-server.sh
-./install-server.sh
+chmod +x scripts/install-server.sh
+./scripts/install-server.sh
 ```
 
 默认值：
@@ -44,22 +88,24 @@ chmod +x install-server.sh
 安装或升级到指定旧版本使用同一个脚本：
 
 ```bash
-./install-server.sh --version v1.1.0
+./scripts/install-server.sh --version v1.1.0
 ```
 
 常用选项：
 
 ```bash
-./install-server.sh --public-origin https://roam.example.com
-./install-server.sh --dry-run
-./install-server.sh --uninstall
+./scripts/install-server.sh --public-origin https://roam.example.com
+./scripts/install-server.sh --dry-run
+./scripts/install-server.sh --uninstall
 ```
 
 `--uninstall` 会停止并删除脚本生成的 Server 部署文件。删除 Server 数据前会二次确认；默认保留数据。
 
+安装脚本启动 Server 后，打开配置的 host 和端口，使用脚本打印的数据目录里的 setup token 完成初始化，设置 owner 密码，然后在 **Account & Security** 中复制 Runner token。
+
 Windows 用户建议在启用 Docker Desktop 集成的 WSL2 中运行安装脚本，或使用下面的源码安装方式。
 
-### Server：源码安装
+### 源码安装
 
 源码安装适合本地开发，或你希望自行管理进程的场景：
 
@@ -70,20 +116,9 @@ pnpm build
 
 `pnpm build` 会构建 Server 相关包和 Server 可托管的 Web UI 静态资源。
 
-## 运行 RoamCli
+## 连接 Runner
 
-如果通过 `install-server.sh` 安装 Server，直接打开配置的地址即可。源码 checkout 则先启动 Server：
-
-```bash
-HOST=127.0.0.1 \
-PORT=8787 \
-ROAMCLI_DATA_DIR=.roamcli-server \
-pnpm --filter @roamcli/server dev
-```
-
-首次启动时 Server 会在日志中打印 setup token，并写入 `.roamcli-server/setup-token.txt`。打开 Web UI，输入 setup token 并设置 owner 密码。完成后在 Web UI 的 **Account & Security** 中复制 Runner token 或完整 Runner 命令。
-
-另开一个 shell，在你希望暴露为 Runner workspace 的目录下启动 Runner。Web UI 会在你选择至少一个 Agent 插件后生成这个 `npx` 命令：
+在你希望暴露为 Runner workspace 的目录下启动 Runner。Web UI 会在你选择至少一个 Agent 插件后生成这个 `npx` 命令：
 
 ```bash
 npx --yes \
@@ -106,46 +141,15 @@ npx --yes \
 
 如果交互式终端里缺少必填参数，Runner 会进入 React Ink TUI 向导，并在收集完成后自动 re-exec 完整 `npx` 命令。非交互式环境必须显式传入 `--server`、`--token` 和至少一个 `--agent-plugin`。
 
-打开 Web UI：
-
-```text
-http://127.0.0.1:8787
-```
-
 ## 使用 RoamCli
 
 1. 确认 Runner 已在线。
 2. 创建 Project，选择 Runner；界面会把该 Runner 的 workspace 固定为目录前缀，你只需要填写其下的相对项目路径。
 3. 在 Project 下创建 Session。
 4. 在 Chat 面板向 Agent 发送提示。
-5. 在 Files 面板浏览和编辑 Session 目录内的 UTF-8 文本文件。
+5. 在 Files 面板浏览和编辑 execution folder 内的 UTF-8 文本文件。
 6. 在 Terminal 面板向当前 Session 发送输入。
 7. 在 Approvals 面板处理批准或拒绝请求，并应用已接受的 patch。
-
-## Server 配置
-
-| 变量                    | 说明                                                                                                               | 默认值                                    |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
-| `HOST`                  | Server 绑定地址。                                                                                                  | `127.0.0.1`                               |
-| `PORT`                  | Server 绑定端口。                                                                                                  | `3000`                                    |
-| `ROAMCLI_DATA_DIR`      | SQLite 数据和本地 artifacts 目录。                                                                                 | `.roamcli-server`                         |
-| `ROAMCLI_WEB_DIST`      | 构建后的 Web UI 资源路径。                                                                                         | 自动查找 `apps/web/dist` 或 `../web/dist` |
-| `ROAMCLI_PUBLIC_ORIGIN` | 允许执行写操作的浏览器公开 origin，例如 `https://roam.example.com`。                                               | 根据请求 host 推断                        |
-| `ROAMCLI_RESET_OWNER`   | 启动时设为 `1` 会清空 owner 凭据和 Web session，并生成新的 setup token。Runner token 和项目/session 数据保持不变。 | 未设置                                    |
-
-## Runner 配置
-
-Runner 会从 `<workspace>/<data-dir>/config.json` 读取本地配置。CLI 参数和环境变量会覆盖本地配置，并在 Runner 连接前写回。
-
-| CLI 参数         | 环境变量                | 说明                                                                                                           |
-| ---------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。                                               |
-| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                                                                     |
-| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                                                              |
-| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。                                                   |
-| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | workspace 下的相对 Runner 数据目录，用于状态和 session worktree。默认 `.roam-runner`，拒绝绝对路径和父级跳转。 |
-| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。                                         |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 必填的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。                                                      |
 
 ## Agent 插件
 
@@ -188,6 +192,33 @@ ROAMCLI_AGENT_CODEX_ARGS
 ```
 
 `ROAMCLI_AGENT_CODEX_ARGS` 只在 `exec-json` 模式生效，支持类 shell 字符串，也支持 JSON 字符串数组。
+
+## 配置
+
+### Server
+
+| 变量                    | 说明                                                                                                               | 默认值                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| `HOST`                  | Server 绑定地址。                                                                                                  | `127.0.0.1`                               |
+| `PORT`                  | Server 绑定端口。                                                                                                  | `3000`                                    |
+| `ROAMCLI_DATA_DIR`      | SQLite 数据和本地 artifacts 目录。                                                                                 | `.roamcli-server`                         |
+| `ROAMCLI_WEB_DIST`      | 构建后的 Web UI 资源路径。                                                                                         | 自动查找 `apps/web/dist` 或 `../web/dist` |
+| `ROAMCLI_PUBLIC_ORIGIN` | 允许执行写操作的浏览器公开 origin，例如 `https://roam.example.com`。                                               | 根据请求 host 推断                        |
+| `ROAMCLI_RESET_OWNER`   | 启动时设为 `1` 会清空 owner 凭据和 Web session，并生成新的 setup token。Runner token 和项目/session 数据保持不变。 | 未设置                                    |
+
+### Runner
+
+Runner 会从 `<workspace>/<data-dir>/config.json` 读取本地配置。CLI 参数和环境变量会覆盖本地配置，并在 Runner 连接前写回。
+
+| CLI 参数         | 环境变量                | 说明                                                                                                           |
+| ---------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。                                               |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                                                                     |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                                                              |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。                                                   |
+| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | workspace 下的相对 Runner 数据目录，用于状态和 session worktree。默认 `.roam-runner`，拒绝绝对路径和父级跳转。 |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。                                         |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 必填的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。                                                      |
 
 ## Docker Compose
 
