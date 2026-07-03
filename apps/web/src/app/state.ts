@@ -803,7 +803,7 @@ function markSessionDetailImplicitlyLoading(
     return state;
   }
   const current = getSessionDetailLoadState(state, sessionId);
-  if (current.hasLoaded || current.status === "loading") {
+  if (current.status !== "idle") {
     return state;
   }
   return {

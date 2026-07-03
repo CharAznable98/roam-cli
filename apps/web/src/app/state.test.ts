@@ -2227,6 +2227,34 @@ describe("app reducer", () => {
     });
   });
 
+  it("preserves a failed first detail load when reselecting the session", () => {
+    const session = makeSession("session-1", "project-1");
+    const errored = {
+      ...initialAppState,
+      sessions: [session],
+      selectedProjectId: "project-1",
+      selectedSessionId: "session-1",
+      sessionDetailLoadStates: {
+        "session-1": {
+          status: "error" as const,
+          hasLoaded: false,
+          showRefreshIndicator: false,
+          requestId: "detail-1",
+          error: "network failed",
+        },
+      },
+    };
+
+    const next = appReducer(errored, {
+      type: "sessionSelected",
+      sessionId: "session-1",
+    });
+
+    expect(next.sessionDetailLoadStates["session-1"]).toEqual(
+      errored.sessionDetailLoadStates["session-1"],
+    );
+  });
+
   it("moves session detail state to ready after a successful load", () => {
     const session = makeSession("session-1", "project-1");
     const loading = appReducer(
