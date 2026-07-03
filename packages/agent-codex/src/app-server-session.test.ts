@@ -151,6 +151,149 @@ describe("CodexAppServerSession", () => {
     expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
 
+  it("ignores child turn lifecycle events while waiting for the root turn", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("turn/completed", {
+      threadId: "child-thread",
+      turn: { id: "child-turn-1", status: "completed" },
+    });
+    await settle();
+
+    child.notify("turn/started", {
+      threadId: "child-thread",
+      turn: { id: "child-turn-2" },
+    });
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("ignores turn completion for a different turn on the root thread", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "other-turn", status: "completed" },
+    });
+    await settle();
+
+    expect(statusEvents(events)).toEqual([]);
+    expect(child.killedSignals).toEqual([]);
+
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("accepts turn completion without a thread id when the turn id matches", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    child.notify("turn/completed", {
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("ignores anonymous turn completion while the active root turn id is known", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    child.notify("turn/completed", {
+      turn: { status: "completed" },
+    });
+    await settle();
+
+    expect(statusEvents(events)).toEqual([]);
+    expect(child.killedSignals).toEqual([]);
+
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("requires the root thread id for completion while the root turn id is unknown", async () => {
+    const { child, events } = await launchSession({
+      turnStartResult: { turn: {} },
+    });
+
+    child.notify("turn/completed", {
+      turn: { id: "child-turn", status: "completed" },
+    });
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    await settle();
+
+    expect(statusEvents(events)).toEqual([]);
+    expect(child.killedSignals).toEqual([]);
+
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("requires the root thread id before seeding an unknown root turn id", async () => {
+    const { child, events } = await launchSession({
+      turnStartResult: { turn: {} },
+    });
+
+    child.notify("turn/started", {
+      turn: { id: "child-turn" },
+    });
+    child.notify("thread/status/changed", {
+      threadId: "thread-1",
+      status: { type: "idle" },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    await waitFor(() => statusEvents(events).includes("completed"));
+    expect(statusEvents(events)).toEqual(["completed"]);
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
   it("queues the next turn until the root thread becomes idle", async () => {
     const { child, events, session } = await launchSession();
 
@@ -227,7 +370,9 @@ describe("CodexAppServerSession", () => {
   });
 });
 
-async function launchSession(): Promise<{
+async function launchSession(
+  options: { turnStartResult?: unknown } = {},
+): Promise<{
   child: FakeChild;
   events: AgentRuntimeEvent[];
   session: CodexAppServerSession;
@@ -249,7 +394,10 @@ async function launchSession(): Promise<{
   await start;
 
   const turnStart = await waitForRequest(child, "turn/start");
-  child.respond(turnStart.id, { turn: { id: "turn-1" } });
+  child.respond(
+    turnStart.id,
+    options.turnStartResult ?? { turn: { id: "turn-1" } },
+  );
 
   return { child, events, session };
 }
