@@ -839,6 +839,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     gitBaseRef: z.string().min(1).optional(),
     gitBranchName: z.string().min(1).optional(),
     prompt: z.string().min(1),
+    agentRuntimeConfig: AgentRuntimeConfigSchema.optional(),
     attachments: z.array(ImageAttachmentUploadSchema).default([]),
   }),
   z.object({

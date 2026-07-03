@@ -782,6 +782,13 @@ describe("App", () => {
                   serviceTiers: [],
                   supportsFastMode: true,
                 },
+                {
+                  value: "gpt-5.3-codex-spark",
+                  label: "GPT-5.3 Codex Spark",
+                  reasoningEfforts: [{ value: "low", label: "Low" }],
+                  serviceTiers: [],
+                  supportsFastMode: true,
+                },
               ],
               allowCustomModel: false,
               reasoningEfforts: [{ value: "medium", label: "Medium" }],
@@ -1816,6 +1823,46 @@ describe("App", () => {
         fastMode: true,
       },
     });
+  });
+
+  it("clears stale runner-level thinking intensity when Settings model changes", async () => {
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(settings.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(settings.getByLabelText("Thinking intensity")).toHaveValue("");
+    });
+    fireEvent.click(settings.getByRole("button", { name: "Save defaults" }));
+
+    await waitFor(() =>
+      expect(runnerAgentRuntimeConfigSettings).toEqual([
+        {
+          runnerId: "real-runner",
+          agent: "codex",
+          config: {
+            model: "gpt-5.3-codex-spark",
+          },
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+      ]),
+    );
   });
 
   it("keeps Settings reachable before runners connect", async () => {

@@ -171,6 +171,21 @@ export function NewSessionForm({
   );
 
   useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!reasoningEffort) {
+      return;
+    }
+    if (
+      reasoningEffortOptions.some((option) => option.value === reasoningEffort)
+    ) {
+      return;
+    }
+    setReasoningEffort("");
+  }, [reasoningEffort, reasoningEffortOptions, runtimeOptionsState]);
+
+  useEffect(() => {
     setModel(defaultRuntimeConfig.model ?? "");
     setReasoningEffort(defaultRuntimeConfig.reasoningEffort ?? "");
     setFastMode(

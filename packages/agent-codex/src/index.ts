@@ -468,8 +468,19 @@ export async function listCodexRuntimeConfigOptions(
     };
   }
 
+  const base = await resolveSkillBase(context.workspace, context.basePath);
+  if (!base) {
+    return {
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Runtime config base path must be inside the runner workspace.",
+    };
+  }
+
   const child = spawnChild(commandFor(KIND, context.env), appServerArgsFor(), {
-    cwd: context.basePath,
+    cwd: base.path,
     env: context.env,
     stdio: "pipe",
   });
@@ -588,6 +599,9 @@ function codexModelOption(value: unknown): AgentRuntimeModelOption[] {
 function codexReasoningEffortOption(
   value: unknown,
 ): AgentRuntimeConfigOption[] {
+  if (typeof value === "string" && value.length > 0) {
+    return [{ value, label: value }];
+  }
   if (!isRecord(value) || typeof value.reasoningEffort !== "string") {
     return [];
   }

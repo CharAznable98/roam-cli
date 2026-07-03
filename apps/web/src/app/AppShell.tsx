@@ -2150,6 +2150,21 @@ function AgentDefaultsSettingsPanel({
       : (options?.reasoningEfforts ?? []);
 
   useEffect(() => {
+    if (optionsState !== "ready") {
+      return;
+    }
+    if (!reasoningEffort) {
+      return;
+    }
+    if (
+      reasoningEffortOptions.some((option) => option.value === reasoningEffort)
+    ) {
+      return;
+    }
+    setReasoningEffort("");
+  }, [optionsState, reasoningEffort, reasoningEffortOptions]);
+
+  useEffect(() => {
     if (!selectedRunner) {
       setRunnerId(runners[0]?.runnerId ?? "");
       return;

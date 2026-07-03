@@ -22,6 +22,7 @@ import {
   approvalResponsePayload,
   codexAgent,
   codexJsonArgs,
+  listCodexRuntimeConfigOptions,
   listCodexSkills,
   parseArgs,
 } from "./index.js";
@@ -224,6 +225,65 @@ describe("codex agent plugin", () => {
               ]),
         ),
       ).toBe(true);
+    });
+  });
+
+  it("lists Codex runtime config options from app-server model metadata", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-options-");
+    await writeAppServerScript(workspace, "runtime-options.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'model/list') write({ id: message.id, result: { data: [{ model: 'gpt-5-codex', displayName: 'GPT-5 Codex', supportedReasoningEfforts: ['minimal', 'high'], serviceTiers: [{ id: 'flex', name: 'Flex' }] }] } });",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: { ROAMCLI_AGENT_CODEX_COMMAND: process.execPath },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.models).toEqual([
+      expect.objectContaining({
+        value: "gpt-5-codex",
+        label: "GPT-5 Codex",
+        reasoningEfforts: [
+          { value: "minimal", label: "minimal" },
+          { value: "high", label: "high" },
+        ],
+      }),
+    ]);
+    expect(result.reasoningEfforts).toEqual([
+      { value: "minimal", label: "minimal" },
+      { value: "high", label: "high" },
+    ]);
+    expect(result.fastMode).toEqual({
+      kind: "serviceTier",
+      supported: true,
+      options: [{ value: "flex", label: "Flex" }],
+    });
+  });
+
+  it("rejects Codex runtime option base paths outside the runner workspace", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-workspace-");
+    const outside = await mkdirTemp("roam-codex-runtime-outside-");
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: outside,
+      env: { ROAMCLI_AGENT_CODEX_COMMAND: process.execPath },
+    });
+
+    expect(result).toMatchObject({
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Runtime config base path must be inside the runner workspace.",
     });
   });
 

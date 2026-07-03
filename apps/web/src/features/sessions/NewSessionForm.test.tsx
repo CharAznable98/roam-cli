@@ -429,6 +429,64 @@ describe("NewSessionForm runtime configuration", () => {
       }),
     );
   });
+
+  it("clears stale thinking intensity when the selected model changes", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [{ value: "high", label: "High" }],
+              serviceTiers: [],
+            },
+            {
+              value: "gpt-5.3-codex-spark",
+              label: "GPT-5.3 Codex Spark",
+              reasoningEfforts: [{ value: "low", label: "Low" }],
+              serviceTiers: [],
+            },
+          ],
+        })}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    fireEvent.change(await screen.findByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Thinking intensity")).toHaveValue("");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use spark" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use spark",
+        agentRuntimeConfig: {
+          model: "gpt-5.3-codex-spark",
+        },
+      }),
+    );
+  });
 });
 
 function runtimeOptions(): AgentRuntimeConfigOptionsResult {
