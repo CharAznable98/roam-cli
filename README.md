@@ -2,11 +2,15 @@
 
 中文文档见 [README_ch.md](README_ch.md)。
 
-**RoamCli is a self-hosted web control plane for AI coding agents running on your development machines.**
+**RoamCli is a self-hosted web UI and control plane for Codex, Claude Code, and other AI coding agents running on your own machines.**
 
-Start and supervise coding-agent sessions from a browser while keeping repository access and code execution on runner machines you control. The browser talks to the Server; each Runner owns workspace access and execution, then connects outbound to the Server over reverse WebSocket.
+Start, supervise, and resume coding-agent sessions from a browser while keeping repository access and code execution on runner machines you control. The browser talks to the Server; each Runner owns workspace access and execution, then connects outbound to the Server over reverse WebSocket.
 
-**Quick links:** [Quick start](#quick-start) · [What you can do](#what-you-can-do) · [How it works](#how-it-works) · [Agent plugins](#agent-plugins) · [Configuration](#configuration)
+![RoamCli social preview](docs/assets/social-preview.png)
+
+Built for self-hosted AI coding agent workflows: Codex, Claude Code, local runners, browser supervision, and remote development control planes.
+
+**Quick links:** [Quick start](#quick-start) · [What you can do](#what-you-can-do) · [How it works](#how-it-works) · [Install from source](#install-from-source) · [Agent plugins](#agent-plugins) · [FAQ](docs/faq.md)
 
 ## What You Can Do
 
@@ -15,15 +19,17 @@ Start and supervise coding-agent sessions from a browser while keeping repositor
 - Stream agent messages and terminal output while a task is running.
 - Browse and edit UTF-8 files in the active execution folder.
 - Review approvals, accept or reject actions, and apply accepted patches.
-- Load agent capabilities through plugins, including Codex and Claude Code.
+- Load agent capabilities through local workspace plugins, including Codex and Claude Code.
 
 ## Quick Start
 
-You need Node.js 24 or newer, pnpm 10 or newer, Git, and an installed coding agent for the plugin you want to run. Docker and Docker Compose are required for the Server installer.
+RoamCli is currently installed from a source checkout. You need Node.js 24 or newer, pnpm 10 or newer, Git, and the coding-agent CLI you want to run. Docker and Docker Compose are optional for the source Docker path.
 
-For a source checkout, install dependencies and build the workspace:
+Clone, install, and build the workspace:
 
 ```bash
+git clone https://github.com/CharAznable98/roam-cli.git
+cd roam-cli
 pnpm install
 pnpm build
 ```
@@ -43,15 +49,13 @@ On first start, the Server prints a setup token and writes it to `.roamcli-serve
 http://127.0.0.1:8787
 ```
 
-In **Account & Security**, copy the Runner token or full Runner command. From the directory you want to expose as the Runner workspace, start a Runner with at least one agent plugin:
+In **Account & Security**, copy the Runner token. From the directory you want to expose as the Runner workspace, start a local workspace Runner with at least one agent plugin:
 
 ```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  -- roam-runner \
+pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
   --token <runner-token-from-account-security> \
+  --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
 
@@ -67,79 +71,91 @@ RoamCli has three independent parts:
 
 Runners use reverse WebSocket connections, so a Runner usually only needs outbound network access to the Server.
 
-## Install The Server
+## Install From Source
 
-### Docker Installer
+### Local Source Install
 
-The recommended Server install path is the installer script included in this repository. It runs on macOS and Linux, checks for Git, Docker, and Docker Compose, clones the selected release tag or ref, builds the Server image locally, and starts it with Docker Compose. RoamCli does not require a published Docker image.
-
-```bash
-chmod +x scripts/install-server.sh
-./scripts/install-server.sh
-```
-
-Defaults:
-
-- Install directory: `~/.roamcli/server`
-- Server data directory: `~/.roamcli/server/data`
-- Bind address: `0.0.0.0:8787`
-- Release ref: latest GitHub release tag
-
-Install or upgrade an older/specific version with the same script:
+Use source install for local development, evaluation, or when you want to manage the process yourself:
 
 ```bash
-./scripts/install-server.sh --version v1.1.0
-```
-
-Useful options:
-
-```bash
-./scripts/install-server.sh --public-origin https://roam.example.com
-./scripts/install-server.sh --dry-run
-./scripts/install-server.sh --uninstall
-```
-
-`--uninstall` stops and removes the generated Server deployment files. It asks for a second confirmation before deleting Server data; data is preserved by default.
-
-After the installer starts the Server, open the configured host and port, use the setup token from the printed data directory path, set the owner password, and copy the Runner token from **Account & Security**.
-
-Windows users should run the installer from WSL2 with Docker Desktop integration enabled, or use the source install path below.
-
-### Source Install
-
-Use source install for local development or when you want to manage the process yourself:
-
-```bash
+git clone https://github.com/CharAznable98/roam-cli.git
+cd roam-cli
 pnpm install
 pnpm build
 ```
 
 `pnpm build` builds the Server packages and the Web UI assets that the Server can serve.
 
-## Connect A Runner
-
-Start a Runner from the directory you want to expose as the Runner workspace. The Web UI generates this `npx` command after you select at least one agent plugin:
+Start the Server from the checkout:
 
 ```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  -- roam-runner \
+HOST=127.0.0.1 \
+PORT=8787 \
+ROAMCLI_DATA_DIR=.roamcli-server \
+pnpm --filter @roamcli/server dev
+```
+
+### Source Docker Compose
+
+The root `docker-compose.yml` is for source checkouts. It builds the Server image locally and starts the Server only; you still need to start one or more Runners separately and point them at the Server.
+
+```bash
+docker compose up --build
+```
+
+The compose setup exposes the Server on port `8787` and persists Server data in the `roamcli-data` volume.
+
+### Installer Script
+
+The installer script can clone a specific branch, tag, or commit, build the Server image locally, and start it with Docker Compose:
+
+```bash
+chmod +x scripts/install-server.sh
+./scripts/install-server.sh --ref main
+```
+
+Useful options:
+
+```bash
+./scripts/install-server.sh --ref main --public-origin https://roam.example.com
+./scripts/install-server.sh --dry-run
+./scripts/install-server.sh --uninstall
+```
+
+`--uninstall` stops and removes the generated Server deployment files. It asks for a second confirmation before deleting Server data; data is preserved by default.
+
+Windows users should run the installer from WSL2 with Docker Desktop integration enabled, or use the local source install path.
+
+## Connect A Runner
+
+Start a Runner from the directory you want to expose as the Runner workspace. Until the npm packages are published, use the local workspace command from the source checkout:
+
+```bash
+pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
   --token <runner-token-from-account-security> \
+  --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
 
-The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit persisted options, but the selected plugin packages still need to be available to `npx`:
+To enable both built-in agent plugins:
 
 ```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  -- roam-runner
+pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+  --server ws://127.0.0.1:8787/v1/runner \
+  --token <runner-token> \
+  --workspace "$PWD" \
+  --agent-plugin @roamcli/agent-codex \
+  --agent-plugin @roamcli/agent-claude-code
 ```
 
-If required values are missing in an interactive terminal, the Runner opens a React Ink TUI wizard and then re-execs the complete `npx` command with the selected plugin packages. In non-interactive shells, pass `--server`, `--token`, and at least one `--agent-plugin` explicitly.
+The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit persisted options:
+
+```bash
+pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
+```
+
+If required values are missing in an interactive terminal, the Runner opens a React Ink TUI wizard and then re-execs the local command with the selected plugin packages. In non-interactive shells, pass `--server`, `--token`, and at least one `--agent-plugin` explicitly.
 
 ## Use RoamCli
 
@@ -153,28 +169,12 @@ If required values are missing in an interactive terminal, the Runner opens a Re
 
 ## Agent Plugins
 
-The Runner core is intentionally minimal and does not load a default agent plugin. Choose at least one plugin with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`; when using `npx`, include each plugin package with `--package`.
+The Runner core is intentionally minimal and does not load a default agent plugin. Choose at least one plugin with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`.
 
-Official plugin packages:
+Built-in workspace plugin packages:
 
 - `@roamcli/agent-codex`
 - `@roamcli/agent-claude-code`
-
-Multiple plugins are supported:
-
-```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  --package @roamcli/agent-claude-code \
-  -- roam-runner \
-  --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token> \
-  --agent-plugin @roamcli/agent-codex \
-  --agent-plugin @roamcli/agent-claude-code
-```
-
-To pin old Runner/plugin versions, add npm versions to the `--package` values, for example `@roamcli/runner@1.1.0`. Local Runner config stores plugin import names only, not package versions.
 
 The Codex plugin uses `codex app-server --stdio -c skip_git_repo_check=true` by default. The Codex command can be overridden with:
 
@@ -220,37 +220,6 @@ Runner reads local config from `<workspace>/<data-dir>/config.json`. CLI options
 | `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`.                                                                                       |
 | `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Required agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                                |
 
-## Docker Compose
-
-The root `docker-compose.yml` is for source checkouts. It starts the Server only; you still need to start one or more Runners separately and point them at the Server. Release downloads only need `install-server.sh`; the installer generates its own Compose file locally.
-
-```bash
-docker compose up --build
-```
-
-The compose setup exposes the Server on port `8787` and persists Server data in the `roamcli-data` volume.
-
-Start a Runner against the compose Server:
-
-```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  -- roam-runner \
-  --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token-from-account-security> \
-  --agent-plugin @roamcli/agent-codex
-```
-
-Subsequent starts from the same workspace can use the persisted local config:
-
-```bash
-npx --yes \
-  --package @roamcli/runner \
-  --package @roamcli/agent-codex \
-  -- roam-runner
-```
-
 ## Repository Layout
 
 ```text
@@ -258,9 +227,16 @@ apps/server       Fastify API, WebSocket hub, persistence, artifacts, static Web
 apps/runner       Runner CLI, agent process management, workspace file operations.
 apps/web          React browser client.
 packages/shared   Shared protocol schemas/types plus Node-side security helpers.
-packages/agent-*  Agent plugin SDK and built-in Codex plugin.
+packages/agent-*  Agent plugin SDK and built-in Codex and Claude Code plugins.
 ```
+
+## More
+
+- [FAQ](docs/faq.md)
+- [Comparison notes](docs/comparison.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 ## License
 
-RoamCli is licensed under EESPL 2.0. See [LICENSE](LICENSE).
+RoamCli is licensed under the MIT License. See [LICENSE](LICENSE).

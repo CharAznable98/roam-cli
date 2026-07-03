@@ -1,7 +1,25 @@
 {
   "name": "@roamcli/agent-codex",
   "version": "1.1.0",
+  "description": "Codex agent plugin for RoamCli local runners.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/CharAznable98/roam-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CharAznable98/roam-cli.git",
+    "directory": "packages/agent-codex"
+  },
+  "bugs": {
+    "url": "https://github.com/CharAznable98/roam-cli/issues"
+  },
+  "keywords": [
+    "codex",
+    "codex-agent",
+    "ai-coding-agent",
+    "roamcli",
+    "agent-plugin"
+  ],
   "publishConfig": {
     "access": "public"
   },
