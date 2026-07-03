@@ -35,6 +35,20 @@ import { replaceTreeChildren } from "../features/files/tree-model";
 
 export type LoadState = "loading" | "ready" | "error";
 export type ConnectionState = "open" | "closed" | "error";
+export type SessionDetailLoadStatus =
+  | "idle"
+  | "loading"
+  | "refreshing"
+  | "ready"
+  | "error";
+
+export interface SessionDetailLoadState {
+  status: SessionDetailLoadStatus;
+  hasLoaded: boolean;
+  showRefreshIndicator: boolean;
+  requestId?: string;
+  error?: string;
+}
 
 export interface AppNotification {
   id: string;
@@ -50,6 +64,7 @@ export interface AppState {
   sessions: Session[];
   messages: UiMessage[];
   activities: AgentActivity[];
+  sessionDetailLoadStates: Record<string, SessionDetailLoadState>;
   approvals: Approval[];
   artifacts: Artifact[];
   gitJobs: GitJob[];
@@ -84,6 +99,7 @@ export const initialAppState: AppState = {
   sessions: [],
   messages: [],
   activities: [],
+  sessionDetailLoadStates: {},
   approvals: [],
   artifacts: [],
   gitJobs: [],
@@ -195,6 +211,27 @@ export type AppAction =
   | { type: "fileSaveFailed"; message: string }
   | { type: "serverEventReceived"; event: ServerEvent }
   | { type: "serverEventsReceived"; events: ServerEvent[] }
+  | {
+      type: "sessionDetailLoadStarted";
+      sessionId: string;
+      requestId: string;
+    }
+  | {
+      type: "sessionDetailRefreshIndicatorShown";
+      sessionId: string;
+      requestId: string;
+    }
+  | {
+      type: "sessionDetailLoadSucceeded";
+      requestId: string;
+      detail: SessionDetailPayload;
+    }
+  | {
+      type: "sessionDetailLoadFailed";
+      sessionId: string;
+      requestId: string;
+      message: string;
+    }
   | { type: "sessionDetailMerged"; detail: SessionDetailPayload }
   | {
       type: "notificationPushed";
@@ -263,17 +300,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         : selectedProject && onlineRunnerIds.has(selectedProject.runnerId)
           ? selectedProject.runnerId
           : action.remote.runners[0]?.runnerId || "";
-      return {
-        ...state,
-        projects,
-        runners: action.remote.runners,
-        sessions,
-        ...bootstrapDetailState(state, action.remote),
-        selectedRunnerId,
-        selectedProjectId,
+      return markSessionDetailImplicitlyLoading(
+        {
+          ...state,
+          projects,
+          runners: action.remote.runners,
+          sessions,
+          ...bootstrapDetailState(state, action.remote),
+          sessionDetailLoadStates: pruneSessionDetailLoadStates(
+            state.sessionDetailLoadStates,
+            sessions,
+          ),
+          selectedRunnerId,
+          selectedProjectId,
+          selectedSessionId,
+          loadState: "ready",
+        },
         selectedSessionId,
-        loadState: "ready",
-      };
+      );
     }
     case "bootstrapFailed":
       return pushNotification(
@@ -285,11 +329,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "connectionChanged":
       return { ...state, connectionState: action.status };
     case "projectSelected":
-      return {
-        ...state,
-        selectedProjectId: action.projectId,
-        selectedSessionId: action.nextSessionId,
-      };
+      return markSessionDetailImplicitlyLoading(
+        {
+          ...state,
+          selectedProjectId: action.projectId,
+          selectedSessionId: action.nextSessionId,
+        },
+        action.nextSessionId,
+      );
     case "projectCreated":
       return {
         ...state,
@@ -302,32 +349,41 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "projectUpdated":
       return updateProjectState(state, action.project);
     case "runnerSelected":
-      return {
-        ...state,
-        selectedRunnerId: action.runnerId,
-        selectedSessionId: action.nextSessionId,
-      };
+      return markSessionDetailImplicitlyLoading(
+        {
+          ...state,
+          selectedRunnerId: action.runnerId,
+          selectedSessionId: action.nextSessionId,
+        },
+        action.nextSessionId,
+      );
     case "sessionSelected": {
       const session = state.sessions.find(
         (item) => item.id === action.sessionId && !item.archivedAt,
       );
       return session
-        ? {
-            ...state,
-            selectedProjectId: session.projectId,
-            selectedSessionId: session.id,
-          }
+        ? markSessionDetailImplicitlyLoading(
+            {
+              ...state,
+              selectedProjectId: session.projectId,
+              selectedSessionId: session.id,
+            },
+            session.id,
+          )
         : state;
     }
     case "sessionCreated":
-      return {
-        ...state,
-        sessions: upsertBy(state.sessions, action.session, (item) => item.id),
-        selectedProjectId: action.session.projectId,
-        selectedSessionId: action.session.id,
-        activeTab: "chat",
-        mobileNewSessionOpen: false,
-      };
+      return markSessionDetailImplicitlyLoading(
+        {
+          ...state,
+          sessions: upsertBy(state.sessions, action.session, (item) => item.id),
+          selectedProjectId: action.session.projectId,
+          selectedSessionId: action.session.id,
+          activeTab: "chat",
+          mobileNewSessionOpen: false,
+        },
+        action.session.id,
+      );
     case "sessionArchiveStarted":
       return {
         ...state,
@@ -616,6 +672,23 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return applyServerEvent(state, action.event);
     case "serverEventsReceived":
       return applyServerEvents(state, action.events);
+    case "sessionDetailLoadStarted":
+      return startSessionDetailLoad(state, action.sessionId, action.requestId);
+    case "sessionDetailRefreshIndicatorShown":
+      return showSessionDetailRefreshIndicator(
+        state,
+        action.sessionId,
+        action.requestId,
+      );
+    case "sessionDetailLoadSucceeded":
+      return completeSessionDetailLoad(state, action.detail, action.requestId);
+    case "sessionDetailLoadFailed":
+      return failSessionDetailLoad(
+        state,
+        action.sessionId,
+        action.requestId,
+        action.message,
+      );
     case "sessionDetailMerged":
       return mergeSessionDetailState(state, action.detail);
     case "notificationPushed":
@@ -645,7 +718,12 @@ function bootstrapDetailState(
   remote: InitialRemoteState,
 ): Pick<
   AppState,
-  "messages" | "activities" | "messageAttachments" | "approvals" | "artifacts" | "hunks"
+  | "messages"
+  | "activities"
+  | "messageAttachments"
+  | "approvals"
+  | "artifacts"
+  | "hunks"
 > {
   if (hasRemoteDetail(remote)) {
     return {
@@ -658,7 +736,9 @@ function bootstrapDetailState(
     };
   }
 
-  const remoteSessionIds = new Set(remote.sessions.map((session) => session.id));
+  const remoteSessionIds = new Set(
+    remote.sessions.map((session) => session.id),
+  );
   const approvals = state.approvals.filter((approval) =>
     remoteSessionIds.has(approval.sessionId),
   );
@@ -688,6 +768,147 @@ function hasRemoteDetail(remote: InitialRemoteState): boolean {
     remote.approvals.length > 0 ||
     remote.artifacts.length > 0
   );
+}
+
+function pruneSessionDetailLoadStates(
+  loadStates: Record<string, SessionDetailLoadState>,
+  sessions: Session[],
+): Record<string, SessionDetailLoadState> {
+  const sessionIds = new Set(sessions.map((session) => session.id));
+  return Object.fromEntries(
+    Object.entries(loadStates).filter(([sessionId]) =>
+      sessionIds.has(sessionId),
+    ),
+  );
+}
+
+function getSessionDetailLoadState(
+  state: AppState,
+  sessionId: string,
+): SessionDetailLoadState {
+  return (
+    state.sessionDetailLoadStates[sessionId] ?? {
+      status: "idle",
+      hasLoaded: false,
+      showRefreshIndicator: false,
+    }
+  );
+}
+
+function markSessionDetailImplicitlyLoading(
+  state: AppState,
+  sessionId: string,
+): AppState {
+  if (!sessionId) {
+    return state;
+  }
+  const current = getSessionDetailLoadState(state, sessionId);
+  if (current.hasLoaded || current.status === "loading") {
+    return state;
+  }
+  return {
+    ...state,
+    sessionDetailLoadStates: {
+      ...state.sessionDetailLoadStates,
+      [sessionId]: {
+        status: "loading",
+        hasLoaded: false,
+        showRefreshIndicator: false,
+      },
+    },
+  };
+}
+
+function startSessionDetailLoad(
+  state: AppState,
+  sessionId: string,
+  requestId: string,
+): AppState {
+  const current = getSessionDetailLoadState(state, sessionId);
+  return {
+    ...state,
+    sessionDetailLoadStates: {
+      ...state.sessionDetailLoadStates,
+      [sessionId]: {
+        status: current.hasLoaded ? "refreshing" : "loading",
+        hasLoaded: current.hasLoaded,
+        showRefreshIndicator: false,
+        requestId,
+      },
+    },
+  };
+}
+
+function showSessionDetailRefreshIndicator(
+  state: AppState,
+  sessionId: string,
+  requestId: string,
+): AppState {
+  const current = state.sessionDetailLoadStates[sessionId];
+  if (
+    !current ||
+    current.requestId !== requestId ||
+    current.status !== "refreshing"
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    sessionDetailLoadStates: {
+      ...state.sessionDetailLoadStates,
+      [sessionId]: {
+        ...current,
+        showRefreshIndicator: true,
+      },
+    },
+  };
+}
+
+function completeSessionDetailLoad(
+  state: AppState,
+  detail: SessionDetailPayload,
+  requestId: string,
+): AppState {
+  const current = state.sessionDetailLoadStates[detail.session.id];
+  if (current?.requestId && current.requestId !== requestId) {
+    return state;
+  }
+  const merged = mergeSessionDetailState(state, detail);
+  return {
+    ...merged,
+    sessionDetailLoadStates: {
+      ...merged.sessionDetailLoadStates,
+      [detail.session.id]: {
+        status: "ready",
+        hasLoaded: true,
+        showRefreshIndicator: false,
+      },
+    },
+  };
+}
+
+function failSessionDetailLoad(
+  state: AppState,
+  sessionId: string,
+  requestId: string,
+  message: string,
+): AppState {
+  const current = state.sessionDetailLoadStates[sessionId];
+  if (current?.requestId && current.requestId !== requestId) {
+    return state;
+  }
+  return {
+    ...state,
+    sessionDetailLoadStates: {
+      ...state.sessionDetailLoadStates,
+      [sessionId]: {
+        status: "error",
+        hasLoaded: Boolean(current?.hasLoaded),
+        showRefreshIndicator: false,
+        error: message,
+      },
+    },
+  };
 }
 
 function mergeSessionDetailState(
@@ -1325,6 +1546,7 @@ function removeSessionState(state: AppState, sessionId: string): AppState {
     fileTreeState: omitKey(state.fileTreeState, sessionId),
     fileTreePathState: omitKey(state.fileTreePathState, sessionId),
     fileTreeRequestIds: omitKey(state.fileTreeRequestIds, sessionId),
+    sessionDetailLoadStates: omitKey(state.sessionDetailLoadStates, sessionId),
     archivingSessionIds: omitKey(state.archivingSessionIds, sessionId),
   };
 }

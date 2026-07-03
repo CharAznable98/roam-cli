@@ -4095,15 +4095,18 @@ describe("App", () => {
   });
 
   it("clears local prompt preset picker errors when switching session scope", async () => {
-    const backupSession = {
+    const backupSession: Session = {
       ...session,
       id: "session-backup",
       title: "Backup session",
       projectId: backupProject.id,
       runnerId: backupRunner.runnerId,
+      status: "running",
+      executionMode: "direct",
       executionFolder: "/backup-workspace",
       cwd: "/backup-workspace",
     };
+    extraSessions = [backupSession];
     failPromptPresetFetch = true;
 
     render(<App />);
@@ -4151,6 +4154,16 @@ describe("App", () => {
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
     ).toBeInTheDocument();
 
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Chat composer" }),
+      ).not.toBeDisabled(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Prompt presets" }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
 
     expect(await screen.findByText("Backup preset")).toBeInTheDocument();

@@ -2202,6 +2202,143 @@ describe("app reducer", () => {
     expect(late).toBe(unavailable);
     expect(late.filesBySession["session-2"]).toBeUndefined();
   });
+
+  it("marks the bootstrapped selected session as loading detail", () => {
+    const session = makeSession("session-1", "project-1");
+
+    const next = appReducer(initialAppState, {
+      type: "bootstrapSucceeded",
+      remote: {
+        projects: [makeProject("project-1")],
+        runners: [runner],
+        sessions: [session],
+        messages: [],
+        messageAttachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(next.selectedSessionId).toBe("session-1");
+    expect(next.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "loading",
+      hasLoaded: false,
+      showRefreshIndicator: false,
+    });
+  });
+
+  it("moves session detail state to ready after a successful load", () => {
+    const session = makeSession("session-1", "project-1");
+    const loading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-1",
+      },
+    );
+
+    const ready = appReducer(loading, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "detail-1",
+      detail: {
+        session,
+        messages: [],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+
+    expect(ready.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "ready",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+    });
+  });
+
+  it("shows a delayed refresh indicator only for the current detail request", () => {
+    const session = makeSession("session-1", "project-1");
+    const refreshing = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "ready",
+            hasLoaded: true,
+            showRefreshIndicator: false,
+          },
+        },
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-2",
+      },
+    );
+
+    const stale = appReducer(refreshing, {
+      type: "sessionDetailRefreshIndicatorShown",
+      sessionId: "session-1",
+      requestId: "old-detail",
+    });
+    const visible = appReducer(refreshing, {
+      type: "sessionDetailRefreshIndicatorShown",
+      sessionId: "session-1",
+      requestId: "detail-2",
+    });
+
+    expect(stale.sessionDetailLoadStates["session-1"]).toMatchObject({
+      showRefreshIndicator: false,
+    });
+    expect(visible.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "refreshing",
+      hasLoaded: true,
+      showRefreshIndicator: true,
+    });
+  });
+
+  it("keeps cached detail available when a refresh fails", () => {
+    const session = makeSession("session-1", "project-1");
+    const refreshing = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        sessionDetailLoadStates: {
+          "session-1": {
+            status: "ready",
+            hasLoaded: true,
+            showRefreshIndicator: false,
+          },
+        },
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-3",
+      },
+    );
+
+    const failed = appReducer(refreshing, {
+      type: "sessionDetailLoadFailed",
+      sessionId: "session-1",
+      requestId: "detail-3",
+      message: "network failed",
+    });
+
+    expect(failed.sessionDetailLoadStates["session-1"]).toMatchObject({
+      status: "error",
+      hasLoaded: true,
+      showRefreshIndicator: false,
+      error: "network failed",
+    });
+  });
 });
 
 const runner: RunnerRegistration = {
@@ -2248,7 +2385,10 @@ function makeSession(
 }
 
 function makeActivity(
-  activity: Pick<AgentActivity, "id" | "sessionId" | "agent" | "kind" | "label"> &
+  activity: Pick<
+    AgentActivity,
+    "id" | "sessionId" | "agent" | "kind" | "label"
+  > &
     Partial<AgentActivity>,
 ): AgentActivity {
   return {
