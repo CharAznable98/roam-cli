@@ -759,7 +759,7 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #handleTurnStarted(notification: TurnNotification): void {
-    if (!this.#isRootTurn(notification)) {
+    if (this.#isKnownNonRootThread(notification)) {
       return;
     }
     const turnId = notification.turn?.id;
@@ -770,6 +770,9 @@ export class CodexAppServerSession implements AgentSession {
     if (expectedTurnId !== undefined && expectedTurnId !== turnId) {
       return;
     }
+    if (expectedTurnId === undefined && !this.#hasRootThreadId(notification)) {
+      return;
+    }
     this.#activeTurnId = turnId;
     if (this.#turnDone && this.#turnDone.turnId === undefined) {
       this.#turnDone.turnId = turnId;
@@ -778,7 +781,7 @@ export class CodexAppServerSession implements AgentSession {
   }
 
   #isCurrentRootTurn(notification: TurnNotification): boolean {
-    if (!this.#isRootTurn(notification)) {
+    if (this.#isKnownNonRootThread(notification)) {
       return false;
     }
     const turnId = notification.turn?.id;
@@ -787,16 +790,23 @@ export class CodexAppServerSession implements AgentSession {
       return turnId === expectedTurnId;
     }
     if (turnId === undefined && expectedTurnId !== undefined) {
-      return notification.threadId !== undefined;
+      return this.#hasRootThreadId(notification);
     }
-    return true;
+    return this.#hasRootThreadId(notification);
   }
 
-  #isRootTurn(notification: TurnNotification): boolean {
+  #isKnownNonRootThread(notification: TurnNotification): boolean {
     return (
-      notification.threadId === undefined ||
-      this.#threadId === undefined ||
-      notification.threadId === this.#threadId
+      notification.threadId !== undefined &&
+      this.#threadId !== undefined &&
+      notification.threadId !== this.#threadId
+    );
+  }
+
+  #hasRootThreadId(notification: TurnNotification): boolean {
+    return (
+      notification.threadId !== undefined &&
+      (this.#threadId === undefined || notification.threadId === this.#threadId)
     );
   }
 
