@@ -267,6 +267,44 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("times out Codex model listing and terminates the app-server", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-timeout-");
+    const terminatedPath = join(workspace, "terminated.txt");
+    await writeAppServerScript(workspace, "runtime-options-timeout.mjs", [
+      `const terminatedPath = ${JSON.stringify(terminatedPath)};`,
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(terminatedPath, 'terminated');",
+      "  process.exit(0);",
+      "});",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "20",
+      },
+    });
+
+    expect(result.error).toBe("Codex app-server model/list timed out.");
+    let terminated = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        terminated = await readFile(terminatedPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+      }
+    }
+    expect(terminated).toBe("terminated");
+  });
+
   it("rejects Codex runtime option base paths outside the runner workspace", async () => {
     const workspace = await mkdirTemp("roam-codex-runtime-workspace-");
     const outside = await mkdirTemp("roam-codex-runtime-outside-");

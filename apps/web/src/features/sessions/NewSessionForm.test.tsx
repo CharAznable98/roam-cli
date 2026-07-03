@@ -487,6 +487,77 @@ describe("NewSessionForm runtime configuration", () => {
       }),
     );
   });
+
+  it("filters service-tier Fast Mode options by the selected model", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [],
+              serviceTiers: [{ value: "flex", label: "Flex" }],
+            },
+            {
+              value: "gpt-5.3-codex-spark",
+              label: "GPT-5.3 Codex Spark",
+              reasoningEfforts: [],
+              serviceTiers: [{ value: "auto", label: "Auto" }],
+            },
+          ],
+          reasoningEfforts: [],
+          fastMode: {
+            kind: "serviceTier",
+            supported: true,
+            options: [
+              { value: "flex", label: "Flex" },
+              { value: "auto", label: "Auto" },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    fireEvent.change(await screen.findByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Fast Mode"), {
+      target: { value: "flex" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Fast Mode")).toHaveValue("");
+      expect(
+        screen.queryByRole("option", { name: "Flex" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Auto" })).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use spark" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use spark",
+        agentRuntimeConfig: {
+          model: "gpt-5.3-codex-spark",
+        },
+      }),
+    );
+  });
 });
 
 function runtimeOptions(): AgentRuntimeConfigOptionsResult {

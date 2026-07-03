@@ -2141,13 +2141,25 @@ function AgentDefaultsSettingsPanel({
   const setting = settings.find(
     (item) => item.runnerId === runnerId && item.agent === agent,
   );
-  const selectedModelOption = options?.models.find(
-    (option) => option.value === model,
+  const selectedModelOption = useMemo(
+    () => options?.models.find((option) => option.value === model),
+    [model, options?.models],
   );
-  const reasoningEffortOptions =
-    selectedModelOption && selectedModelOption.reasoningEfforts.length > 0
-      ? selectedModelOption.reasoningEfforts
-      : (options?.reasoningEfforts ?? []);
+  const reasoningEffortOptions = useMemo(
+    () =>
+      selectedModelOption
+        ? selectedModelOption.reasoningEfforts
+        : (options?.reasoningEfforts ?? []),
+    [options?.reasoningEfforts, selectedModelOption],
+  );
+  const serviceTierOptions = useMemo(() => {
+    if (selectedModelOption) {
+      return selectedModelOption.serviceTiers;
+    }
+    return options?.fastMode.kind === "serviceTier"
+      ? options.fastMode.options
+      : [];
+  }, [options?.fastMode, selectedModelOption]);
 
   useEffect(() => {
     if (optionsState !== "ready") {
@@ -2163,6 +2175,19 @@ function AgentDefaultsSettingsPanel({
     }
     setReasoningEffort("");
   }, [optionsState, reasoningEffort, reasoningEffortOptions]);
+
+  useEffect(() => {
+    if (optionsState !== "ready") {
+      return;
+    }
+    if (!serviceTier) {
+      return;
+    }
+    if (serviceTierOptions.some((option) => option.value === serviceTier)) {
+      return;
+    }
+    setServiceTier("");
+  }, [optionsState, serviceTier, serviceTierOptions]);
 
   useEffect(() => {
     if (!selectedRunner) {
@@ -2188,6 +2213,8 @@ function AgentDefaultsSettingsPanel({
     setServiceTier(config.serviceTier ?? "");
     setSaveError("");
   }, [
+    agent,
+    runnerId,
     setting?.config.fastMode,
     setting?.config.model,
     setting?.config.reasoningEffort,
@@ -2353,12 +2380,12 @@ function AgentDefaultsSettingsPanel({
               value={serviceTier}
               disabled={
                 optionsState === "loading" ||
-                options.fastMode.options.length === 0
+                serviceTierOptions.length === 0
               }
               onChange={(event) => setServiceTier(event.target.value)}
             >
               <option value="">Use agent default</option>
-              {options.fastMode.options.map((option) => (
+              {serviceTierOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

@@ -40,6 +40,7 @@ const KIND = "codex";
 const PLUGIN_NAME = "@roamcli/agent-codex";
 const PLUGIN_VERSION = "1.1.0";
 const SUPPORTED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"];
+const DEFAULT_MODEL_LIST_TIMEOUT_MS = 10_000;
 const DEFAULT_APP_SERVER_ARGS = [
   "app-server",
   "--stdio",
@@ -517,13 +518,21 @@ export async function listCodexRuntimeConfigOptions(
     });
     client.notify("initialized");
 
+    const modelListTimeoutMs = positiveIntegerEnv(
+      context.env.ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS,
+      DEFAULT_MODEL_LIST_TIMEOUT_MS,
+    );
     const models: AgentRuntimeModelOption[] = [];
     let cursor: string | undefined;
     do {
-      const result = await client.request("model/list", {
-        includeHidden: false,
-        ...(cursor ? { cursor } : {}),
-      });
+      const result = await withTimeout(
+        client.request("model/list", {
+          includeHidden: false,
+          ...(cursor ? { cursor } : {}),
+        }),
+        modelListTimeoutMs,
+        "Codex app-server model/list timed out.",
+      );
       const response = isRecord(result) ? result : {};
       const data = Array.isArray(response.data) ? response.data : [];
       models.push(...data.flatMap((item) => codexModelOption(item)));
@@ -561,6 +570,36 @@ export async function listCodexRuntimeConfigOptions(
     client?.close();
     child.kill("SIGTERM");
   }
+}
+
+function positiveIntegerEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      rejectPromise(new Error(message));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolvePromise(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        rejectPromise(error);
+      },
+    );
+  });
 }
 
 function codexModelOption(value: unknown): AgentRuntimeModelOption[] {

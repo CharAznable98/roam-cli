@@ -17,6 +17,7 @@ import type {
   AuthStatus,
   GitCommitSummary,
   GitJob,
+  AgentRuntimeConfigOptionsResult,
   Message,
   MessageAttachment,
   Project,
@@ -473,6 +474,37 @@ function authMockResponse(
   return undefined;
 }
 
+function runtimeConfigOptions(
+  agent: string,
+  basePath: string,
+): AgentRuntimeConfigOptionsResult {
+  return {
+    requestId: "runtime-options-1",
+    agent,
+    basePath,
+    queriedAt: "2026-07-03T00:00:00.000Z",
+    models: [
+      {
+        value: "gpt-5.4-codex",
+        label: "GPT-5.4 Codex",
+        reasoningEfforts: [{ value: "high", label: "High" }],
+        serviceTiers: [],
+        supportsFastMode: true,
+      },
+      {
+        value: "gpt-5.3-codex-spark",
+        label: "GPT-5.3 Codex Spark",
+        reasoningEfforts: [{ value: "low", label: "Low" }],
+        serviceTiers: [],
+        supportsFastMode: true,
+      },
+    ],
+    allowCustomModel: false,
+    reasoningEfforts: [{ value: "medium", label: "Medium" }],
+    fastMode: { kind: "boolean", supported: true },
+  };
+}
+
 describe("App", () => {
   let fetchRequests: string[];
   let fetchCalls: Array<{ url: string; init: RequestInit | undefined }>;
@@ -483,6 +515,7 @@ describe("App", () => {
   let deferredGitCommitFiles: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let queuedRunnerResponses: Array<Deferred<Response>>;
+  let extraRunners: Array<typeof runner>;
   let failBootstrapRunners: boolean;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
@@ -515,6 +548,9 @@ describe("App", () => {
   let sessionDetailArtifacts: Artifact[];
   let extraProjects: Project[];
   let extraSessions: Session[];
+  let runtimeConfigOptionsOverride:
+    | AgentRuntimeConfigOptionsResult
+    | undefined;
   let fileTreeRoot: {
     path: string;
     name: string;
@@ -601,6 +637,8 @@ describe("App", () => {
     queuedInstallMetadataResponses = [];
     queuedPromptPresetOrderResponses = [];
     runnerAgentRuntimeConfigSettings = [];
+    runtimeConfigOptionsOverride = undefined;
+    extraRunners = [];
     failBootstrapRunners = false;
     failNextProjectCreate = false;
     failNextSessionCreate = false;
@@ -731,7 +769,9 @@ describe("App", () => {
           if (failBootstrapRunners) {
             return jsonResponse({ message: "backend route unavailable" }, 503);
           }
-          return jsonResponse({ runners: runnerOnline ? [runner] : [] });
+          return jsonResponse({
+            runners: runnerOnline ? [runner, ...extraRunners] : [],
+          });
         }
         if (
           requestUrl.pathname === "/v1/runners/agent-runtime-config-settings"
@@ -768,32 +808,18 @@ describe("App", () => {
             agent?: string;
             basePath?: string;
           };
+          const result = runtimeConfigOptionsOverride
+            ? {
+                ...runtimeConfigOptionsOverride,
+                agent: body.agent ?? runtimeConfigOptionsOverride.agent,
+                basePath: body.basePath ?? runtimeConfigOptionsOverride.basePath,
+              }
+            : runtimeConfigOptions(
+                body.agent ?? "codex",
+                body.basePath ?? "/workspace",
+              );
           return jsonResponse({
-            result: {
-              requestId: "runtime-options-1",
-              agent: body.agent ?? "codex",
-              basePath: body.basePath ?? "/workspace",
-              queriedAt: "2026-07-03T00:00:00.000Z",
-              models: [
-                {
-                  value: "gpt-5.4-codex",
-                  label: "GPT-5.4 Codex",
-                  reasoningEfforts: [{ value: "high", label: "High" }],
-                  serviceTiers: [],
-                  supportsFastMode: true,
-                },
-                {
-                  value: "gpt-5.3-codex-spark",
-                  label: "GPT-5.3 Codex Spark",
-                  reasoningEfforts: [{ value: "low", label: "Low" }],
-                  serviceTiers: [],
-                  supportsFastMode: true,
-                },
-              ],
-              allowCustomModel: false,
-              reasoningEfforts: [{ value: "medium", label: "Medium" }],
-              fastMode: { kind: "boolean", supported: true },
-            },
+            result,
           });
         }
         if (requestUrl.pathname === "/v1/runners/real-runner/directories") {
@@ -1848,6 +1874,111 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(settings.getByLabelText("Thinking intensity")).toHaveValue("");
+    });
+    fireEvent.click(settings.getByRole("button", { name: "Save defaults" }));
+
+    await waitFor(() =>
+      expect(runnerAgentRuntimeConfigSettings).toEqual([
+        {
+          runnerId: "real-runner",
+          agent: "codex",
+          config: {
+            model: "gpt-5.3-codex-spark",
+          },
+          updatedAt: "2026-07-03T00:00:00.000Z",
+        },
+      ]),
+    );
+  });
+
+  it("clears unsaved runner-level defaults when the selected runner changes", async () => {
+    extraRunners = [backupRunner];
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(settings.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(settings.getByLabelText("Fast Mode"), {
+      target: { value: "on" },
+    });
+
+    fireEvent.change(settings.getByLabelText("Runner"), {
+      target: { value: "backup-runner" },
+    });
+
+    await waitFor(() => {
+      expect(settings.getByLabelText("Model")).toHaveValue("");
+      expect(settings.getByLabelText("Thinking intensity")).toHaveValue("");
+      expect(settings.getByLabelText("Fast Mode")).toHaveValue("");
+    });
+  });
+
+  it("filters runner-level Fast Mode tiers by the Settings model", async () => {
+    runtimeConfigOptionsOverride = {
+      ...runtimeConfigOptions("codex", "/workspace"),
+      models: [
+        {
+          value: "gpt-5.4-codex",
+          label: "GPT-5.4 Codex",
+          reasoningEfforts: [],
+          serviceTiers: [{ value: "flex", label: "Flex" }],
+          supportsFastMode: true,
+        },
+        {
+          value: "gpt-5.3-codex-spark",
+          label: "GPT-5.3 Codex Spark",
+          reasoningEfforts: [],
+          serviceTiers: [{ value: "auto", label: "Auto" }],
+          supportsFastMode: true,
+        },
+      ],
+      reasoningEfforts: [],
+      fastMode: {
+        kind: "serviceTier",
+        supported: true,
+        options: [
+          { value: "flex", label: "Flex" },
+          { value: "auto", label: "Auto" },
+        ],
+      },
+    };
+    render(<App />);
+
+    await screen.findByText("Loaded from API");
+    openSettingsTab();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Defaults/ }));
+    const settings = within(screen.getByRole("region", { name: "Settings" }));
+
+    expect(
+      await settings.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(settings.getByLabelText("Fast Mode"), {
+      target: { value: "flex" },
+    });
+    fireEvent.change(settings.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(settings.getByLabelText("Fast Mode")).toHaveValue("");
+      expect(
+        settings.queryByRole("option", { name: "Flex" }),
+      ).not.toBeInTheDocument();
+      expect(settings.getByRole("option", { name: "Auto" })).toBeInTheDocument();
     });
     fireEvent.click(settings.getByRole("button", { name: "Save defaults" }));
 

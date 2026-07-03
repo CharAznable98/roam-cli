@@ -164,11 +164,19 @@ export function NewSessionForm({
   );
   const reasoningEffortOptions = useMemo(
     () =>
-      selectedModelOption && selectedModelOption.reasoningEfforts.length > 0
+      selectedModelOption
         ? selectedModelOption.reasoningEfforts
         : (runtimeOptions?.reasoningEfforts ?? []),
     [runtimeOptions?.reasoningEfforts, selectedModelOption],
   );
+  const serviceTierOptions = useMemo(() => {
+    if (selectedModelOption) {
+      return selectedModelOption.serviceTiers;
+    }
+    return runtimeOptions?.fastMode.kind === "serviceTier"
+      ? runtimeOptions.fastMode.options
+      : [];
+  }, [runtimeOptions?.fastMode, selectedModelOption]);
 
   useEffect(() => {
     if (runtimeOptionsState !== "ready") {
@@ -184,6 +192,19 @@ export function NewSessionForm({
     }
     setReasoningEffort("");
   }, [reasoningEffort, reasoningEffortOptions, runtimeOptionsState]);
+
+  useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!serviceTier) {
+      return;
+    }
+    if (serviceTierOptions.some((option) => option.value === serviceTier)) {
+      return;
+    }
+    setServiceTier("");
+  }, [runtimeOptionsState, serviceTier, serviceTierOptions]);
 
   useEffect(() => {
     setModel(defaultRuntimeConfig.model ?? "");
@@ -532,12 +553,12 @@ export function NewSessionForm({
                 value={serviceTier}
                 disabled={
                   runtimeOptionsState === "loading" ||
-                  runtimeOptions.fastMode.options.length === 0
+                  serviceTierOptions.length === 0
                 }
                 onChange={(event) => setServiceTier(event.target.value)}
               >
                 <option value="">Use agent default</option>
-                {runtimeOptions.fastMode.options.map((option) => (
+                {serviceTierOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
