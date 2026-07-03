@@ -137,11 +137,7 @@ describe("ChatPanel", () => {
     };
 
     render(
-      <ChatPanel
-        session={baseSession}
-        messages={[message]}
-        onSend={vi.fn()}
-      />,
+      <ChatPanel session={baseSession} messages={[message]} onSend={vi.fn()} />,
     );
 
     fireEvent.click(screen.getByLabelText("Message actions"));
@@ -171,6 +167,125 @@ describe("ChatPanel", () => {
       metaKey: true,
     });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows a session loading skeleton and disables composer input", () => {
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        detailState={{
+          status: "loading",
+          hasLoaded: false,
+          showRefreshIndicator: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Loading session...")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "No messages have been recorded for this session yet.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Chat composer" }),
+    ).toHaveAttribute("placeholder", "Session is loading...");
+    expect(
+      screen.getByRole("textbox", { name: "Chat composer" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
+  it("shows a retryable first-load error state", () => {
+    const onRetry = vi.fn();
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={vi.fn()}
+        detailState={{
+          status: "error",
+          hasLoaded: false,
+          showRefreshIndicator: false,
+          error: "Request timed out",
+        }}
+        onRetrySessionDetail={onRetry}
+      />,
+    );
+
+    expect(
+      screen.getByText("Session detail could not be loaded."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Request timed out")).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Chat composer" }),
+    ).toHaveAttribute("placeholder", "Session detail unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps cached messages visible while showing bottom refresh status", () => {
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "Cached answer",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[message]}
+        onSend={vi.fn()}
+        detailState={{
+          status: "refreshing",
+          hasLoaded: true,
+          showRefreshIndicator: true,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Cached answer")).toBeInTheDocument();
+    expect(screen.getByText("Refreshing session...")).toBeInTheDocument();
+    expect(screen.queryByText("Loading session...")).not.toBeInTheDocument();
+  });
+
+  it("keeps cached messages visible when refresh fails", () => {
+    const onRetry = vi.fn();
+    const message: UiMessage = {
+      id: "message-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: "Cached answer",
+      encrypted: false,
+      createdAt: "2026-06-05T00:00:00.000Z",
+    };
+
+    render(
+      <ChatPanel
+        session={baseSession}
+        messages={[message]}
+        onSend={vi.fn()}
+        detailState={{
+          status: "error",
+          hasLoaded: true,
+          showRefreshIndicator: false,
+          error: "Backend unavailable",
+        }}
+        onRetrySessionDetail={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("Cached answer")).toBeInTheDocument();
+    expect(
+      screen.getByText("Refresh failed. Backend unavailable"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("shows recovery guidance for failed sessions", () => {
@@ -713,9 +828,9 @@ describe("ChatPanel", () => {
       <ChatPanel session={baseSession} messages={[message]} onSend={vi.fn()} />,
     );
 
-    expect(container.querySelector(".streaming-message-text")?.textContent).toBe(
-      "```ts\nconst value = 1;\n```",
-    );
+    expect(
+      container.querySelector(".streaming-message-text")?.textContent,
+    ).toBe("```ts\nconst value = 1;\n```");
     expect(codeToHtmlMock).not.toHaveBeenCalled();
   });
 

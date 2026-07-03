@@ -1,7 +1,24 @@
 {
   "name": "@roamcli/agent-plugin-sdk",
   "version": "1.1.0",
+  "description": "Agent plugin SDK for RoamCli local runners.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/CharAznable98/roam-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CharAznable98/roam-cli.git",
+    "directory": "packages/agent-plugin-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/CharAznable98/roam-cli/issues"
+  },
+  "keywords": [
+    "ai-coding-agent",
+    "agent-plugin",
+    "plugin-sdk",
+    "roamcli"
+  ],
   "publishConfig": {
     "access": "public"
   },

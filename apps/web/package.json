@@ -2,6 +2,8 @@
   "name": "@roamcli/web",
   "version": "1.1.0",
   "private": true,
+  "description": "Browser UI for the RoamCli self-hosted AI coding agent control plane.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

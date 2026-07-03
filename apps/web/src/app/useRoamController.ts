@@ -65,6 +65,7 @@ const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 60_000;
 const ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS = 1_500;
 const ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS = 10_000;
+const SESSION_DETAIL_REFRESH_INDICATOR_DELAY_MS = 300;
 let fileTreeRequestSequence = 0;
 
 export type StreamReconnectInfo = {
@@ -120,6 +121,7 @@ export function useRoamController() {
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
   const activeSessionIdRef = useRef<string | undefined>(undefined);
   const activeSessionSubscriptionSequenceRef = useRef(0);
+  const sessionDetailRequestSequenceRef = useRef(0);
   const workspaceSessionIdRef = useRef<string | undefined>(undefined);
   const accountSecurityRequestIdRef = useRef(0);
   const promptPresetRequestVersionsRef = useRef<Record<string, number>>({});
@@ -169,6 +171,43 @@ export function useRoamController() {
     },
     [],
   );
+
+  const loadSessionDetail = useCallback(async (sessionId: string) => {
+    const api = apiRef.current;
+    if (!api) {
+      throw new Error("API client is not ready.");
+    }
+    sessionDetailRequestSequenceRef.current += 1;
+    const requestId = `session-detail-${Date.now()}-${sessionDetailRequestSequenceRef.current}`;
+    dispatch({ type: "sessionDetailLoadStarted", sessionId, requestId });
+    const refreshIndicatorTimer = globalThis.setTimeout(() => {
+      dispatch({
+        type: "sessionDetailRefreshIndicatorShown",
+        sessionId,
+        requestId,
+      });
+    }, SESSION_DETAIL_REFRESH_INDICATOR_DELAY_MS);
+    try {
+      const detail = await api.fetchSessionDetail(sessionId);
+      dispatch({
+        type: "sessionDetailLoadSucceeded",
+        requestId,
+        detail,
+      });
+      return detail;
+    } catch (detailError: unknown) {
+      const message = errorMessage(detailError);
+      dispatch({
+        type: "sessionDetailLoadFailed",
+        sessionId,
+        requestId,
+        message,
+      });
+      throw new Error(message);
+    } finally {
+      globalThis.clearTimeout(refreshIndicatorTimer);
+    }
+  }, []);
 
   useEffect(() => {
     const api = createRoamApiClient();
@@ -660,31 +699,20 @@ export function useRoamController() {
       return;
     }
     const sessionId = selectedSession.id;
-    const api = apiRef.current;
-    if (!api) {
-      return;
-    }
     let cancelled = false;
-    void api
-      .fetchSessionDetail(sessionId)
-      .then((detail) => {
-        if (!cancelled) {
-          dispatch({ type: "sessionDetailMerged", detail });
-        }
+    void loadSessionDetail(sessionId)
+      .then(() => {
+        // Detail load state is handled by loadSessionDetail.
       })
-      .catch((detailError: unknown) => {
-        if (!cancelled) {
-          dispatch({
-            type: "errorChanged",
-            title: "Session detail request failed",
-            message: errorMessage(detailError),
-          });
+      .catch(() => {
+        if (cancelled) {
+          return;
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedSession?.id, state.loadState]);
+  }, [loadSessionDetail, selectedSession?.id, state.loadState]);
 
   useEffect(() => {
     const sessionId = selectedSession?.id;
@@ -1338,11 +1366,9 @@ export function useRoamController() {
 
   const refreshSessionDetail = useCallback(
     async (sessionId: string) => {
-      const detail = await requireApiClient().fetchSessionDetail(sessionId);
-      dispatch({ type: "sessionDetailMerged", detail });
-      return detail;
+      return loadSessionDetail(sessionId);
     },
-    [requireApiClient],
+    [loadSessionDetail],
   );
 
   const checkSelectedSessionStatus = useCallback(async () => {
@@ -1816,6 +1842,17 @@ export function useRoamController() {
   const sessionFileTreePathState = selectedSession
     ? (state.fileTreePathState[selectedSession.id] ?? {})
     : {};
+  const selectedSessionDetailState = selectedSession
+    ? (state.sessionDetailLoadStates[selectedSession.id] ?? {
+        status: "loading",
+        hasLoaded: false,
+        showRefreshIndicator: false,
+      })
+    : {
+        status: "idle" as const,
+        hasLoaded: false,
+        showRefreshIndicator: false,
+      };
   const sessionStatusCheckState: "idle" | "loading" =
     checkingSessionStatusId === selectedSession?.id ? "loading" : "idle";
 
@@ -1850,6 +1887,7 @@ export function useRoamController() {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
+    selectedSessionDetailState,
     projectPromptPresetErrorsByProject,
     selectRunner,
     selectProject,

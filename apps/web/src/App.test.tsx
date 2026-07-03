@@ -521,6 +521,7 @@ describe("App", () => {
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
   let failNextSessionArchive: boolean;
+  let failSessionDetail: boolean;
   let emitSessionNotRunningOnArchive: boolean;
   let runnerOnline: boolean;
   let defaultProjectVisible: boolean;
@@ -644,6 +645,7 @@ describe("App", () => {
     failNextSessionCreate = false;
     failNextSessionRename = false;
     failNextSessionArchive = false;
+    failSessionDetail = false;
     emitSessionNotRunningOnArchive = false;
     runnerOnline = true;
     defaultProjectVisible = true;
@@ -981,6 +983,9 @@ describe("App", () => {
           });
         }
         if (requestUrl.pathname === "/v1/sessions/session-1") {
+          if ((init?.method ?? "GET") === "GET" && failSessionDetail) {
+            return jsonResponse({ message: "session detail unavailable" }, 503);
+          }
           if (init?.method === "PATCH") {
             if (failNextSessionRename) {
               failNextSessionRename = false;
@@ -1424,6 +1429,25 @@ describe("App", () => {
         JSON.parse(localStorage.getItem(LAST_SELECTION_STORAGE_KEY) ?? "null"),
       ).toEqual({ projectId: "project-1", sessionId: "session-1" });
     });
+  });
+
+  it("keeps approvals unavailable while the first session detail load has failed", async () => {
+    failSessionDetail = true;
+    render(<App />);
+
+    expect(
+      await screen.findByText("Session detail could not be loaded."),
+    ).toBeInTheDocument();
+
+    const toolTabs = within(
+      screen.getByRole("navigation", { name: "Tool tabs" }),
+    );
+    fireEvent.click(toolTabs.getByRole("button", { name: "Approvals" }));
+
+    expect(
+      screen.getByRole("status", { name: "Loading approvals" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No pending approvals.")).not.toBeInTheDocument();
   });
 
   it("opens primary workspace actions from the command palette", async () => {
@@ -4387,15 +4411,18 @@ describe("App", () => {
   });
 
   it("clears local prompt preset picker errors when switching session scope", async () => {
-    const backupSession = {
+    const backupSession: Session = {
       ...session,
       id: "session-backup",
       title: "Backup session",
       projectId: backupProject.id,
       runnerId: backupRunner.runnerId,
+      status: "running",
+      executionMode: "direct",
       executionFolder: "/backup-workspace",
       cwd: "/backup-workspace",
     };
+    extraSessions = [backupSession];
     failPromptPresetFetch = true;
 
     render(<App />);
@@ -4443,6 +4470,16 @@ describe("App", () => {
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
     ).toBeInTheDocument();
 
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Chat composer" }),
+      ).not.toBeDisabled(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Prompt presets" }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Prompt presets" }));
 
     expect(await screen.findByText("Backup preset")).toBeInTheDocument();

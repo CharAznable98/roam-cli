@@ -7,6 +7,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { PathTailLabel } from "../common/PathTailLabel";
 
 export type TreePathStates = Record<
   string,
@@ -171,6 +172,7 @@ function TreeNode({
       <button
         type="button"
         role="treeitem"
+        aria-label={node.name}
         aria-expanded={isDirectory ? isOpen : undefined}
         className={`tree-row ${isSelected ? "is-selected" : ""}`}
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
@@ -188,7 +190,7 @@ function TreeNode({
           <FileCode2 size={15} />
         )}
         {isDirectory ? <Folder size={15} /> : null}
-        <span className="truncate">{node.name}</span>
+        <PathTailLabel value={node.name} />
       </button>
       {isDirectory && isOpen && pathState === "loading" ? (
         <div

@@ -237,6 +237,7 @@ export function AppShell({ controller }: AppShellProps) {
     sessionFiles,
     sessionFileTreeState,
     sessionFileTreePathState,
+    selectedSessionDetailState,
     selectProject,
     createProject,
     archiveProject,
@@ -499,6 +500,10 @@ export function AppShell({ controller }: AppShellProps) {
       (selectedSession.status === "pending" ||
         selectedSession.worktreeDeletedAt !== undefined)
     );
+  const selectedSessionDetailBlocking =
+    !selectedSessionDetailState.hasLoaded &&
+    (selectedSessionDetailState.status === "loading" ||
+      selectedSessionDetailState.status === "error");
 
   useEffect(() => {
     const openOnShortcut = (event: globalThis.KeyboardEvent) => {
@@ -931,7 +936,9 @@ export function AppShell({ controller }: AppShellProps) {
                   onDelete={openArchiveSessionDialog}
                   onCheckStatus={checkSelectedSessionStatus}
                   statusCheckState={sessionStatusCheckState}
-                  canSend={canUseSelectedRunner}
+                  canSend={
+                    canUseSelectedRunner && !selectedSessionDetailBlocking
+                  }
                   canControl={canUseSelectedRunner}
                   onOpenSessionSwitcher={() =>
                     setMobileSessionSwitcherOpen(true)
@@ -943,6 +950,10 @@ export function AppShell({ controller }: AppShellProps) {
                   onFetchAttachmentContent={fetchMessageAttachmentContent}
                   onListAgentSkills={listAgentSkills}
                   onSearchWorkspacePaths={searchWorkspacePaths}
+                  detailState={selectedSessionDetailState}
+                  onRetrySessionDetail={() => {
+                    void refreshSessionDetail(selectedSession.id);
+                  }}
                   promptPresets={
                     projectPromptPresetsByProject[selectedSession.projectId] ??
                     []
@@ -1107,6 +1118,7 @@ export function AppShell({ controller }: AppShellProps) {
                     <ApprovalCenter
                       approvals={sessionApprovals}
                       hunks={sessionHunks}
+                      loading={selectedSessionDetailBlocking}
                       onResolveApproval={resolveApproval}
                       onResolveHunk={resolveHunk}
                       onApplyPatch={applyAcceptedPatch}
