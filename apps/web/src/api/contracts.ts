@@ -1,5 +1,6 @@
 import type {
   AgentActivity,
+  RunnerAgentRuntimeConfigSetting,
   Approval,
   Artifact,
   Message,
@@ -23,6 +24,7 @@ export interface SessionDetailPayload {
 export interface InitialRemoteState {
   projects: Project[];
   runners: RunnerRegistration[];
+  runnerAgentRuntimeConfigSettings?: RunnerAgentRuntimeConfigSetting[];
   sessions: Session[];
   messages: UiMessage[];
   activities?: AgentActivity[];

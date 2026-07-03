@@ -1,4 +1,7 @@
 import type {
+  AgentRuntimeConfig,
+  AgentRuntimeConfigOptionsResult,
+  AgentRuntimeModelOption,
   AgentKind,
   ApiGitContext,
   ExecutionMode,
@@ -36,6 +39,7 @@ export type NewSessionValues = {
   executionMode: ExecutionMode;
   gitBaseRef?: string;
   gitBranchName?: string;
+  agentRuntimeConfig?: AgentRuntimeConfig;
   attachments?: ImageAttachmentUpload[];
 };
 
@@ -49,6 +53,11 @@ type BaseRefOption = {
 
 type GitStatusFetcher = (context: ApiGitContext) => Promise<GitStatusResult>;
 type GitBranchesFetcher = (context: ApiGitContext) => Promise<GitBranchList>;
+type AgentRuntimeConfigOptionsFetcher = (input: {
+  runnerId: string;
+  agent: AgentKind;
+  basePath: string;
+}) => Promise<AgentRuntimeConfigOptionsResult>;
 
 type NewSessionFormProps = {
   project: Project;
@@ -64,6 +73,10 @@ type NewSessionFormProps = {
   onManagePromptPresets?: (() => void) | undefined;
   onFetchGitStatus?: GitStatusFetcher | undefined;
   onFetchGitBranches?: GitBranchesFetcher | undefined;
+  onListAgentRuntimeConfigOptions?:
+    | AgentRuntimeConfigOptionsFetcher
+    | undefined;
+  agentRuntimeConfigDefaults?: Record<string, AgentRuntimeConfig> | undefined;
 };
 
 export function NewSessionForm({
@@ -80,6 +93,8 @@ export function NewSessionForm({
   onManagePromptPresets,
   onFetchGitStatus,
   onFetchGitBranches,
+  onListAgentRuntimeConfigOptions = emptyRuntimeConfigOptions,
+  agentRuntimeConfigDefaults = {},
 }: NewSessionFormProps) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -101,6 +116,15 @@ export function NewSessionForm({
   const [gitBranches, setGitBranches] = useState<GitBranchList | undefined>();
   const [gitBranchesState, setGitBranchesState] = useState<AsyncState>("idle");
   const [gitBranchesError, setGitBranchesError] = useState("");
+  const [runtimeOptions, setRuntimeOptions] =
+    useState<AgentRuntimeConfigOptionsResult>();
+  const [runtimeOptionsState, setRuntimeOptionsState] =
+    useState<AsyncState>("idle");
+  const [runtimeOptionsError, setRuntimeOptionsError] = useState("");
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
+  const [fastMode, setFastMode] = useState("");
+  const [serviceTier, setServiceTier] = useState("");
   const agentOptions = useMemo(
     () =>
       runner.capabilities.map(
@@ -111,6 +135,7 @@ export function NewSessionForm({
   const [agent, setAgent] = useState<AgentKind>(
     runner.capabilities[0]?.kind ?? "codex",
   );
+  const defaultRuntimeConfig = agentRuntimeConfigDefaults[agent] ?? {};
   const imageCapability = useMemo(
     () => runner.capabilities.find((capability) => capability.kind === agent),
     [agent, runner.capabilities],
@@ -133,6 +158,184 @@ export function NewSessionForm({
     () => buildBaseRefOptions(repositoryStatus, gitBranches),
     [repositoryStatus, gitBranches],
   );
+  const selectedModelOption = useMemo(
+    () => runtimeOptions?.models.find((option) => option.value === model),
+    [model, runtimeOptions?.models],
+  );
+  const reasoningEffortOptions = useMemo(
+    () =>
+      selectedModelOption
+        ? selectedModelOption.reasoningEfforts
+        : (runtimeOptions?.reasoningEfforts ?? []),
+    [runtimeOptions?.reasoningEfforts, selectedModelOption],
+  );
+  const serviceTierOptions = useMemo(() => {
+    if (selectedModelOption) {
+      return selectedModelOption.serviceTiers;
+    }
+    return runtimeOptions?.fastMode.kind === "serviceTier"
+      ? runtimeOptions.fastMode.options
+      : [];
+  }, [runtimeOptions?.fastMode, selectedModelOption]);
+  const booleanFastModeAvailable =
+    runtimeOptions?.fastMode.kind === "boolean" &&
+    (!selectedModelOption || selectedModelOption.supportsFastMode === true);
+  const runtimeConfigForSubmit = () => {
+    const shouldValidateRuntimeFields = runtimeOptionsState === "ready";
+    return buildRuntimeConfig({
+      model,
+      reasoningEffort:
+        !shouldValidateRuntimeFields ||
+        reasoningEffortOptions.some(
+          (option) => option.value === reasoningEffort,
+        )
+          ? reasoningEffort
+          : "",
+      fastMode:
+        !shouldValidateRuntimeFields || booleanFastModeAvailable
+          ? fastMode
+          : "",
+      serviceTier:
+        !shouldValidateRuntimeFields ||
+        serviceTierOptions.some((option) => option.value === serviceTier)
+          ? serviceTier
+          : "",
+    });
+  };
+  const changeModel = (nextModel: string) => {
+    const nextModelOption = runtimeOptions?.models.find(
+      (option) => option.value === nextModel,
+    );
+    const nextReasoningEffortOptions = nextModelOption
+      ? nextModelOption.reasoningEfforts
+      : (runtimeOptions?.reasoningEfforts ?? []);
+    const nextServiceTierOptions = nextModelOption
+      ? nextModelOption.serviceTiers
+      : runtimeOptions?.fastMode.kind === "serviceTier"
+        ? runtimeOptions.fastMode.options
+        : [];
+
+    setModel(nextModel);
+    if (
+      reasoningEffort &&
+      !nextReasoningEffortOptions.some(
+        (option) => option.value === reasoningEffort,
+      )
+    ) {
+      setReasoningEffort("");
+    }
+    if (
+      fastMode &&
+      runtimeOptions?.fastMode.kind === "boolean" &&
+      nextModelOption?.supportsFastMode === false
+    ) {
+      setFastMode("");
+    }
+    if (
+      serviceTier &&
+      !nextServiceTierOptions.some((option) => option.value === serviceTier)
+    ) {
+      setServiceTier("");
+    }
+  };
+
+  useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!reasoningEffort) {
+      return;
+    }
+    if (
+      reasoningEffortOptions.some((option) => option.value === reasoningEffort)
+    ) {
+      return;
+    }
+    setReasoningEffort("");
+  }, [reasoningEffort, reasoningEffortOptions, runtimeOptionsState]);
+
+  useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!fastMode) {
+      return;
+    }
+    if (booleanFastModeAvailable) {
+      return;
+    }
+    setFastMode("");
+  }, [booleanFastModeAvailable, fastMode, runtimeOptionsState]);
+
+  useEffect(() => {
+    if (runtimeOptionsState !== "ready") {
+      return;
+    }
+    if (!serviceTier) {
+      return;
+    }
+    if (serviceTierOptions.some((option) => option.value === serviceTier)) {
+      return;
+    }
+    setServiceTier("");
+  }, [runtimeOptionsState, serviceTier, serviceTierOptions]);
+
+  useEffect(() => {
+    setModel(defaultRuntimeConfig.model ?? "");
+    setReasoningEffort(defaultRuntimeConfig.reasoningEffort ?? "");
+    setFastMode(
+      defaultRuntimeConfig.fastMode === undefined
+        ? ""
+        : defaultRuntimeConfig.fastMode
+          ? "on"
+          : "off",
+    );
+    setServiceTier(defaultRuntimeConfig.serviceTier ?? "");
+  }, [
+    agent,
+    defaultRuntimeConfig.fastMode,
+    defaultRuntimeConfig.model,
+    defaultRuntimeConfig.reasoningEffort,
+    defaultRuntimeConfig.serviceTier,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRuntimeOptionsState("loading");
+    setRuntimeOptionsError("");
+    setRuntimeOptions(undefined);
+    void onListAgentRuntimeConfigOptions({
+      runnerId: runner.runnerId,
+      agent,
+      basePath: project.directory,
+    })
+      .then((options) => {
+        if (cancelled) {
+          return;
+        }
+        setRuntimeOptions(options);
+        setRuntimeOptionsState(options.error ? "error" : "ready");
+        setRuntimeOptionsError(options.error ?? "");
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setRuntimeOptions(undefined);
+        setRuntimeOptionsState("error");
+        setRuntimeOptionsError(
+          errorMessage(loadError, "Agent runtime options could not be loaded."),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    agent,
+    onListAgentRuntimeConfigOptions,
+    project.directory,
+    runner.runnerId,
+  ]);
 
   useEffect(() => {
     if (imageLimits.supported) {
@@ -305,6 +508,7 @@ export function NewSessionForm({
         ...(executionMode === "managed_worktree" && gitBranchName.trim()
           ? { gitBranchName: gitBranchName.trim() }
           : {}),
+        agentRuntimeConfig: runtimeConfigForSubmit(),
         attachments: await draftImagesToUploads(draftImages),
       });
       draftImages.forEach(revokeDraftPreview);
@@ -369,10 +573,75 @@ export function NewSessionForm({
           ))}
         </select>
       </label>
-      <label className="field">
-        <span>Project directory</span>
-        <input value={project.directory} readOnly />
-      </label>
+      <details className="advanced-session-config">
+        <summary>Advanced configuration</summary>
+        <div className="advanced-session-fields">
+          <RuntimeModelField
+            agent={agent}
+            models={runtimeOptions?.models ?? []}
+            allowCustomModel={runtimeOptions?.allowCustomModel === true}
+            value={model}
+            disabled={runtimeOptionsState === "loading"}
+            onChange={changeModel}
+          />
+          <label className="field">
+            <span>Thinking intensity</span>
+            <select
+              value={reasoningEffort}
+              disabled={
+                runtimeOptionsState === "loading" ||
+                reasoningEffortOptions.length === 0
+              }
+              onChange={(event) => setReasoningEffort(event.target.value)}
+            >
+              <option value="">Use agent default</option>
+              {reasoningEffortOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {booleanFastModeAvailable ? (
+            <label className="field">
+              <span>Fast Mode</span>
+              <select
+                value={fastMode}
+                disabled={runtimeOptionsState === "loading"}
+                onChange={(event) => setFastMode(event.target.value)}
+              >
+                <option value="">Use agent default</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+          ) : runtimeOptions?.fastMode.kind === "serviceTier" ? (
+            <label className="field">
+              <span>Fast Mode</span>
+              <select
+                value={serviceTier}
+                disabled={
+                  runtimeOptionsState === "loading" ||
+                  serviceTierOptions.length === 0
+                }
+                onChange={(event) => setServiceTier(event.target.value)}
+              >
+                <option value="">Use agent default</option>
+                {serviceTierOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {runtimeOptionsState === "loading" ? (
+            <p className="field-help">Loading agent options...</p>
+          ) : runtimeOptionsState === "error" ? (
+            <p className="field-help warning">{runtimeOptionsError}</p>
+          ) : null}
+        </div>
+      </details>
       <label className="field">
         <span>Execution</span>
         <select
@@ -552,6 +821,110 @@ export function NewSessionForm({
       </div>
     </form>
   );
+}
+
+function RuntimeModelField({
+  agent,
+  models,
+  allowCustomModel,
+  value,
+  disabled,
+  onChange,
+}: {
+  agent: AgentKind;
+  models: AgentRuntimeModelOption[];
+  allowCustomModel: boolean;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const listId = `agent-model-options-${agent.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  if (allowCustomModel) {
+    return (
+      <label className="field">
+        <span>Model</span>
+        <input
+          value={value}
+          list={models.length > 0 ? listId : undefined}
+          disabled={disabled}
+          placeholder="Use agent default"
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {models.length > 0 ? (
+          <datalist id={listId}>
+            {models.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </datalist>
+        ) : null}
+      </label>
+    );
+  }
+
+  const hasSelectedOption = models.some((option) => option.value === value);
+  return (
+    <label className="field">
+      <span>Model</span>
+      <select
+        value={value}
+        disabled={disabled || (models.length === 0 && !value)}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">Use agent default</option>
+        {value && !hasSelectedOption ? (
+          <option value={value}>{value}</option>
+        ) : null}
+        {models.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function buildRuntimeConfig(input: {
+  model: string;
+  reasoningEffort: string;
+  fastMode: string;
+  serviceTier: string;
+}): AgentRuntimeConfig {
+  const config: AgentRuntimeConfig = {};
+  if (input.model.trim()) {
+    config.model = input.model.trim();
+  }
+  if (input.reasoningEffort.trim()) {
+    config.reasoningEffort = input.reasoningEffort.trim();
+  }
+  if (input.fastMode === "on") {
+    config.fastMode = true;
+  }
+  if (input.fastMode === "off") {
+    config.fastMode = false;
+  }
+  if (input.serviceTier.trim()) {
+    config.serviceTier = input.serviceTier.trim();
+  }
+  return config;
+}
+
+async function emptyRuntimeConfigOptions(input: {
+  agent: AgentKind;
+  basePath: string;
+}): Promise<AgentRuntimeConfigOptionsResult> {
+  return {
+    requestId: "local_agent_runtime_config_options",
+    agent: input.agent,
+    basePath: input.basePath,
+    queriedAt: new Date().toISOString(),
+    models: [],
+    allowCustomModel: false,
+    reasoningEfforts: [],
+    fastMode: { kind: "unsupported", supported: false },
+  };
 }
 
 function errorMessage(error: unknown, fallback: string): string {

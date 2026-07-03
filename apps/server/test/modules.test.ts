@@ -290,6 +290,105 @@ describe("SessionCommandService", () => {
     });
   });
 
+  it("applies runner agent runtime defaults only when the create request omits runtime config", async () => {
+    const hub = new ConnectionHub(store);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      new RunnerRpcClient(hub),
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const setting = store.setRunnerAgentRuntimeConfigSetting(
+      "runner-1",
+      "codex",
+      {
+        model: "gpt-5.4-codex",
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+      "2026-07-03T00:00:00.000Z",
+    );
+
+    const fromSetting = await service.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "use setting",
+    });
+
+    expect(fromSetting.ok).toBe(true);
+    if (!fromSetting.ok) {
+      throw new Error("session with default runtime config was not created");
+    }
+    expect(fromSetting.value.session.agentRuntimeConfig).toEqual(
+      setting?.config,
+    );
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "startSession",
+      session: {
+        id: fromSetting.value.session.id,
+        agentRuntimeConfig: setting?.config,
+      },
+    });
+
+    const explicitLocalDefault = await service.createSession({
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "use local default",
+      agentRuntimeConfig: {},
+    });
+
+    expect(explicitLocalDefault.ok).toBe(true);
+    if (!explicitLocalDefault.ok) {
+      throw new Error("session with empty runtime config was not created");
+    }
+    expect(
+      explicitLocalDefault.value.session.agentRuntimeConfig,
+    ).toBeUndefined();
+    expect(runnerMessages.at(-1)).toMatchObject({
+      type: "startSession",
+      session: {
+        id: explicitLocalDefault.value.session.id,
+      },
+    });
+    expect(runnerMessages.at(-1)).not.toMatchObject({
+      session: { agentRuntimeConfig: expect.anything() },
+    });
+  });
+
+  it("persists and clears runner agent runtime default settings", () => {
+    const saved = store.setRunnerAgentRuntimeConfigSetting(
+      "runner-1",
+      "codex",
+      { model: "gpt-5.4-codex", serviceTier: "flex" },
+      "2026-07-03T00:00:00.000Z",
+    );
+
+    expect(saved).toEqual({
+      runnerId: "runner-1",
+      agent: "codex",
+      config: { model: "gpt-5.4-codex", serviceTier: "flex" },
+      updatedAt: "2026-07-03T00:00:00.000Z",
+    });
+    expect(store.listRunnerAgentRuntimeConfigSettings()).toEqual([saved]);
+    expect(
+      store.getRunnerAgentRuntimeConfigSetting("runner-1", "codex"),
+    ).toEqual(saved);
+
+    const cleared = store.setRunnerAgentRuntimeConfigSetting(
+      "runner-1",
+      "codex",
+      {},
+      "2026-07-03T00:01:00.000Z",
+    );
+
+    expect(cleared).toBeUndefined();
+    expect(store.listRunnerAgentRuntimeConfigSettings()).toEqual([]);
+  });
+
   it("stores attachment metadata only after the runner writes image bytes", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);

@@ -1,5 +1,7 @@
 import type {
+  AgentRuntimeConfigOptionsResult,
   AgentSkillListResult,
+  ApiAgentRuntimeConfigOptions,
   ApiAgentSkillList,
   ApiApplyPatch,
   ApiPathSearch,
@@ -221,6 +223,23 @@ export class WorkspaceService {
       },
       this.runnerRpcTimeoutMs,
     );
+    return ok({ result });
+  }
+
+  async listAgentRuntimeConfigOptions(
+    body: ApiAgentRuntimeConfigOptions,
+  ): Promise<ServiceResult<{ result: AgentRuntimeConfigOptionsResult }>> {
+    const result =
+      await this.rpc.requestRunner<AgentRuntimeConfigOptionsResult>(
+        body.runnerId,
+        {
+          type: "listAgentRuntimeConfigOptions",
+          requestId: newId("agent_runtime_config"),
+          agent: body.agent,
+          basePath: body.basePath,
+        },
+        this.runnerRpcTimeoutMs,
+      );
     return ok({ result });
   }
 

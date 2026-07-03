@@ -1,9 +1,12 @@
 import type {
   AccountSecurityState,
+  AgentRuntimeConfig,
   AgentKind,
+  ApiAgentRuntimeConfigOptions,
   ApiChangePassword,
   ApiAgentSkillList,
   ApiCreateProjectPromptPreset,
+  ApiRunnerAgentRuntimeConfigSetting,
   ApiGitBlameQuery,
   ApiGitCommit,
   ApiGitCommitFilesQuery,
@@ -948,6 +951,7 @@ export function useRoamController() {
       executionMode: ExecutionMode;
       gitBaseRef?: string;
       gitBranchName?: string;
+      agentRuntimeConfig?: AgentRuntimeConfig;
       attachments?: ImageAttachmentUpload[];
     },
   ) => {
@@ -1607,6 +1611,32 @@ export function useRoamController() {
     [requireApiClient],
   );
 
+  const listAgentRuntimeConfigOptions = useCallback(
+    async (input: ApiAgentRuntimeConfigOptions) => {
+      return requireApiClient().listAgentRuntimeConfigOptions(input);
+    },
+    [requireApiClient],
+  );
+
+  const fetchRunnerAgentRuntimeConfigSettings = useCallback(async () => {
+    return requireApiClient().fetchRunnerAgentRuntimeConfigSettings();
+  }, [requireApiClient]);
+
+  const saveRunnerAgentRuntimeConfigSetting = useCallback(
+    async (
+      runnerId: string,
+      agent: AgentKind,
+      input: ApiRunnerAgentRuntimeConfigSetting,
+    ) => {
+      return requireApiClient().saveRunnerAgentRuntimeConfigSetting(
+        runnerId,
+        agent,
+        input,
+      );
+    },
+    [requireApiClient],
+  );
+
   const searchWorkspacePaths = useCallback(
     async (input: ApiPathSearch) => {
       return requireApiClient().searchWorkspacePaths(input);
@@ -1891,6 +1921,9 @@ export function useRoamController() {
     fetchRunnerDirectoryTree,
     createRunnerDirectory,
     listAgentSkills,
+    listAgentRuntimeConfigOptions,
+    fetchRunnerAgentRuntimeConfigSettings,
+    saveRunnerAgentRuntimeConfigSetting,
     searchWorkspacePaths,
     fetchGitStatus,
     fetchGitDiff,

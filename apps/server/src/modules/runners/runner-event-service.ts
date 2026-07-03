@@ -74,6 +74,11 @@ export class RunnerEventService {
       return;
     }
 
+    if (event.type === "agentRuntimeConfigOptionsResult") {
+      this.rpc.resolveRunnerResponse(event.result);
+      return;
+    }
+
     if (event.type === "pathSearchResult") {
       this.rpc.resolveRunnerResponse(event.result);
       return;

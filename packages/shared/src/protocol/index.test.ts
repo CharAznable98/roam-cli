@@ -153,6 +153,36 @@ describe("protocol schemas", () => {
     });
   });
 
+  it("preserves runtime config on stream create-session commands", () => {
+    expect(
+      ClientCommandSchema.parse({
+        type: "createSession",
+        requestId: "create-session-1",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "run",
+        agentRuntimeConfig: {
+          model: "gpt-5-codex",
+          reasoningEffort: "high",
+          serviceTier: "flex",
+        },
+      }),
+    ).toEqual({
+      type: "createSession",
+      requestId: "create-session-1",
+      projectId: "project-1",
+      agent: "codex",
+      executionMode: "direct",
+      prompt: "run",
+      agentRuntimeConfig: {
+        model: "gpt-5-codex",
+        reasoningEffort: "high",
+        serviceTier: "flex",
+      },
+      attachments: [],
+    });
+  });
+
   it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {
     expect(
       ApiCreateSessionSchema.parse({

@@ -22,6 +22,7 @@ import {
   approvalResponsePayload,
   codexAgent,
   codexJsonArgs,
+  listCodexRuntimeConfigOptions,
   listCodexSkills,
   parseArgs,
 } from "./index.js";
@@ -92,6 +93,25 @@ describe("codex agent plugin", () => {
     });
   });
 
+  it("allows custom model overrides in legacy codex exec mode", async () => {
+    const workspace = await mkdirTemp("roam-codex-exec-options-");
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: { ROAMCLI_AGENT_CODEX_MODE: "exec-json" },
+    });
+
+    expect(result).toMatchObject({
+      models: [],
+      allowCustomModel: true,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Codex runtime options require app-server mode.",
+    });
+  });
+
   it("exposes a default plugin with one codex agent", () => {
     expect(
       agentPlugin
@@ -157,6 +177,206 @@ describe("codex agent plugin", () => {
       "--image",
       "/tmp/a.png",
     ]);
+  });
+
+  it("passes stored runtime config to codex exec-json invocations", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-config-");
+    const script = join(workspace, "argv-codex.mjs");
+    await writeFile(
+      script,
+      [
+        "const args = process.argv.slice(2);",
+        "console.log(JSON.stringify({",
+        "  type: 'item.completed',",
+        "  item: {",
+        "    id: 'item_1',",
+        "    type: 'agent_message',",
+        "    text: JSON.stringify(args),",
+        "  },",
+        "}));",
+      ].join("\n"),
+    );
+    const events: AgentRuntimeEvent[] = [];
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([script]),
+      },
+      session: {
+        ...makeSession(workspace),
+        agentRuntimeConfig: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          serviceTier: "flex",
+        },
+      },
+      cwd: workspace,
+      prompt: "hello",
+      emit: async (event) => {
+        events.push(event);
+      },
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+        signature: "sig",
+      }),
+    });
+
+    await session.start();
+
+    await vi.waitFor(() => {
+      expect(
+        events.some(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content ===
+              JSON.stringify([
+                "--model",
+                "gpt-5.4-codex",
+                "-c",
+                'model_reasoning_effort="high"',
+                "-c",
+                'service_tier="flex"',
+                "hello",
+              ]),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("lists Codex runtime config options from app-server model metadata", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-options-");
+    await writeAppServerScript(workspace, "runtime-options.mjs", [
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "  if (message.method === 'model/list') write({ id: message.id, result: { data: [{ model: 'gpt-5-codex', displayName: 'GPT-5 Codex', supportedReasoningEfforts: ['minimal', 'high'], serviceTiers: [{ id: 'flex', name: 'Flex' }] }] } });",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: { ROAMCLI_AGENT_CODEX_COMMAND: process.execPath },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.models).toEqual([
+      expect.objectContaining({
+        value: "gpt-5-codex",
+        label: "GPT-5 Codex",
+        reasoningEfforts: [
+          { value: "minimal", label: "minimal" },
+          { value: "high", label: "high" },
+        ],
+      }),
+    ]);
+    expect(result.reasoningEfforts).toEqual([
+      { value: "minimal", label: "minimal" },
+      { value: "high", label: "high" },
+    ]);
+    expect(result.fastMode).toEqual({
+      kind: "serviceTier",
+      supported: true,
+      options: [{ value: "flex", label: "Flex" }],
+    });
+  });
+
+  it("times out Codex model listing and terminates the app-server", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-timeout-");
+    const terminatedPath = join(workspace, "terminated.txt");
+    await writeAppServerScript(workspace, "runtime-options-timeout.mjs", [
+      `const terminatedPath = ${JSON.stringify(terminatedPath)};`,
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(terminatedPath, 'terminated');",
+      "  process.exit(0);",
+      "});",
+      "handleMessage = (message) => {",
+      "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
+      "};",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "500",
+      },
+    });
+
+    expect(result.error).toBe("Codex app-server model/list timed out.");
+    let terminated = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        terminated = await readFile(terminatedPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+      }
+    }
+    expect(terminated).toBe("terminated");
+  });
+
+  it("times out Codex app-server initialization and terminates the child", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-init-timeout-");
+    const terminatedPath = join(workspace, "terminated.txt");
+    await writeAppServerScript(workspace, "runtime-options-init-timeout.mjs", [
+      `const terminatedPath = ${JSON.stringify(terminatedPath)};`,
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(terminatedPath, 'terminated');",
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => undefined, 1000);",
+    ]);
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: workspace,
+      env: {
+        ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+        ROAMCLI_AGENT_CODEX_MODEL_LIST_TIMEOUT_MS: "500",
+      },
+    });
+
+    expect(result.error).toBe("Codex app-server initialize timed out.");
+    let terminated = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        terminated = await readFile(terminatedPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+      }
+    }
+    expect(terminated).toBe("terminated");
+  });
+
+  it("rejects Codex runtime option base paths outside the runner workspace", async () => {
+    const workspace = await mkdirTemp("roam-codex-runtime-workspace-");
+    const outside = await mkdirTemp("roam-codex-runtime-outside-");
+
+    const result = await listCodexRuntimeConfigOptions({
+      profile: "standard",
+      workspace,
+      basePath: outside,
+      env: { ROAMCLI_AGENT_CODEX_COMMAND: process.execPath },
+    });
+
+    expect(result).toMatchObject({
+      models: [],
+      allowCustomModel: false,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: "Runtime config base path must be inside the runner workspace.",
+    });
   });
 
   it("extracts complete assistant messages from codex json events", () => {

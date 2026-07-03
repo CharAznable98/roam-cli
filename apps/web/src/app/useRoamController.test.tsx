@@ -133,6 +133,11 @@ describe("useRoamController prompt presets", () => {
         if (requestUrl.pathname === "/v1/runners") {
           return jsonResponse({ runners: [] });
         }
+        if (
+          requestUrl.pathname === "/v1/runners/agent-runtime-config-settings"
+        ) {
+          return jsonResponse({ settings: [] });
+        }
         if (requestUrl.pathname === "/v1/projects") {
           return jsonResponse({ projects: projectSummaries });
         }
@@ -176,8 +181,7 @@ describe("useRoamController prompt presets", () => {
           return jsonResponse({ presets: [] });
         }
         if (
-          requestUrl.pathname ===
-          "/v1/projects/project-1/prompt-presets/order"
+          requestUrl.pathname === "/v1/projects/project-1/prompt-presets/order"
         ) {
           const body = JSON.parse(String(init?.body ?? "{}")) as {
             presetIds?: string[];
@@ -344,9 +348,10 @@ describe("useRoamController prompt presets", () => {
     await waitFor(() =>
       expect(
         testSockets.some((socket) =>
-          socket.sent.some((payload) =>
-            payload.includes('"type":"activeSessionChanged"') &&
-            payload.includes('"sessionId":"session-1"'),
+          socket.sent.some(
+            (payload) =>
+              payload.includes('"type":"activeSessionChanged"') &&
+              payload.includes('"sessionId":"session-1"'),
           ),
         ),
       ).toBe(true),

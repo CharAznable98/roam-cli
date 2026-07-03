@@ -7,6 +7,10 @@ export const ProjectPromptPresetParamsSchema = z.object({
   presetId: z.string().min(1),
 });
 export const RunnerParamsSchema = z.object({ id: z.string().min(1) });
+export const RunnerAgentParamsSchema = z.object({
+  id: z.string().min(1),
+  agent: z.string().min(1),
+});
 export const ApprovalParamsSchema = z.object({ id: z.string().min(1) });
 
 export const FileTreeQuerySchema = z.object({

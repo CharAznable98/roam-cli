@@ -644,6 +644,18 @@
     font-size: 14px;
   }
 
+  .settings-section-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .agent-default-fields {
+    align-content: start;
+  }
+
   .secret-display,
   .command-display {
     max-width: 100%;
@@ -1602,6 +1614,28 @@
   .field-help.warning {
     color: var(--signal-amber);
     font-weight: 600;
+  }
+
+  .advanced-session-config {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-muted);
+  }
+
+  .advanced-session-config summary {
+    cursor: pointer;
+    color: var(--text-strong);
+    font-size: 12px;
+    font-weight: 700;
+    list-style-position: inside;
+    padding: 9px 10px;
+  }
+
+  .advanced-session-fields {
+    display: grid;
+    gap: 10px;
+    border-top: 1px solid var(--border-subtle);
+    padding: 10px;
   }
 
   .new-session-loading {
@@ -4602,16 +4636,16 @@
 
   .mobile-topbar-actions button[aria-label="Open command palette"],
   .mobile-topbar-actions button[aria-label="Settings"] {
-    min-height: 28px;
-    min-width: 28px;
-    height: 28px;
-    width: 28px;
-    flex: 0 0 28px;
+    min-height: 44px;
+    min-width: 44px;
+    height: 44px;
+    width: 44px;
+    flex: 0 0 44px;
   }
 
   .mobile-topbar-actions .mobile-topbar-icon-button {
-    height: 28px !important;
-    width: 28px !important;
+    height: 44px !important;
+    width: 44px !important;
   }
 
   .chat-header,
@@ -4631,9 +4665,11 @@
   }
 
   .notification-close,
-  .modal-header .icon-button {
-    height: 28px;
-    width: 28px;
+  .modal-header .icon-button,
+  [data-slot="dialog-close"][data-size="icon-sm"],
+  [data-slot="sheet-close"][data-size="icon-sm"] {
+    height: 44px !important;
+    width: 44px !important;
   }
 
   .mobile-icon-button {
@@ -4872,14 +4908,14 @@
   }
 
   .prompt-composer textarea {
-    padding-right: 42px;
+    padding-right: 56px;
   }
 
   .prompt-preset-trigger {
-    right: 6px;
-    bottom: 6px;
-    height: 28px;
-    width: 28px;
+    right: 4px;
+    bottom: 4px;
+    height: 44px;
+    width: 44px;
   }
 
   .prompt-preset-toolbar {

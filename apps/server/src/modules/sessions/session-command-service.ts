@@ -3,6 +3,7 @@ import {
   type AttachmentWriteResult,
   type ApiCreateMessage,
   DEFAULT_MAX_IMAGE_BYTES,
+  type AgentRuntimeConfig,
   type GitContextRef,
   type GitJob,
   nowIso,
@@ -531,10 +532,19 @@ export class SessionCommandService {
     if (!attachmentValidation.ok) {
       return attachmentValidation;
     }
+    const agentRuntimeConfig = normalizeAgentRuntimeConfig(
+      "agentRuntimeConfig" in input
+        ? (input.agentRuntimeConfig ?? {})
+        : (this.store.getRunnerAgentRuntimeConfigSetting(
+            project.runnerId,
+            input.agent,
+          )?.config ?? {}),
+    );
 
     const session = createSessionRecord({
       ...input,
       runnerId: project.runnerId,
+      agentRuntimeConfig,
       executionMode: input.executionMode,
       executionFolder: project.directory,
       projectDirectory: project.directory,
@@ -851,6 +861,25 @@ export class SessionCommandService {
       code: result.error,
     });
   }
+}
+
+function normalizeAgentRuntimeConfig(
+  config: AgentRuntimeConfig,
+): AgentRuntimeConfig {
+  const normalized: AgentRuntimeConfig = {};
+  if (config.model?.trim()) {
+    normalized.model = config.model.trim();
+  }
+  if (config.reasoningEffort?.trim()) {
+    normalized.reasoningEffort = config.reasoningEffort.trim();
+  }
+  if (config.fastMode !== undefined) {
+    normalized.fastMode = config.fastMode;
+  }
+  if (config.serviceTier?.trim()) {
+    normalized.serviceTier = config.serviceTier.trim();
+  }
+  return normalized;
 }
 
 function toPublicAttachment(

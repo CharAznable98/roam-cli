@@ -1,7 +1,11 @@
 import type {
   AccountSecurityState,
+  AgentRuntimeConfig,
+  AgentRuntimeConfigOptionsResult,
   AgentSkillListResult,
   AgentKind,
+  ApiAgentRuntimeConfigOptions,
+  ApiRunnerAgentRuntimeConfigSetting,
   ApiChangePassword,
   ApiAgentSkillList,
   ApiCreateProjectPromptPreset,
@@ -47,6 +51,7 @@ import type {
   Project,
   ProjectPromptPreset,
   RunnerRegistration,
+  RunnerAgentRuntimeConfigSetting,
   ServerEvent,
   Session,
 } from "@roamcli/shared/protocol";
@@ -110,6 +115,7 @@ export interface RoamApiClient {
     gitBranchName?: string;
     prompt: string;
     title?: string;
+    agentRuntimeConfig?: AgentRuntimeConfig;
     attachments?: ImageAttachmentUpload[];
   }): Promise<Session>;
   createUserMessage(
@@ -142,6 +148,17 @@ export interface RoamApiClient {
     content: string,
   ): Promise<FileWriteResult>;
   applyPatch(sessionId: string, patch: string): Promise<PatchApplyResult>;
+  listAgentRuntimeConfigOptions(
+    input: ApiAgentRuntimeConfigOptions,
+  ): Promise<AgentRuntimeConfigOptionsResult>;
+  fetchRunnerAgentRuntimeConfigSettings(): Promise<
+    RunnerAgentRuntimeConfigSetting[]
+  >;
+  saveRunnerAgentRuntimeConfigSetting(
+    runnerId: string,
+    agent: AgentKind,
+    input: ApiRunnerAgentRuntimeConfigSetting,
+  ): Promise<RunnerAgentRuntimeConfigSetting | null>;
   listAgentSkills(input: ApiAgentSkillList): Promise<AgentSkillListResult>;
   searchWorkspacePaths(input: ApiPathSearch): Promise<PathSearchResult>;
   fetchGitStatus(context: ApiGitContext): Promise<GitStatusResult>;
@@ -233,6 +250,18 @@ interface PatchApplyResponse {
 
 interface AgentSkillListResponse {
   result: AgentSkillListResult;
+}
+
+interface AgentRuntimeConfigOptionsResponse {
+  result: AgentRuntimeConfigOptionsResult;
+}
+
+interface RunnerAgentRuntimeConfigSettingsResponse {
+  settings: RunnerAgentRuntimeConfigSetting[];
+}
+
+interface RunnerAgentRuntimeConfigSettingResponse {
+  setting: RunnerAgentRuntimeConfigSetting | null;
 }
 
 interface PathSearchResponse {
@@ -403,14 +432,19 @@ export function createRoamApiClient(
     },
 
     async loadInitialState() {
-      const [{ runners }, { projects }, { sessions }] = await Promise.all([
-        request<RunnersResponse>("/v1/runners"),
-        request<ProjectsResponse>("/v1/projects"),
-        request<SessionsResponse>("/v1/sessions"),
-      ]);
+      const [{ runners }, { projects }, { sessions }, { settings }] =
+        await Promise.all([
+          request<RunnersResponse>("/v1/runners"),
+          request<ProjectsResponse>("/v1/projects"),
+          request<SessionsResponse>("/v1/sessions"),
+          request<RunnerAgentRuntimeConfigSettingsResponse>(
+            "/v1/runners/agent-runtime-config-settings",
+          ),
+        ]);
       return {
         projects,
         runners,
+        runnerAgentRuntimeConfigSettings: settings,
         sessions,
         messages: [],
         activities: [],
@@ -536,6 +570,9 @@ export function createRoamApiClient(
             ...(input.gitBranchName === undefined
               ? {}
               : { gitBranchName: input.gitBranchName }),
+            ...(input.agentRuntimeConfig === undefined
+              ? {}
+              : { agentRuntimeConfig: input.agentRuntimeConfig }),
             prompt: input.prompt,
             attachments: input.attachments ?? [],
             title: input.title,
@@ -550,6 +587,9 @@ export function createRoamApiClient(
             ...(input.gitBranchName === undefined
               ? {}
               : { gitBranchName: input.gitBranchName }),
+            ...(input.agentRuntimeConfig === undefined
+              ? {}
+              : { agentRuntimeConfig: input.agentRuntimeConfig }),
             prompt: input.prompt,
             attachments: input.attachments ?? [],
           };
@@ -660,6 +700,37 @@ export function createRoamApiClient(
         },
       );
       return result;
+    },
+
+    async listAgentRuntimeConfigOptions(input) {
+      const { result } = await request<AgentRuntimeConfigOptionsResponse>(
+        "/v1/agent/runtime-config/options",
+        {
+          method: "POST",
+          body: JSON.stringify(input),
+        },
+      );
+      return result;
+    },
+
+    async fetchRunnerAgentRuntimeConfigSettings() {
+      const { settings } =
+        await request<RunnerAgentRuntimeConfigSettingsResponse>(
+          "/v1/runners/agent-runtime-config-settings",
+        );
+      return settings;
+    },
+
+    async saveRunnerAgentRuntimeConfigSetting(runnerId, agent, input) {
+      const { setting } =
+        await request<RunnerAgentRuntimeConfigSettingResponse>(
+          `/v1/runners/${encodeURIComponent(runnerId)}/agents/${encodeURIComponent(agent)}/runtime-config-setting`,
+          {
+            method: "PUT",
+            body: JSON.stringify(input),
+          },
+        );
+      return setting;
     },
 
     async listAgentSkills(input) {

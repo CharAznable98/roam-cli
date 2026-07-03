@@ -18,6 +18,7 @@ import type {
   AgentLaunchAttachment,
   AgentPlugin,
   AgentPluginContext,
+  AgentRuntimeConfigOptionsContext,
   AgentRuntimeEvent,
   AgentSession,
   AgentSessionContext,
@@ -26,6 +27,8 @@ import type {
 import {
   DEFAULT_MAX_IMAGE_BYTES,
   DEFAULT_MAX_IMAGES_PER_TURN,
+  type AgentRuntimeConfigOption,
+  type AgentRuntimeModelOption,
   type AgentActivityKind,
   type AgentSkillSummary,
   type RunnerCapability,
@@ -36,6 +39,7 @@ const KIND = "claude-code";
 const LABEL = "Claude Code";
 const PLUGIN_NAME = "@roamcli/agent-claude-code";
 const PLUGIN_VERSION = "1.1.0";
+const DEFAULT_MODEL_LIST_TIMEOUT_MS = 10_000;
 const SUPPORTED_IMAGE_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -69,6 +73,9 @@ export const claudeCodeAgent: AgentDefinition = {
   },
   async listSkills(context) {
     return listClaudeCodeSkills(context);
+  },
+  async listRuntimeConfigOptions(context) {
+    return listClaudeCodeRuntimeConfigOptions(context);
   },
 };
 
@@ -208,7 +215,10 @@ class ClaudeCodeSession implements AgentSession {
   }
 
   #options(): Options {
-    const model = this.#context.env.ROAMCLI_AGENT_CLAUDE_CODE_MODEL?.trim();
+    const runtimeConfig = this.#context.session.agentRuntimeConfig;
+    const model =
+      runtimeConfig?.model?.trim() ??
+      this.#context.env.ROAMCLI_AGENT_CLAUDE_CODE_MODEL?.trim();
     const maxTurns = parsePositiveInteger(
       this.#context.env.ROAMCLI_AGENT_CLAUDE_CODE_MAX_TURNS,
     );
@@ -256,6 +266,16 @@ class ClaudeCodeSession implements AgentSession {
     }
     if (model) {
       options.model = model;
+    }
+    if (runtimeConfig?.reasoningEffort) {
+      options.effort = runtimeConfig.reasoningEffort as NonNullable<
+        Options["effort"]
+      >;
+    }
+    if (runtimeConfig?.fastMode !== undefined) {
+      options.settings = {
+        fastMode: runtimeConfig.fastMode,
+      } as NonNullable<Options["settings"]>;
     }
     if (maxTurns !== undefined) {
       options.maxTurns = maxTurns;
@@ -519,6 +539,166 @@ async function listClaudeCodeSkills(
   } catch {
     return [];
   }
+}
+
+async function listClaudeCodeRuntimeConfigOptions(
+  context: AgentRuntimeConfigOptionsContext,
+): Promise<{
+  models: AgentRuntimeModelOption[];
+  allowCustomModel: boolean;
+  reasoningEfforts: AgentRuntimeConfigOption[];
+  fastMode:
+    | { kind: "unsupported"; supported: false }
+    | { kind: "boolean"; supported: true };
+  error?: string;
+}> {
+  try {
+    const basePath = await resolveSkillBase(
+      context.workspace,
+      context.basePath,
+    );
+    if (basePath === undefined) {
+      return {
+        models: [],
+        allowCustomModel: true,
+        reasoningEfforts: [],
+        fastMode: { kind: "unsupported", supported: false },
+        error: "Base path is outside this runner workspace.",
+      };
+    }
+    const command = context.env.ROAMCLI_AGENT_CLAUDE_CODE_COMMAND?.trim();
+    const options: Options = {
+      cwd: basePath,
+      env: { ...context.env },
+      permissionMode: "plan",
+      includePartialMessages: false,
+      maxTurns: 1,
+    };
+    if (command) {
+      options.pathToClaudeCodeExecutable = command;
+    }
+    const sdkQuery = query({
+      prompt: " ",
+      options,
+    }) as ReturnType<typeof query> & {
+      supportedModels?: () => Promise<unknown[]>;
+    };
+    try {
+      if (typeof sdkQuery.supportedModels !== "function") {
+        return {
+          models: [],
+          allowCustomModel: true,
+          reasoningEfforts: [],
+          fastMode: { kind: "unsupported", supported: false },
+          error: "This Claude Code SDK does not expose supportedModels().",
+        };
+      }
+      const modelListTimeoutMs = positiveIntegerEnv(
+        context.env.ROAMCLI_AGENT_CLAUDE_CODE_MODEL_LIST_TIMEOUT_MS,
+        DEFAULT_MODEL_LIST_TIMEOUT_MS,
+      );
+      const models = (
+        await withTimeout(
+          sdkQuery.supportedModels(),
+          modelListTimeoutMs,
+          "Claude Code supportedModels timed out.",
+        )
+      ).flatMap(claudeModelOption);
+      return {
+        models,
+        allowCustomModel: true,
+        reasoningEfforts: uniqueOptions(
+          models.flatMap((model) => model.reasoningEfforts),
+        ),
+        fastMode: models.some((model) => model.supportsFastMode)
+          ? { kind: "boolean", supported: true }
+          : { kind: "unsupported", supported: false },
+      };
+    } finally {
+      sdkQuery.close();
+    }
+  } catch (error: unknown) {
+    return {
+      models: [],
+      allowCustomModel: true,
+      reasoningEfforts: [],
+      fastMode: { kind: "unsupported", supported: false },
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function claudeModelOption(value: unknown): AgentRuntimeModelOption[] {
+  if (!isRecord(value) || typeof value.value !== "string") {
+    return [];
+  }
+  const effortValues = Array.isArray(value.supportedEffortLevels)
+    ? value.supportedEffortLevels.filter(
+        (item): item is string => typeof item === "string",
+      )
+    : [];
+  return [
+    {
+      value: value.value,
+      label:
+        typeof value.displayName === "string" ? value.displayName : value.value,
+      ...(typeof value.description === "string"
+        ? { description: value.description }
+        : {}),
+      reasoningEfforts: effortValues.map((effort) => ({
+        value: effort,
+        label: effort,
+      })),
+      serviceTiers: [],
+      supportsFastMode: value.supportsFastMode === true,
+    },
+  ];
+}
+
+function uniqueOptions(
+  options: readonly AgentRuntimeConfigOption[],
+): AgentRuntimeConfigOption[] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    if (seen.has(option.value)) {
+      return false;
+    }
+    seen.add(option.value);
+    return true;
+  });
+}
+
+function positiveIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      rejectPromise(new Error(message));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolvePromise(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        rejectPromise(error);
+      },
+    );
+  });
 }
 
 function claudeCommandName(name: string): string {

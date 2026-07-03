@@ -2,6 +2,7 @@
 import "../../test/setup.js";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
+  AgentRuntimeConfigOptionsResult,
   GitBranchList,
   Project,
   RunnerRegistration,
@@ -299,23 +300,25 @@ describe("NewSessionForm Git options", () => {
     expect(
       screen.getByRole("option", { name: "Current branch (main)" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Loading branch refs...")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Loading branch refs..."),
+    ).toBeInTheDocument();
 
     resolveBranches({
       requestId: "git-branches-1",
       context: { kind: "project", projectId: project.id },
-          branches: [
-            { name: "main", current: true, remote: false },
-            { name: "feature/git-ui", current: false, remote: false },
-            { name: "origin/main", current: false, remote: true },
-            {
-              name: "origin/HEAD -> origin/main",
-              current: false,
-              remote: true,
-            },
-            { name: "origin/HEAD", current: false, remote: true },
-          ],
-        });
+      branches: [
+        { name: "main", current: true, remote: false },
+        { name: "feature/git-ui", current: false, remote: false },
+        { name: "origin/main", current: false, remote: true },
+        {
+          name: "origin/HEAD -> origin/main",
+          current: false,
+          remote: true,
+        },
+        { name: "origin/HEAD", current: false, remote: true },
+      ],
+    });
 
     expect(
       await screen.findByRole("option", { name: "feature/git-ui (local)" }),
@@ -334,6 +337,354 @@ describe("NewSessionForm Git options", () => {
     expect(baseRef).toHaveValue("main");
   });
 });
+
+describe("NewSessionForm runtime configuration", () => {
+  it("keeps runtime fields collapsed under advanced config and submits selected overrides", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const onListAgentRuntimeConfigOptions = vi
+      .fn()
+      .mockResolvedValue(runtimeOptions());
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={onListAgentRuntimeConfigOptions}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    expect(screen.queryByText("Project directory")).not.toBeInTheDocument();
+    expect(onListAgentRuntimeConfigOptions).toHaveBeenCalledWith({
+      runnerId: "runner-1",
+      agent: "codex",
+      basePath: "/workspace",
+    });
+    const advanced = screen
+      .getByText("Advanced configuration")
+      .closest("details");
+    expect(advanced).toBeInstanceOf(HTMLDetailsElement);
+    expect((advanced as HTMLDetailsElement).open).toBe(false);
+
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByRole("option", { name: "GPT-5.4 Codex" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(screen.getByLabelText("Fast Mode"), {
+      target: { value: "on" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "build runtime config support" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "build runtime config support",
+        agentRuntimeConfig: {
+          model: "gpt-5.4-codex",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      }),
+    );
+  });
+
+  it("keeps session creation usable when runtime options fail to load", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => {
+          throw new Error("runner metadata unavailable");
+        }}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByText("runner metadata unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "start anyway" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "start anyway",
+        agentRuntimeConfig: {},
+      }),
+    );
+  });
+
+  it("preserves runner defaults when runtime options fail to load", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        agentRuntimeConfigDefaults={{
+          codex: {
+            model: "saved-model",
+            reasoningEffort: "saved-effort",
+            fastMode: true,
+            serviceTier: "saved-tier",
+          },
+        }}
+        onListAgentRuntimeConfigOptions={async () => {
+          throw new Error("runner metadata unavailable");
+        }}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByText("runner metadata unavailable"),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use saved defaults" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use saved defaults",
+        agentRuntimeConfig: {
+          model: "saved-model",
+          reasoningEffort: "saved-effort",
+          fastMode: true,
+          serviceTier: "saved-tier",
+        },
+      }),
+    );
+  });
+
+  it("clears stale thinking intensity when the selected model changes", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [{ value: "high", label: "High" }],
+              serviceTiers: [],
+            },
+            {
+              value: "gpt-5.3-codex-spark",
+              label: "GPT-5.3 Codex Spark",
+              reasoningEfforts: [{ value: "low", label: "Low" }],
+              serviceTiers: [],
+            },
+          ],
+        })}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    fireEvent.change(await screen.findByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Thinking intensity"), {
+      target: { value: "high" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Thinking intensity")).toHaveValue("");
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use spark" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use spark",
+        agentRuntimeConfig: {
+          model: "gpt-5.3-codex-spark",
+        },
+      }),
+    );
+  });
+
+  it("filters service-tier Fast Mode options by the selected model", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [],
+              serviceTiers: [{ value: "flex", label: "Flex" }],
+            },
+            {
+              value: "gpt-5.3-codex-spark",
+              label: "GPT-5.3 Codex Spark",
+              reasoningEfforts: [],
+              serviceTiers: [{ value: "auto", label: "Auto" }],
+            },
+          ],
+          reasoningEfforts: [],
+          fastMode: {
+            kind: "serviceTier",
+            supported: true,
+            options: [
+              { value: "flex", label: "Flex" },
+              { value: "auto", label: "Auto" },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    fireEvent.change(await screen.findByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Fast Mode"), {
+      target: { value: "flex" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Fast Mode")).toHaveValue("");
+      expect(
+        screen.queryByRole("option", { name: "Flex" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Auto" })).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use spark" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use spark",
+        agentRuntimeConfig: {
+          model: "gpt-5.3-codex-spark",
+        },
+      }),
+    );
+  });
+
+  it("hides and clears boolean Fast Mode when the selected model does not support it", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NewSessionForm
+        project={project}
+        runner={runner}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          models: [
+            {
+              value: "gpt-5.4-codex",
+              label: "GPT-5.4 Codex",
+              reasoningEfforts: [],
+              serviceTiers: [],
+              supportsFastMode: true,
+            },
+            {
+              value: "gpt-5.3-codex-spark",
+              label: "GPT-5.3 Codex Spark",
+              reasoningEfforts: [],
+              serviceTiers: [],
+              supportsFastMode: false,
+            },
+          ],
+          reasoningEfforts: [],
+          fastMode: { kind: "boolean", supported: true },
+        })}
+      />,
+    );
+
+    await screen.findByPlaceholderText("Describe the work");
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    fireEvent.change(await screen.findByLabelText("Model"), {
+      target: { value: "gpt-5.4-codex" },
+    });
+    fireEvent.change(screen.getByLabelText("Fast Mode"), {
+      target: { value: "on" },
+    });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.3-codex-spark" },
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "use spark" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("Fast Mode")).not.toBeInTheDocument();
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "use spark",
+        agentRuntimeConfig: {
+          model: "gpt-5.3-codex-spark",
+        },
+      }),
+    );
+  });
+});
+
+function runtimeOptions(): AgentRuntimeConfigOptionsResult {
+  return {
+    requestId: "runtime-options-1",
+    agent: "codex",
+    basePath: "/workspace",
+    queriedAt: "2026-07-03T00:00:00.000Z",
+    models: [
+      {
+        value: "gpt-5.4-codex",
+        label: "GPT-5.4 Codex",
+        reasoningEfforts: [{ value: "high", label: "High" }],
+        serviceTiers: [],
+        supportsFastMode: true,
+      },
+    ],
+    allowCustomModel: false,
+    reasoningEfforts: [{ value: "medium", label: "Medium" }],
+    fastMode: { kind: "boolean", supported: true },
+  };
+}
 
 function fileInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector('input[type="file"]');

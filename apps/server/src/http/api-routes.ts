@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   ApiApplyPatchSchema,
+  ApiAgentRuntimeConfigOptionsSchema,
   ApiAgentSkillListSchema,
   ApiApprovalResponseSchema,
   ApiChangePasswordSchema,
@@ -12,6 +13,7 @@ import {
   ApiLoginSchema,
   ApiReorderProjectPromptPresetsSchema,
   ApiRegenerateRunnerTokenSchema,
+  ApiRunnerAgentRuntimeConfigSettingSchema,
   ApiSetupOwnerSchema,
   ApiGitBlameQuerySchema,
   ApiGitCommitSchema,
@@ -46,6 +48,7 @@ import {
   ProjectPromptPresetParamsSchema,
   ProjectParamsSchema,
   RunnerParamsSchema,
+  RunnerAgentParamsSchema,
   SessionDeleteQuerySchema,
   SessionParamsSchema,
 } from "./schemas.js";
@@ -222,6 +225,32 @@ function registerRunnerRoutes(app: FastifyInstance, context: AppContext): void {
   app.get("/v1/runners", async () => ({
     runners: context.hub.listOnlineRunners(),
   }));
+
+  app.get("/v1/runners/agent-runtime-config-settings", async () => ({
+    settings: context.store.listRunnerAgentRuntimeConfigSettings(),
+  }));
+
+  app.put(
+    "/v1/runners/:id/agents/:agent/runtime-config-setting",
+    async (request, reply) => {
+      const params = RunnerAgentParamsSchema.parse(request.params);
+      const parsed = ApiRunnerAgentRuntimeConfigSettingSchema.safeParse(
+        request.body,
+      );
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid_request", issues: parsed.error.issues });
+      }
+      const setting = context.store.setRunnerAgentRuntimeConfigSetting(
+        params.id,
+        params.agent,
+        parsed.data.config,
+        nowIso(),
+      );
+      return { setting: setting ?? null };
+    },
+  );
 
   app.get("/v1/runners/:id/directories", async (request, reply) => {
     const params = RunnerParamsSchema.parse(request.params);
@@ -731,6 +760,28 @@ function registerWorkspaceRoutes(
   app: FastifyInstance,
   context: AppContext,
 ): void {
+  app.post("/v1/agent/runtime-config/options", async (request, reply) => {
+    const parsed = ApiAgentRuntimeConfigOptionsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", issues: parsed.error.issues });
+    }
+
+    try {
+      const result =
+        await context.services.workspace.listAgentRuntimeConfigOptions(
+          parsed.data,
+        );
+      if (!result.ok) {
+        return sendServiceError(reply, result);
+      }
+      return result.value;
+    } catch (error) {
+      return sendRunnerRpcError(reply, error);
+    }
+  });
+
   app.post("/v1/agent/skills", async (request, reply) => {
     const parsed = ApiAgentSkillListSchema.safeParse(request.body);
     if (!parsed.success) {
