@@ -2331,6 +2331,50 @@ describe("app reducer", () => {
     ]);
   });
 
+  it("ignores late detail completions after the session is removed", () => {
+    const session = makeSession("session-1", "project-1");
+    const loading = appReducer(
+      {
+        ...initialAppState,
+        sessions: [session],
+        selectedProjectId: "project-1",
+        selectedSessionId: "session-1",
+      },
+      {
+        type: "sessionDetailLoadStarted",
+        sessionId: "session-1",
+        requestId: "detail-1",
+      },
+    );
+    const removed = appReducer(loading, {
+      type: "sessionDeleted",
+      sessionId: "session-1",
+    });
+
+    const lateSuccess = appReducer(removed, {
+      type: "sessionDetailLoadSucceeded",
+      requestId: "detail-1",
+      detail: {
+        session,
+        messages: [],
+        attachments: [],
+        approvals: [],
+        artifacts: [],
+      },
+    });
+    const lateFailure = appReducer(removed, {
+      type: "sessionDetailLoadFailed",
+      sessionId: "session-1",
+      requestId: "detail-1",
+      message: "network failed",
+    });
+
+    expect(lateSuccess).toBe(removed);
+    expect(lateFailure).toBe(removed);
+    expect(lateSuccess.sessions).toEqual([]);
+    expect(lateSuccess.sessionDetailLoadStates["session-1"]).toBeUndefined();
+  });
+
   it("marks passively merged session detail as loaded", () => {
     const session = makeSession("session-1", "project-1");
 

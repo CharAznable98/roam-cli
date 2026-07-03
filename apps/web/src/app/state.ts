@@ -870,7 +870,11 @@ function completeSessionDetailLoad(
   requestId: string,
 ): AppState {
   const current = state.sessionDetailLoadStates[detail.session.id];
-  if (current?.requestId && current.requestId !== requestId) {
+  if (
+    !current ||
+    current.requestId !== requestId ||
+    !hasLiveSession(state, detail.session.id)
+  ) {
     return state;
   }
   const merged = mergeSessionDetailState(state, detail);
@@ -890,7 +894,11 @@ function failSessionDetailLoad(
   message: string,
 ): AppState {
   const current = state.sessionDetailLoadStates[sessionId];
-  if (current?.requestId && current.requestId !== requestId) {
+  if (
+    !current ||
+    current.requestId !== requestId ||
+    !hasLiveSession(state, sessionId)
+  ) {
     return state;
   }
   return {
@@ -906,6 +914,12 @@ function failSessionDetailLoad(
       },
     },
   };
+}
+
+function hasLiveSession(state: AppState, sessionId: string): boolean {
+  return state.sessions.some(
+    (session) => session.id === sessionId && !session.archivedAt,
+  );
 }
 
 function mergeLoadedSessionDetailState(
