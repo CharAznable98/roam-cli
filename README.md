@@ -118,9 +118,12 @@ Useful options:
 
 ```bash
 ./scripts/install-server.sh --ref main --public-origin https://roam.example.com
+./scripts/install-server.sh --ref main --source-archive /tmp/roam-cli-source.tar.gz
 ./scripts/install-server.sh --dry-run
 ./scripts/install-server.sh --uninstall
 ```
+
+Use `--source-archive` when the target machine cannot reach GitHub directly; the archive should contain a RoamCli source checkout at its root.
 
 `--uninstall` stops and removes the generated Server deployment files. It asks for a second confirmation before deleting Server data; data is preserved by default.
 
