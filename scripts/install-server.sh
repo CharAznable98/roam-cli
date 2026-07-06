@@ -2,6 +2,7 @@
 set -eu
 
 REPO_URL="${ROAMCLI_REPO_URL:-https://github.com/CharAznable98/roam-cli.git}"
+SOURCE_ARCHIVE="${ROAMCLI_SOURCE_ARCHIVE:-}"
 INSTALL_DIR="${ROAMCLI_INSTALL_DIR:-$HOME/.roamcli/server}"
 DATA_DIR=""
 DATA_DIR_OVERRIDE="0"
@@ -24,6 +25,7 @@ Install, upgrade, or uninstall RoamCli Server using local Docker Compose builds.
 Options:
   --version <tag>        Install a release tag, for example v1.2.3.
   --ref <ref>            Install a git ref, branch, tag, or sha. Overrides --version.
+  --source-archive <tgz> Copy source from a local tar.gz archive instead of git clone.
   --install-dir <path>   Install directory. Default: ~/.roamcli/server.
   --data-dir <path>      Persistent data directory. Default: <install-dir>/data.
   --bind <host>          Host bind address. Default: 0.0.0.0.
@@ -49,6 +51,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --install-dir)
       INSTALL_DIR="${2:?missing --install-dir value}"
+      shift 2
+      ;;
+    --source-archive)
+      SOURCE_ARCHIVE="${2:?missing --source-archive value}"
       shift 2
       ;;
     --data-dir)
@@ -214,6 +220,22 @@ clone_ref() {
   git -C "$target" checkout "$ref"
 }
 
+prepare_source() {
+  ref="$1"
+  target="$2"
+  if [ -n "$SOURCE_ARCHIVE" ]; then
+    if [ ! -f "$SOURCE_ARCHIVE" ]; then
+      echo "Source archive not found: $SOURCE_ARCHIVE" >&2
+      exit 1
+    fi
+    rm -rf "$target"
+    mkdir -p "$target"
+    tar -xzf "$SOURCE_ARCHIVE" -C "$target"
+    return 0
+  fi
+  clone_ref "$ref" "$target"
+}
+
 compose_content() {
   cat <<EOF
 services:
@@ -239,8 +261,17 @@ EOF
 EOF
 }
 
+start_compose() {
+  docker compose -f "$COMPOSE_FILE" build
+  docker compose -f "$COMPOSE_FILE" up -d --no-build --force-recreate --remove-orphans
+}
+
 install_or_upgrade() {
-  need_command git
+  if [ -n "$SOURCE_ARCHIVE" ]; then
+    need_command tar
+  else
+    need_command git
+  fi
   need_command docker
   need_compose
 
@@ -262,21 +293,27 @@ install_or_upgrade() {
     echo "Install dir: $INSTALL_DIR"
     echo "Data dir: $DATA_DIR"
     echo "Compose file: $COMPOSE_FILE"
-    echo "Would clone source to: $SOURCE_DIR"
+    if [ -n "$SOURCE_ARCHIVE" ]; then
+      echo "Source archive: $SOURCE_ARCHIVE"
+      echo "Would extract source to: $SOURCE_DIR"
+    else
+      echo "Would clone source to: $SOURCE_DIR"
+    fi
     echo "Would write env file:"
     print_env
     echo "Would write compose file:"
     compose_content
-    echo "Would run: docker compose -f $COMPOSE_FILE up -d --build"
+    echo "Would run: docker compose -f $COMPOSE_FILE build"
+    echo "Would run: docker compose -f $COMPOSE_FILE up -d --no-build --force-recreate --remove-orphans"
     return 0
   fi
 
   mkdir -p "$INSTALL_DIR" "$DATA_DIR"
-  clone_ref "$TARGET_REF" "$SOURCE_DIR"
+  prepare_source "$TARGET_REF" "$SOURCE_DIR"
   ln -sfn "$INSTALL_DIR/releases/$REF_DIR" "$INSTALL_DIR/current"
   print_env > "$ENV_FILE"
   compose_content > "$COMPOSE_FILE"
-  docker compose -f "$COMPOSE_FILE" up -d --build
+  start_compose
 
   echo "RoamCli Server is starting on http://$BIND:$PORT"
   echo "Setup token file: $DATA_DIR/setup-token.txt"
