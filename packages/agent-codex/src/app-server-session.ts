@@ -421,7 +421,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     const activity = notificationActivityFor(method, params);
-    if (activity) {
+    if (activity && this.#isRootScopedOrGlobalNotification(params)) {
       await this.#emitActivity(activity);
     }
   }
@@ -841,6 +841,30 @@ export class CodexAppServerSession implements AgentSession {
       threadId !== undefined &&
       (this.#threadId === undefined || threadId === this.#threadId)
     );
+  }
+
+  #isRootScopedOrGlobalNotification(notification: unknown): boolean {
+    const threadId = isRecord(notification)
+      ? asString(notification.threadId)
+      : undefined;
+    const turnId = isRecord(notification)
+      ? asString(notification.turnId)
+      : undefined;
+    if (threadId === undefined && turnId === undefined) {
+      return true;
+    }
+    if (
+      threadId !== undefined &&
+      this.#threadId !== undefined &&
+      threadId !== this.#threadId
+    ) {
+      return false;
+    }
+    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    if (turnId !== undefined && expectedTurnId !== undefined) {
+      return turnId === expectedTurnId;
+    }
+    return this.#isRootThreadId(threadId);
   }
 
   #isCurrentRootTurn(notification: TurnNotification): boolean {

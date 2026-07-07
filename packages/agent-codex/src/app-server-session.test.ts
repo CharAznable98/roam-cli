@@ -661,9 +661,22 @@ describe("CodexAppServerSession", () => {
       threadId: "thread-1",
       message: "model quota nearly exhausted",
     });
+    child.notify("warning", {
+      threadId: "child-thread",
+      message: "child warning should stay out of activity",
+    });
+    child.notify("configWarning", {
+      message: "global config warning",
+    });
     child.notify("model/rerouted", {
       threadId: "thread-1",
       turnId: "turn-1",
+      fromModel: "gpt-5.5",
+      toModel: "gpt-5.4-mini",
+    });
+    child.notify("model/rerouted", {
+      threadId: "thread-1",
+      turnId: "child-turn",
       fromModel: "gpt-5.5",
       toModel: "gpt-5.4-mini",
     });
@@ -673,6 +686,7 @@ describe("CodexAppServerSession", () => {
       .toEqual([
         { kind: "system", label: "temporary upstream issue" },
         { kind: "system", label: "Codex warning: model quota nearly exhausted" },
+        { kind: "system", label: "Codex warning: global config warning" },
         { kind: "system", label: "Model rerouted to gpt-5.4-mini" },
       ]);
   });
