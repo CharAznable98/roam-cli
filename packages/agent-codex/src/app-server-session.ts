@@ -1367,6 +1367,10 @@ function warningMessageFrom(value: unknown): string | undefined {
   if (message) {
     return message;
   }
+  const summary = asString(value.summary);
+  if (summary) {
+    return summary;
+  }
   if (isRecord(value.error)) {
     return asString(value.error.message);
   }

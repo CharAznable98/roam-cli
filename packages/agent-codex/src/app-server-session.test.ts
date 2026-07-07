@@ -666,7 +666,7 @@ describe("CodexAppServerSession", () => {
       message: "child warning should stay out of activity",
     });
     child.notify("configWarning", {
-      message: "global config warning",
+      summary: "global config summary",
     });
     child.notify("model/rerouted", {
       threadId: "thread-1",
@@ -686,7 +686,7 @@ describe("CodexAppServerSession", () => {
       .toEqual([
         { kind: "system", label: "temporary upstream issue" },
         { kind: "system", label: "Codex warning: model quota nearly exhausted" },
-        { kind: "system", label: "Codex warning: global config warning" },
+        { kind: "system", label: "Codex warning: global config summary" },
         { kind: "system", label: "Model rerouted to gpt-5.4-mini" },
       ]);
   });
