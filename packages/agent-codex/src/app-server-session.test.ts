@@ -428,6 +428,29 @@ describe("CodexAppServerSession", () => {
     expect(activityEvents(events)).toEqual([]);
   });
 
+  it("preserves startup stderr in early app-server exit errors", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const session = new CodexAppServerSession({
+      command: "codex",
+      args: ["app-server"],
+      context: makeContext(events),
+    });
+
+    const start = session.start();
+    const child = childProcess.children[0] as FakeChild;
+    await waitFor(() => child.requests("initialize").length === 1);
+
+    (child.stderr as PassThrough).write(
+      "auth failed: run codex login before app-server\n",
+    );
+    child.emit("close", 1, null);
+
+    await expect(start).rejects.toThrow(
+      /auth failed: run codex login before app-server/,
+    );
+    expect(activityEvents(events)).toEqual([]);
+  });
+
   it("emits concise activity for allowlisted app-server item starts", async () => {
     const { child, events } = await launchSession();
 
@@ -438,6 +461,16 @@ describe("CodexAppServerSession", () => {
         id: "command-1",
         type: "commandExecution",
         command: "pnpm test -- --runInBand",
+      },
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "command-2",
+        type: "commandExecution",
+        status: "running",
+        command: "pnpm build",
       },
     });
     child.notify("item/started", {
@@ -491,6 +524,11 @@ describe("CodexAppServerSession", () => {
     child.notify("item/started", {
       threadId: "thread-1",
       turnId: "turn-1",
+      item: { id: "image-view-1", type: "imageView" },
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
       item: { id: "compact-1", type: "contextCompaction" },
     });
     child.notify("item/started", {
@@ -515,16 +553,66 @@ describe("CodexAppServerSession", () => {
 
     expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
       .toEqual([
-        { kind: "tool", label: "Running pnpm test -- --runInBand" },
+        { kind: "tool", label: "Command pnpm test -- --runInBand" },
+        { kind: "tool", label: "Running pnpm build" },
         { kind: "tool", label: "Editing 2 files" },
         { kind: "tool", label: "Using GitHub search" },
         { kind: "tool", label: "Using images generate" },
         { kind: "tool", label: "Searching web" },
         { kind: "tool", label: "Generating image" },
+        { kind: "tool", label: "Viewing image" },
         { kind: "status", label: "Compacting context" },
         { kind: "status", label: "Waiting for agent" },
         { kind: "status", label: "Starting agent" },
       ]);
+  });
+
+  it("awaits item start activity before processing later item events", async () => {
+    let releaseStartActivity!: () => void;
+    const startActivityBlocked = new Promise<void>((resolve) => {
+      releaseStartActivity = resolve;
+    });
+    const { child, events } = await launchSession({
+      context: (events) => ({
+        ...makeContext(events),
+        emit: async (event) => {
+          if (event.type === "activity" && event.label === "Command slow") {
+            await startActivityBlocked;
+          }
+          events.push(event);
+        },
+      }),
+    });
+
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "command-1",
+        type: "commandExecution",
+        command: "slow",
+      },
+    });
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "command-1",
+        type: "commandExecution",
+        status: "failed",
+        command: "slow",
+      },
+    });
+    await settle();
+    await settle();
+
+    expect(activityEvents(events)).toEqual([]);
+    releaseStartActivity();
+    await waitFor(() => activityEvents(events).length === 2);
+    expect(activityEvents(events).map(({ label }) => label)).toEqual([
+      "Command slow",
+      "Command failed: slow",
+    ]);
   });
 
   it("filters item activity to the current root turn", async () => {
@@ -580,7 +668,7 @@ describe("CodexAppServerSession", () => {
     await settle();
 
     expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([{ kind: "tool", label: "Running pnpm root" }]);
+      .toEqual([{ kind: "tool", label: "Command pnpm root" }]);
   });
 
   it("emits completed item activity only for attention states", async () => {
@@ -693,7 +781,11 @@ describe("CodexAppServerSession", () => {
 });
 
 async function launchSession(
-  options: { session?: Session; turnStartResult?: unknown } = {},
+  options: {
+    session?: Session;
+    turnStartResult?: unknown;
+    context?: (events: AgentRuntimeEvent[]) => AgentSessionContext;
+  } = {},
 ): Promise<{
   child: FakeChild;
   events: AgentRuntimeEvent[];
@@ -703,7 +795,9 @@ async function launchSession(
   const session = new CodexAppServerSession({
     command: "codex",
     args: ["app-server"],
-    context: makeContext(events, options.session),
+    context: options.context
+      ? options.context(events)
+      : makeContext(events, options.session),
   });
 
   const start = session.start();

@@ -66,6 +66,7 @@ interface CodexActivitySummary {
 
 const MAX_ACTIVITY_LABEL_LENGTH = 120;
 const MAX_ACTIVITY_OBJECT_LENGTH = 80;
+const MAX_STDERR_DIAGNOSTIC_LENGTH = 4096;
 
 export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
@@ -104,6 +105,7 @@ export class CodexAppServerSession implements AgentSession {
   >();
   readonly #activityStartedItems = new Set<string>();
   readonly #pendingDirectiveApprovals = new Set<Promise<void>>();
+  #stderrDiagnostic = "";
 
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
@@ -122,11 +124,8 @@ export class CodexAppServerSession implements AgentSession {
     });
     this.#child.on("close", (code, signal) => {
       const client = this.#client;
-      client?.close(
-        new Error(
-          `Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`,
-        ),
-      );
+      const exitMessage = this.#appServerExitMessage(code, signal);
+      client?.close(new Error(exitMessage));
       if (this.#closed || this.#stopRequested) {
         return;
       }
@@ -135,13 +134,24 @@ export class CodexAppServerSession implements AgentSession {
       }
       this.#fail(
         this.#activeTurnId === undefined
-          ? `Codex app-server exited before the next turn started: code=${code ?? "null"} signal=${signal ?? "null"}`
-          : `Codex app-server exited before the active turn completed: code=${code ?? "null"} signal=${signal ?? "null"}`,
+          ? this.#appServerExitMessage(
+              code,
+              signal,
+              "before the next turn started",
+            )
+          : this.#appServerExitMessage(
+              code,
+              signal,
+              "before the active turn completed",
+            ),
       );
     });
     this.#child.on("error", (error) => {
       this.#fail(error.message);
     });
+    this.#child.stderr.on("data", (chunk) =>
+      this.#appendStderrDiagnostic(chunk),
+    );
     this.#child.stderr.resume();
 
     this.#client = new CodexAppServerClient({
@@ -384,7 +394,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (method === "item/started") {
-      this.#handleItemStarted(params as ItemStartedNotification);
+      await this.#handleItemStarted(params as ItemStartedNotification);
       return;
     }
     if (method === "item/completed") {
@@ -693,7 +703,9 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
-  #handleItemStarted(notification: ItemStartedNotification): void {
+  async #handleItemStarted(
+    notification: ItemStartedNotification,
+  ): Promise<void> {
     const item = notification.item;
     if (!item?.id) {
       return;
@@ -713,8 +725,34 @@ export class CodexAppServerSession implements AgentSession {
     const activity = startedItemActivity(item);
     if (activity) {
       this.#activityStartedItems.add(item.id);
-      void this.#emitActivity(activity);
+      await this.#emitActivity(activity);
     }
+  }
+
+  #appendStderrDiagnostic(chunk: string | Buffer): void {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+    if (text.length === 0) {
+      return;
+    }
+    this.#stderrDiagnostic = `${this.#stderrDiagnostic}${text}`;
+    if (this.#stderrDiagnostic.length > MAX_STDERR_DIAGNOSTIC_LENGTH) {
+      this.#stderrDiagnostic = this.#stderrDiagnostic.slice(
+        -MAX_STDERR_DIAGNOSTIC_LENGTH,
+      );
+    }
+  }
+
+  #appServerExitMessage(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    context?: string,
+  ): string {
+    const message = `Codex app-server exited${context ? ` ${context}` : ""}: code=${code ?? "null"} signal=${signal ?? "null"}`;
+    const diagnostic = this.#stderrDiagnostic.trim();
+    if (diagnostic.length === 0) {
+      return message;
+    }
+    return `${message}\nstderr:\n${diagnostic}`;
   }
 
   async #handleItemCompleted(
@@ -1241,7 +1279,10 @@ function startedItemActivity(item: unknown): CodexActivitySummary | undefined {
   }
   switch (item.type) {
     case "commandExecution":
-      return { kind: "tool", label: `Running ${commandActivityObject(item)}` };
+      return {
+        kind: "tool",
+        label: `${commandStartVerb(item)} ${commandActivityObject(item)}`,
+      };
     case "fileChange":
       return { kind: "tool", label: fileChangeActivityLabel("Editing", item) };
     case "mcpToolCall":
@@ -1251,6 +1292,8 @@ function startedItemActivity(item: unknown): CodexActivitySummary | undefined {
       return { kind: "tool", label: "Searching web" };
     case "imageGeneration":
       return { kind: "tool", label: "Generating image" };
+    case "imageView":
+      return { kind: "tool", label: "Viewing image" };
     case "contextCompaction":
       return { kind: "status", label: "Compacting context" };
     case "collabToolCall":
@@ -1289,6 +1332,8 @@ function completedItemActivity(
       return { kind: "tool", label: `Web search ${attention}` };
     case "imageGeneration":
       return { kind: "tool", label: `Image generation ${attention}` };
+    case "imageView":
+      return { kind: "tool", label: `Image view ${attention}` };
     case "contextCompaction":
       return { kind: "status", label: `Context compaction ${attention}` };
     case "collabToolCall":
@@ -1297,6 +1342,11 @@ function completedItemActivity(
     default:
       return undefined;
   }
+}
+
+function commandStartVerb(item: Record<string, unknown>): string {
+  const status = asString(item.status);
+  return status === "running" ? "Running" : "Command";
 }
 
 function itemNeedsAttention(item: Record<string, unknown>): boolean {
