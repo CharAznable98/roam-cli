@@ -555,7 +555,7 @@ describe("CodexAppServerSession", () => {
       .toEqual([
         { kind: "tool", label: "Command pnpm test -- --runInBand" },
         { kind: "tool", label: "Running pnpm build" },
-        { kind: "tool", label: "Editing 2 files" },
+        { kind: "tool", label: "Proposed edits to 2 files" },
         { kind: "tool", label: "Using GitHub search" },
         { kind: "tool", label: "Using images generate" },
         { kind: "tool", label: "Searching web" },
@@ -564,6 +564,33 @@ describe("CodexAppServerSession", () => {
         { kind: "status", label: "Compacting context" },
         { kind: "status", label: "Waiting for agent" },
         { kind: "status", label: "Starting agent" },
+      ]);
+  });
+
+  it("accepts unscoped item activity during the active root turn", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("item/started", {
+      item: {
+        id: "root-command",
+        type: "commandExecution",
+        command: "pnpm root",
+      },
+    });
+    child.notify("item/completed", {
+      item: {
+        id: "root-command",
+        type: "commandExecution",
+        command: "pnpm root",
+        status: "failed",
+      },
+    });
+    await settle();
+
+    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
+      .toEqual([
+        { kind: "tool", label: "Command pnpm root" },
+        { kind: "tool", label: "Command failed: pnpm root" },
       ]);
   });
 
@@ -669,6 +696,45 @@ describe("CodexAppServerSession", () => {
 
     expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
       .toEqual([{ kind: "tool", label: "Command pnpm root" }]);
+  });
+
+  it("keeps the completed root turn id for scoped activity filtering until idle", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await settle();
+    await settle();
+
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "child-turn",
+      item: {
+        id: "child-turn-command",
+        type: "commandExecution",
+        command: "pnpm child-turn",
+      },
+    });
+    child.notify("warning", {
+      threadId: "thread-1",
+      turnId: "child-turn",
+      message: "child turn warning",
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "root-turn-command",
+        type: "commandExecution",
+        command: "pnpm root-turn",
+      },
+    });
+    await settle();
+
+    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
+      .toEqual([{ kind: "tool", label: "Command pnpm root-turn" }]);
   });
 
   it("emits completed item activity only for attention states", async () => {

@@ -78,6 +78,7 @@ export class CodexAppServerSession implements AgentSession {
   #client: CodexAppServerClient | undefined;
   #threadId: string | undefined;
   #activeTurnId: string | undefined;
+  #filterTurnId: string | undefined;
   #turnSequence = 0;
   #outputSequence = 0;
   #closed = false;
@@ -332,6 +333,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#interruptSent = false;
     this.#turnCompletedSuccessfully = false;
     this.#rootThreadIdle = false;
+    this.#filterTurnId = undefined;
     this.#streamedOutputIds.clear();
     this.#activityStartedItems.clear();
     const turnDone = new Promise<void>((resolve, reject) => {
@@ -361,6 +363,7 @@ export class CodexAppServerSession implements AgentSession {
     const activeTurnDone = this.#turnDone;
     if (activeTurnDone === currentTurnDone) {
       this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
+      this.#filterTurnId = this.#activeTurnId ?? this.#filterTurnId;
       if (activeTurnDone.turnId === undefined) {
         activeTurnDone.turnId = this.#activeTurnId;
       }
@@ -794,6 +797,11 @@ export class CodexAppServerSession implements AgentSession {
     if (!this.#isCurrentRootTurn(notification)) {
       return;
     }
+    this.#filterTurnId =
+      notification.turn?.id ??
+      this.#turnDone?.turnId ??
+      this.#activeTurnId ??
+      this.#filterTurnId;
     const status = notification.turn?.status;
     const done = this.#turnDone;
     if (done && done.turnId === undefined) {
@@ -834,7 +842,7 @@ export class CodexAppServerSession implements AgentSession {
     if (!turnId) {
       return;
     }
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (expectedTurnId !== undefined && expectedTurnId !== turnId) {
       return;
     }
@@ -842,6 +850,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     this.#activeTurnId = turnId;
+    this.#filterTurnId = turnId;
     if (this.#turnDone && this.#turnDone.turnId === undefined) {
       this.#turnDone.turnId = turnId;
     }
@@ -864,14 +873,17 @@ export class CodexAppServerSession implements AgentSession {
     ) {
       return false;
     }
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (turnId !== undefined && expectedTurnId !== undefined) {
       return turnId === expectedTurnId;
     }
-    if (turnId === undefined && expectedTurnId !== undefined) {
+    if (turnId !== undefined) {
       return this.#isRootThreadId(threadId);
     }
-    return this.#isRootThreadId(threadId);
+    if (threadId !== undefined) {
+      return this.#isRootThreadId(threadId);
+    }
+    return this.#turnDone !== undefined || expectedTurnId !== undefined;
   }
 
   #isRootThreadId(threadId: string | undefined): boolean {
@@ -898,7 +910,7 @@ export class CodexAppServerSession implements AgentSession {
     ) {
       return false;
     }
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (turnId !== undefined && expectedTurnId !== undefined) {
       return turnId === expectedTurnId;
     }
@@ -910,7 +922,7 @@ export class CodexAppServerSession implements AgentSession {
       return false;
     }
     const turnId = notification.turn?.id;
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (turnId !== undefined && expectedTurnId !== undefined) {
       return turnId === expectedTurnId;
     }
@@ -918,6 +930,10 @@ export class CodexAppServerSession implements AgentSession {
       return this.#hasRootThreadId(notification);
     }
     return this.#hasRootThreadId(notification);
+  }
+
+  #expectedRootTurnId(): string | undefined {
+    return this.#turnDone?.turnId ?? this.#activeTurnId ?? this.#filterTurnId;
   }
 
   #isKnownNonRootThread(notification: { threadId?: string }): boolean {
@@ -990,6 +1006,7 @@ export class CodexAppServerSession implements AgentSession {
       return false;
     }
     this.#turnCompletedSuccessfully = false;
+    this.#filterTurnId = undefined;
     this.#closeAppServer("SIGTERM");
     await this.#emit({ type: "status", status: "completed" });
     return true;
@@ -1284,7 +1301,10 @@ function startedItemActivity(item: unknown): CodexActivitySummary | undefined {
         label: `${commandStartVerb(item)} ${commandActivityObject(item)}`,
       };
     case "fileChange":
-      return { kind: "tool", label: fileChangeActivityLabel("Editing", item) };
+      return {
+        kind: "tool",
+        label: fileChangeActivityLabel("Proposed edits to", item),
+      };
     case "mcpToolCall":
     case "dynamicToolCall":
       return { kind: "tool", label: `Using ${toolActivityObject(item)}` };
