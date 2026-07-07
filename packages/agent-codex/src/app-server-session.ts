@@ -14,7 +14,10 @@ import type {
   UserInputQuestionOption,
   UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
-import type { RunnerProfile } from "@roamcli/shared/protocol";
+import type {
+  AgentActivityKind,
+  RunnerProfile,
+} from "@roamcli/shared/protocol";
 import { CodexAppServerClient } from "./app-server-client.js";
 import type {
   AskForApproval,
@@ -56,6 +59,15 @@ interface QueuedInput {
   attachments?: readonly AgentLaunchAttachment[];
 }
 
+interface CodexActivitySummary {
+  kind: AgentActivityKind;
+  label: string;
+}
+
+const MAX_ACTIVITY_LABEL_LENGTH = 120;
+const MAX_ACTIVITY_OBJECT_LENGTH = 80;
+const MAX_STDERR_DIAGNOSTIC_LENGTH = 4096;
+
 export class CodexAppServerSession implements AgentSession {
   readonly #command: string;
   readonly #args: readonly string[];
@@ -66,6 +78,7 @@ export class CodexAppServerSession implements AgentSession {
   #client: CodexAppServerClient | undefined;
   #threadId: string | undefined;
   #activeTurnId: string | undefined;
+  #filterTurnId: string | undefined;
   #turnSequence = 0;
   #outputSequence = 0;
   #closed = false;
@@ -91,7 +104,9 @@ export class CodexAppServerSession implements AgentSession {
     string,
     ItemStartedNotification["item"]
   >();
+  readonly #activityStartedItems = new Set<string>();
   readonly #pendingDirectiveApprovals = new Set<Promise<void>>();
+  #stderrDiagnostic = "";
 
   public constructor(options: CodexAppServerSessionOptions) {
     this.#command = options.command;
@@ -110,11 +125,8 @@ export class CodexAppServerSession implements AgentSession {
     });
     this.#child.on("close", (code, signal) => {
       const client = this.#client;
-      client?.close(
-        new Error(
-          `Codex app-server exited: code=${code ?? "null"} signal=${signal ?? "null"}`,
-        ),
-      );
+      const exitMessage = this.#appServerExitMessage(code, signal);
+      client?.close(new Error(exitMessage));
       if (this.#closed || this.#stopRequested) {
         return;
       }
@@ -123,23 +135,25 @@ export class CodexAppServerSession implements AgentSession {
       }
       this.#fail(
         this.#activeTurnId === undefined
-          ? `Codex app-server exited before the next turn started: code=${code ?? "null"} signal=${signal ?? "null"}`
-          : `Codex app-server exited before the active turn completed: code=${code ?? "null"} signal=${signal ?? "null"}`,
+          ? this.#appServerExitMessage(
+              code,
+              signal,
+              "before the next turn started",
+            )
+          : this.#appServerExitMessage(
+              code,
+              signal,
+              "before the active turn completed",
+            ),
       );
     });
     this.#child.on("error", (error) => {
       this.#fail(error.message);
     });
-    this.#child.stderr.on("data", (chunk) => {
-      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
-      if (text.trim().length > 0) {
-        void this.#emit({
-          type: "activity",
-          kind: "system",
-          label: text.trim(),
-        });
-      }
-    });
+    this.#child.stderr.on("data", (chunk) =>
+      this.#appendStderrDiagnostic(chunk),
+    );
+    this.#child.stderr.resume();
 
     this.#client = new CodexAppServerClient({
       child: this.#child,
@@ -319,23 +333,43 @@ export class CodexAppServerSession implements AgentSession {
     this.#interruptSent = false;
     this.#turnCompletedSuccessfully = false;
     this.#rootThreadIdle = false;
+    this.#filterTurnId = undefined;
     this.#streamedOutputIds.clear();
-    const response = (await this.#request("turn/start", {
-      threadId,
-      cwd: this.#context.cwd,
-      input: userInputFor(input),
-      ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
-      ...runtimeTurnParams(this.#context.session.agentRuntimeConfig),
-    })) as TurnStartResponse;
-    this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
-    this.#sendPendingInterrupt();
-    await new Promise<void>((resolve, reject) => {
+    this.#activityStartedItems.clear();
+    const turnDone = new Promise<void>((resolve, reject) => {
       this.#turnDone = {
         turnId: this.#activeTurnId,
         resolve,
         reject,
       };
     });
+    void turnDone.catch(() => undefined);
+    const currentTurnDone = this.#turnDone!;
+    let response: TurnStartResponse;
+    try {
+      response = (await this.#request("turn/start", {
+        threadId,
+        cwd: this.#context.cwd,
+        input: userInputFor(input),
+        ...turnStartParamsForProfile(this.#context.profile, this.#context.cwd),
+        ...runtimeTurnParams(this.#context.session.agentRuntimeConfig),
+      })) as TurnStartResponse;
+    } catch (error) {
+      if (this.#turnDone === currentTurnDone) {
+        this.#turnDone = undefined;
+      }
+      throw error;
+    }
+    const activeTurnDone = this.#turnDone;
+    if (activeTurnDone === currentTurnDone) {
+      this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
+      this.#filterTurnId = this.#activeTurnId ?? this.#filterTurnId;
+      if (activeTurnDone.turnId === undefined) {
+        activeTurnDone.turnId = this.#activeTurnId;
+      }
+      this.#sendPendingInterrupt();
+    }
+    await turnDone;
     if (this.#pendingTerminalStatus !== "stopped") {
       await this.#awaitPendingDirectiveApprovals();
     }
@@ -363,7 +397,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (method === "item/started") {
-      this.#handleItemStarted(params as ItemStartedNotification);
+      await this.#handleItemStarted(params as ItemStartedNotification);
       return;
     }
     if (method === "item/completed") {
@@ -384,7 +418,7 @@ export class CodexAppServerSession implements AgentSession {
       const message =
         errorMessageFrom(params) ?? "Codex app-server reported an error";
       if (errorWillRetryFrom(params)) {
-        await this.#emit({ type: "activity", kind: "system", label: message });
+        await this.#emitActivity({ kind: "system", label: message });
         return;
       }
       this.#turnDone?.reject(new Error(message));
@@ -397,10 +431,11 @@ export class CodexAppServerSession implements AgentSession {
       method === "item/commandExecution/outputDelta" ||
       method === "process/outputDelta"
     ) {
-      const text = outputDeltaFrom(params);
-      if (text) {
-        await this.#emit({ type: "activity", kind: "tool", label: text });
-      }
+      return;
+    }
+    const activity = notificationActivityFor(method, params);
+    if (activity && this.#isRootScopedOrGlobalNotification(params)) {
+      await this.#emitActivity(activity);
     }
   }
 
@@ -671,32 +706,68 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
-  #handleItemStarted(notification: ItemStartedNotification): void {
+  async #handleItemStarted(
+    notification: ItemStartedNotification,
+  ): Promise<void> {
     const item = notification.item;
     if (!item?.id) {
       return;
     }
     if (item.type === "fileChange") {
       this.#fileChangeItems.set(item.id, item);
-      return;
     }
     if (item.type === "commandExecution") {
       this.#commandExecutionItems.set(item.id, item);
+    }
+    if (!this.#isCurrentRootItemEvent(notification)) {
       return;
     }
-    if (item.type === "collabAgentToolCall" && item.tool === "wait") {
-      void this.#emit({
-        type: "activity",
-        kind: "status",
-        label: "Waiting for agent",
-      });
+    if (this.#activityStartedItems.has(item.id)) {
+      return;
     }
+    const activity = startedItemActivity(item);
+    if (activity) {
+      this.#activityStartedItems.add(item.id);
+      await this.#emitActivity(activity);
+    }
+  }
+
+  #appendStderrDiagnostic(chunk: string | Buffer): void {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+    if (text.length === 0) {
+      return;
+    }
+    this.#stderrDiagnostic = `${this.#stderrDiagnostic}${text}`;
+    if (this.#stderrDiagnostic.length > MAX_STDERR_DIAGNOSTIC_LENGTH) {
+      this.#stderrDiagnostic = this.#stderrDiagnostic.slice(
+        -MAX_STDERR_DIAGNOSTIC_LENGTH,
+      );
+    }
+  }
+
+  #appServerExitMessage(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    context?: string,
+  ): string {
+    const message = `Codex app-server exited${context ? ` ${context}` : ""}: code=${code ?? "null"} signal=${signal ?? "null"}`;
+    const diagnostic = this.#stderrDiagnostic.trim();
+    if (diagnostic.length === 0) {
+      return message;
+    }
+    return `${message}\nstderr:\n${diagnostic}`;
   }
 
   async #handleItemCompleted(
     notification: ItemCompletedNotification,
   ): Promise<void> {
     const item = notification.item;
+    if (this.#isCurrentRootItemEvent(notification)) {
+      const activity = completedItemActivity(item);
+      if (activity) {
+        await this.#emitActivity(activity);
+      }
+    }
     if (item?.type !== "agentMessage" || !item.text) {
       return;
     }
@@ -726,15 +797,18 @@ export class CodexAppServerSession implements AgentSession {
     if (!this.#isCurrentRootTurn(notification)) {
       return;
     }
+    this.#filterTurnId =
+      notification.turn?.id ??
+      this.#turnDone?.turnId ??
+      this.#activeTurnId ??
+      this.#filterTurnId;
     const status = notification.turn?.status;
-    await this.#emitLifecycleActivity(
-      `Codex app-server turn completed: ${status ?? "unknown"}`,
-    );
     const done = this.#turnDone;
     if (done && done.turnId === undefined) {
       done.turnId = notification.turn?.id;
     }
     this.#turnDone = undefined;
+    this.#activeTurnId = undefined;
     if (status === "failed") {
       const message =
         notification.turn?.error?.message ?? "Codex app-server turn failed";
@@ -768,7 +842,7 @@ export class CodexAppServerSession implements AgentSession {
     if (!turnId) {
       return;
     }
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (expectedTurnId !== undefined && expectedTurnId !== turnId) {
       return;
     }
@@ -776,10 +850,71 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     this.#activeTurnId = turnId;
+    this.#filterTurnId = turnId;
     if (this.#turnDone && this.#turnDone.turnId === undefined) {
       this.#turnDone.turnId = turnId;
     }
     this.#sendPendingInterrupt();
+  }
+
+  #isCurrentRootItemEvent(
+    notification: unknown,
+  ): boolean {
+    const threadId = isRecord(notification)
+      ? asString(notification.threadId)
+      : undefined;
+    const turnId = isRecord(notification)
+      ? asString(notification.turnId)
+      : undefined;
+    if (
+      threadId !== undefined &&
+      this.#threadId !== undefined &&
+      threadId !== this.#threadId
+    ) {
+      return false;
+    }
+    const expectedTurnId = this.#expectedRootTurnId();
+    if (turnId !== undefined && expectedTurnId !== undefined) {
+      return turnId === expectedTurnId;
+    }
+    if (turnId !== undefined) {
+      return this.#isRootThreadId(threadId);
+    }
+    if (threadId !== undefined) {
+      return this.#isRootThreadId(threadId);
+    }
+    return this.#turnDone !== undefined || expectedTurnId !== undefined;
+  }
+
+  #isRootThreadId(threadId: string | undefined): boolean {
+    return (
+      threadId !== undefined &&
+      (this.#threadId === undefined || threadId === this.#threadId)
+    );
+  }
+
+  #isRootScopedOrGlobalNotification(notification: unknown): boolean {
+    const threadId = isRecord(notification)
+      ? asString(notification.threadId)
+      : undefined;
+    const turnId = isRecord(notification)
+      ? asString(notification.turnId)
+      : undefined;
+    if (threadId === undefined && turnId === undefined) {
+      return true;
+    }
+    if (
+      threadId !== undefined &&
+      this.#threadId !== undefined &&
+      threadId !== this.#threadId
+    ) {
+      return false;
+    }
+    const expectedTurnId = this.#expectedRootTurnId();
+    if (turnId !== undefined && expectedTurnId !== undefined) {
+      return turnId === expectedTurnId;
+    }
+    return this.#isRootThreadId(threadId);
   }
 
   #isCurrentRootTurn(notification: TurnNotification): boolean {
@@ -787,7 +922,7 @@ export class CodexAppServerSession implements AgentSession {
       return false;
     }
     const turnId = notification.turn?.id;
-    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    const expectedTurnId = this.#expectedRootTurnId();
     if (turnId !== undefined && expectedTurnId !== undefined) {
       return turnId === expectedTurnId;
     }
@@ -797,7 +932,11 @@ export class CodexAppServerSession implements AgentSession {
     return this.#hasRootThreadId(notification);
   }
 
-  #isKnownNonRootThread(notification: TurnNotification): boolean {
+  #expectedRootTurnId(): string | undefined {
+    return this.#turnDone?.turnId ?? this.#activeTurnId ?? this.#filterTurnId;
+  }
+
+  #isKnownNonRootThread(notification: { threadId?: string }): boolean {
     return (
       notification.threadId !== undefined &&
       this.#threadId !== undefined &&
@@ -805,7 +944,7 @@ export class CodexAppServerSession implements AgentSession {
     );
   }
 
-  #hasRootThreadId(notification: TurnNotification): boolean {
+  #hasRootThreadId(notification: { threadId?: string }): boolean {
     return (
       notification.threadId !== undefined &&
       (this.#threadId === undefined || notification.threadId === this.#threadId)
@@ -823,9 +962,6 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     const statusType = threadStatusTypeFrom(notification.status);
-    await this.#emitLifecycleActivity(
-      `Codex app-server thread status changed: ${statusType ?? "unknown"}`,
-    );
     if (statusType === "idle") {
       this.#rootThreadIdle = true;
       this.#resolveThreadIdleWaiters();
@@ -870,8 +1006,9 @@ export class CodexAppServerSession implements AgentSession {
       return false;
     }
     this.#turnCompletedSuccessfully = false;
-    await this.#emit({ type: "status", status: "completed" });
+    this.#filterTurnId = undefined;
     this.#closeAppServer("SIGTERM");
+    await this.#emit({ type: "status", status: "completed" });
     return true;
   }
 
@@ -988,8 +1125,12 @@ export class CodexAppServerSession implements AgentSession {
     await this.#emit({ type: "error", message, code });
   }
 
-  async #emitLifecycleActivity(label: string): Promise<void> {
-    await this.#emit({ type: "activity", kind: "status", label });
+  async #emitActivity(activity: CodexActivitySummary): Promise<void> {
+    await this.#emit({
+      type: "activity",
+      kind: activity.kind,
+      label: compactActivityLabel(activity.label),
+    });
   }
 
   async #emit(event: AgentRuntimeEvent): Promise<boolean> {
@@ -1125,6 +1266,205 @@ function runtimeTurnParams(
   };
 }
 
+function notificationActivityFor(
+  method: string,
+  params: unknown,
+): CodexActivitySummary | undefined {
+  if (
+    method === "warning" ||
+    method === "configWarning" ||
+    method === "guardianWarning"
+  ) {
+    return {
+      kind: "system",
+      label: `Codex warning: ${warningMessageFrom(params) ?? "Check Codex configuration"}`,
+    };
+  }
+  if (method === "model/rerouted") {
+    const toModel = isRecord(params) ? asString(params.toModel) : undefined;
+    return {
+      kind: "system",
+      label: toModel ? `Model rerouted to ${toModel}` : "Model rerouted",
+    };
+  }
+  return undefined;
+}
+
+function startedItemActivity(item: unknown): CodexActivitySummary | undefined {
+  if (!isRecord(item)) {
+    return undefined;
+  }
+  switch (item.type) {
+    case "commandExecution":
+      return {
+        kind: "tool",
+        label: `${commandStartVerb(item)} ${commandActivityObject(item)}`,
+      };
+    case "fileChange":
+      return {
+        kind: "tool",
+        label: fileChangeActivityLabel("Proposed edits to", item),
+      };
+    case "mcpToolCall":
+    case "dynamicToolCall":
+      return { kind: "tool", label: `Using ${toolActivityObject(item)}` };
+    case "webSearch":
+      return { kind: "tool", label: "Searching web" };
+    case "imageGeneration":
+      return { kind: "tool", label: "Generating image" };
+    case "imageView":
+      return { kind: "tool", label: "Viewing image" };
+    case "contextCompaction":
+      return { kind: "status", label: "Compacting context" };
+    case "collabToolCall":
+    case "collabAgentToolCall":
+      return { kind: "status", label: collabActivityLabel(item) };
+    default:
+      return undefined;
+  }
+}
+
+function completedItemActivity(
+  item: unknown,
+): CodexActivitySummary | undefined {
+  if (!isRecord(item) || !itemNeedsAttention(item)) {
+    return undefined;
+  }
+  const attention = attentionStatus(item);
+  switch (item.type) {
+    case "commandExecution":
+      return {
+        kind: "tool",
+        label: `Command ${attention}: ${commandActivityObject(item)}`,
+      };
+    case "fileChange":
+      return {
+        kind: "tool",
+        label: fileChangeActivityLabel(`File edit ${attention}`, item),
+      };
+    case "mcpToolCall":
+    case "dynamicToolCall":
+      return {
+        kind: "tool",
+        label: `Tool ${attention}: ${toolActivityObject(item)}`,
+      };
+    case "webSearch":
+      return { kind: "tool", label: `Web search ${attention}` };
+    case "imageGeneration":
+      return { kind: "tool", label: `Image generation ${attention}` };
+    case "imageView":
+      return { kind: "tool", label: `Image view ${attention}` };
+    case "contextCompaction":
+      return { kind: "status", label: `Context compaction ${attention}` };
+    case "collabToolCall":
+    case "collabAgentToolCall":
+      return { kind: "status", label: `Agent coordination ${attention}` };
+    default:
+      return undefined;
+  }
+}
+
+function commandStartVerb(item: Record<string, unknown>): string {
+  const status = asString(item.status);
+  return status === "running" ? "Running" : "Command";
+}
+
+function itemNeedsAttention(item: Record<string, unknown>): boolean {
+  const status = asString(item.status);
+  return (
+    status === "failed" ||
+    status === "declined" ||
+    status === "error" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    item.success === false ||
+    (item.error !== undefined && item.error !== null)
+  );
+}
+
+function attentionStatus(item: Record<string, unknown>): string {
+  const status = asString(item.status);
+  if (status === "declined") {
+    return "declined";
+  }
+  if (status === "cancelled" || status === "canceled") {
+    return "cancelled";
+  }
+  return "failed";
+}
+
+function commandActivityObject(item: Record<string, unknown>): string {
+  return compactActivityObject(asString(item.command) ?? "command");
+}
+
+function fileChangeActivityLabel(
+  prefix: string,
+  item: Record<string, unknown>,
+): string {
+  const count = Array.isArray(item.changes) ? item.changes.length : 0;
+  if (count <= 0) {
+    return `${prefix} files`;
+  }
+  return `${prefix} ${count} ${count === 1 ? "file" : "files"}`;
+}
+
+function toolActivityObject(item: Record<string, unknown>): string {
+  const server = asString(item.server);
+  const namespace = asString(item.namespace);
+  const tool = asString(item.tool);
+  const parts = [server ?? namespace, tool].filter(
+    (part): part is string => Boolean(part),
+  );
+  return compactActivityObject(parts.join(" ") || "tool");
+}
+
+function collabActivityLabel(item: Record<string, unknown>): string {
+  const tool = asString(item.tool);
+  if (tool === "wait") {
+    return "Waiting for agent";
+  }
+  if (tool === "spawn" || tool === "spawn_agent") {
+    return "Starting agent";
+  }
+  return "Coordinating agents";
+}
+
+function warningMessageFrom(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const message = asString(value.message);
+  if (message) {
+    return message;
+  }
+  const summary = asString(value.summary);
+  if (summary) {
+    return summary;
+  }
+  if (isRecord(value.error)) {
+    return asString(value.error.message);
+  }
+  return undefined;
+}
+
+function compactActivityObject(value: string): string {
+  return compactActivityLabel(value, MAX_ACTIVITY_OBJECT_LENGTH);
+}
+
+function compactActivityLabel(
+  value: string,
+  maxLength = MAX_ACTIVITY_LABEL_LENGTH,
+): string {
+  const compacted = value.replace(/\s+/g, " ").trim();
+  if (compacted.length === 0) {
+    return "Codex activity";
+  }
+  if (compacted.length <= maxLength) {
+    return compacted;
+  }
+  return `${compacted.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 function threadIdFrom(value: unknown): string | undefined {
   if (!isRecord(value) || !isRecord(value.thread)) {
     return undefined;
@@ -1170,18 +1510,6 @@ function threadStatusMessageFrom(value: unknown): string | undefined {
     return asString(value.error.message);
   }
   return undefined;
-}
-
-function outputDeltaFrom(value: unknown): string | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return (
-    asString(value.delta) ??
-    asString(value.output) ??
-    asString(value.text) ??
-    undefined
-  );
 }
 
 function toolUserInputSummary(params: ToolRequestUserInputParams): string {
