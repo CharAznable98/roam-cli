@@ -498,8 +498,17 @@ describe("CodexAppServerSession", () => {
       turnId: "turn-1",
       item: {
         id: "agent-1",
-        type: "collabAgentToolCall",
+        type: "collabToolCall",
         tool: "wait",
+      },
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "agent-2",
+        type: "collabAgentToolCall",
+        tool: "spawn_agent",
       },
     });
     await settle();
@@ -514,7 +523,64 @@ describe("CodexAppServerSession", () => {
         { kind: "tool", label: "Generating image" },
         { kind: "status", label: "Compacting context" },
         { kind: "status", label: "Waiting for agent" },
+        { kind: "status", label: "Starting agent" },
       ]);
+  });
+
+  it("filters item activity to the current root turn", async () => {
+    const { child, events } = await launchSession();
+
+    child.notify("item/started", {
+      threadId: "child-thread",
+      turnId: "turn-1",
+      item: {
+        id: "child-thread-command",
+        type: "commandExecution",
+        command: "pnpm child-thread",
+      },
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "child-turn",
+      item: {
+        id: "child-turn-command",
+        type: "commandExecution",
+        command: "pnpm child-turn",
+      },
+    });
+    child.notify("item/completed", {
+      threadId: "child-thread",
+      turnId: "turn-1",
+      item: {
+        id: "child-thread-failed",
+        type: "commandExecution",
+        command: "pnpm child-thread",
+        status: "failed",
+      },
+    });
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "child-turn",
+      item: {
+        id: "child-turn-failed",
+        type: "commandExecution",
+        command: "pnpm child-turn",
+        status: "failed",
+      },
+    });
+    child.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "root-command",
+        type: "commandExecution",
+        command: "pnpm root",
+      },
+    });
+    await settle();
+
+    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
+      .toEqual([{ kind: "tool", label: "Running pnpm root" }]);
   });
 
   it("emits completed item activity only for attention states", async () => {
@@ -561,6 +627,16 @@ describe("CodexAppServerSession", () => {
         success: false,
       },
     });
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "agent-failed",
+        type: "collabToolCall",
+        tool: "wait",
+        status: "failed",
+      },
+    });
     await settle();
 
     expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
@@ -568,6 +644,7 @@ describe("CodexAppServerSession", () => {
         { kind: "tool", label: "Command failed: pnpm test" },
         { kind: "tool", label: "File edit declined 1 file" },
         { kind: "tool", label: "Tool failed: images generate" },
+        { kind: "status", label: "Agent coordination failed" },
       ]);
   });
 

@@ -704,6 +704,9 @@ export class CodexAppServerSession implements AgentSession {
     if (item.type === "commandExecution") {
       this.#commandExecutionItems.set(item.id, item);
     }
+    if (!this.#isCurrentRootItemEvent(notification)) {
+      return;
+    }
     if (this.#activityStartedItems.has(item.id)) {
       return;
     }
@@ -718,9 +721,11 @@ export class CodexAppServerSession implements AgentSession {
     notification: ItemCompletedNotification,
   ): Promise<void> {
     const item = notification.item;
-    const activity = completedItemActivity(item);
-    if (activity) {
-      await this.#emitActivity(activity);
+    if (this.#isCurrentRootItemEvent(notification)) {
+      const activity = completedItemActivity(item);
+      if (activity) {
+        await this.#emitActivity(activity);
+      }
     }
     if (item?.type !== "agentMessage" || !item.text) {
       return;
@@ -805,6 +810,39 @@ export class CodexAppServerSession implements AgentSession {
     this.#sendPendingInterrupt();
   }
 
+  #isCurrentRootItemEvent(
+    notification: unknown,
+  ): boolean {
+    const threadId = isRecord(notification)
+      ? asString(notification.threadId)
+      : undefined;
+    const turnId = isRecord(notification)
+      ? asString(notification.turnId)
+      : undefined;
+    if (
+      threadId !== undefined &&
+      this.#threadId !== undefined &&
+      threadId !== this.#threadId
+    ) {
+      return false;
+    }
+    const expectedTurnId = this.#turnDone?.turnId ?? this.#activeTurnId;
+    if (turnId !== undefined && expectedTurnId !== undefined) {
+      return turnId === expectedTurnId;
+    }
+    if (turnId === undefined && expectedTurnId !== undefined) {
+      return this.#isRootThreadId(threadId);
+    }
+    return this.#isRootThreadId(threadId);
+  }
+
+  #isRootThreadId(threadId: string | undefined): boolean {
+    return (
+      threadId !== undefined &&
+      (this.#threadId === undefined || threadId === this.#threadId)
+    );
+  }
+
   #isCurrentRootTurn(notification: TurnNotification): boolean {
     if (this.#isKnownNonRootThread(notification)) {
       return false;
@@ -820,7 +858,7 @@ export class CodexAppServerSession implements AgentSession {
     return this.#hasRootThreadId(notification);
   }
 
-  #isKnownNonRootThread(notification: TurnNotification): boolean {
+  #isKnownNonRootThread(notification: { threadId?: string }): boolean {
     return (
       notification.threadId !== undefined &&
       this.#threadId !== undefined &&
@@ -828,7 +866,7 @@ export class CodexAppServerSession implements AgentSession {
     );
   }
 
-  #hasRootThreadId(notification: TurnNotification): boolean {
+  #hasRootThreadId(notification: { threadId?: string }): boolean {
     return (
       notification.threadId !== undefined &&
       (this.#threadId === undefined || notification.threadId === this.#threadId)
@@ -1191,6 +1229,7 @@ function startedItemActivity(item: unknown): CodexActivitySummary | undefined {
       return { kind: "tool", label: "Generating image" };
     case "contextCompaction":
       return { kind: "status", label: "Compacting context" };
+    case "collabToolCall":
     case "collabAgentToolCall":
       return { kind: "status", label: collabActivityLabel(item) };
     default:
@@ -1228,6 +1267,7 @@ function completedItemActivity(
       return { kind: "tool", label: `Image generation ${attention}` };
     case "contextCompaction":
       return { kind: "status", label: `Context compaction ${attention}` };
+    case "collabToolCall":
     case "collabAgentToolCall":
       return { kind: "status", label: `Agent coordination ${attention}` };
     default:
@@ -1289,7 +1329,7 @@ function collabActivityLabel(item: Record<string, unknown>): string {
   if (tool === "wait") {
     return "Waiting for agent";
   }
-  if (tool === "spawn") {
+  if (tool === "spawn" || tool === "spawn_agent") {
     return "Starting agent";
   }
   return "Coordinating agents";
