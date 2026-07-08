@@ -10,7 +10,34 @@ English documentation is available in [README.md](README.md).
 
 适合自托管 AI 编码 Agent 工作流：Codex、Claude Code、本地 Runner、浏览器监督和远程开发控制面。
 
-**快速导航：** [快速开始](#快速开始) · [可以做什么](#可以做什么) · [工作方式](#工作方式) · [源码安装](#源码安装) · [Agent 插件](#agent-插件) · [FAQ](docs/faq.md)
+**快速导航：** [快速开始](#快速开始) · [界面截图](#界面截图) · [可以做什么](#可以做什么) · [工作方式](#工作方式) · [源码安装](#源码安装) · [Agent 插件](#agent-插件) · [FAQ](docs/faq.md)
+
+## 界面截图
+
+以下截图来自本地 demo workspace，包含已连接的 Runner、活跃 Session、文件浏览和 Git 变更。
+
+### 桌面端
+
+![桌面端工作台总览](docs/assets/screenshots/desktop-overview.png)
+
+桌面工作台同时展示 Runner、Project、Session、Chat 和工作区工具。
+
+![桌面端文件浏览和编辑](docs/assets/screenshots/desktop-files.png)
+
+Files 视图展示项目文件树、Markdown 预览和编辑操作。
+
+![桌面端 Git 变更](docs/assets/screenshots/desktop-git.png)
+
+Git 视图展示项目上下文、变更文件和内联 diff。
+
+### 移动端
+
+<p>
+  <img src="docs/assets/screenshots/mobile-chat.png" alt="移动端 Chat 视图" width="260">
+  <img src="docs/assets/screenshots/mobile-files.png" alt="移动端 Files 视图" width="260">
+</p>
+
+移动端 Chat 和 Files 视图通过底部 Tab 切换。
 
 ## 可以做什么
 
