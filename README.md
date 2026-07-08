@@ -10,7 +10,34 @@ Start, supervise, and resume coding-agent sessions from a browser while keeping 
 
 Built for self-hosted AI coding agent workflows: Codex, Claude Code, local runners, browser supervision, and remote development control planes.
 
-**Quick links:** [Quick start](#quick-start) · [What you can do](#what-you-can-do) · [How it works](#how-it-works) · [Install from source](#install-from-source) · [Agent plugins](#agent-plugins) · [FAQ](docs/faq.md)
+**Quick links:** [Quick start](#quick-start) · [Screenshots](#screenshots) · [What you can do](#what-you-can-do) · [How it works](#how-it-works) · [Install from source](#install-from-source) · [Agent plugins](#agent-plugins) · [FAQ](docs/faq.md)
+
+## Screenshots
+
+Runtime views from a local demo workspace with a connected Runner, active session, file browser, and Git changes.
+
+### Desktop
+
+![Desktop workspace overview](docs/assets/screenshots/desktop-overview.png)
+
+Desktop workspace with Runner, Project, Session, chat, and workspace tools visible at once.
+
+![Desktop file browser and editor](docs/assets/screenshots/desktop-files.png)
+
+Files view with the project tree, rendered Markdown preview, and edit actions.
+
+![Desktop Git changes](docs/assets/screenshots/desktop-git.png)
+
+Git view with project context, changed files, and an inline diff.
+
+### Mobile
+
+<p>
+  <img src="docs/assets/screenshots/mobile-chat.png" alt="Mobile chat view" width="260">
+  <img src="docs/assets/screenshots/mobile-files.png" alt="Mobile files view" width="260">
+</p>
+
+Mobile chat and Files views using the bottom tab navigation.
 
 ## What You Can Do
 
