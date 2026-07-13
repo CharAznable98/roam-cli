@@ -2797,10 +2797,10 @@ describe("SessionCommandService", () => {
     },
   );
 
-  it("finalizes a terminal pending start without sending a ghost restart", async () => {
-    const hub = new ConnectionHub(store);
-    const rpc = new RunnerRpcClient(hub);
-    const service = new SessionCommandService(
+  it("keeps requiring a durable receipt after a status-only start and capability downgrade", async () => {
+    let hub = new ConnectionHub(store);
+    let rpc = new RunnerRpcClient(hub);
+    let service = new SessionCommandService(
       store,
       hub,
       new ApprovalService(store, hub),
@@ -2821,19 +2821,43 @@ describe("SessionCommandService", () => {
     ).resolves.toMatchObject({ ok: true });
     send.mockRestore();
     const [pending] = store.listPendingInputDeliveries("runner-1");
-    expect(pending).toBeDefined();
-    store.updateSessionStatus(
-      "session-1",
-      "completed",
-      new Date().toISOString(),
+    expect(pending).toMatchObject({ receiptRequired: true });
+    store.updateSessionStatus("session-1", "running", new Date().toISOString());
+
+    store.close();
+    store = new ServerStore(dataDir);
+    hub = new ConnectionHub(store);
+    rpc = new RunnerRpcClient(hub);
+    service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
     );
-    hub.markRunnerOffline("runner-1");
 
     const reconnectedMessages: RunnerCommand[] = [];
-    hub.registerRunner(durableRunner, fakeSocket(reconnectedMessages));
-    await service.reconcilePendingInputDeliveries("runner-1");
+    hub.registerRunner(runnerRegistration(), fakeSocket(reconnectedMessages));
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(reconnectedMessages).toHaveLength(1));
+    const retriedStart = reconnectedMessages[0];
+    if (retriedStart?.type !== "startSession") {
+      throw new Error("status-only durable start was not relaunched");
+    }
+    expect(retriedStart.deliveryId).toBe(pending!.deliveryId);
+    expect(store.getPendingInputDelivery(pending!.deliveryId)).toMatchObject({
+      receiptRequired: true,
+    });
+    expect(store.listMessages("session-1")).toEqual([]);
 
-    expect(reconnectedMessages).toEqual([]);
+    rpc.resolveRunnerResponse("runner-1", {
+      requestId: retriedStart.requestId!,
+      sessionId: "session-1",
+      deliveryId: pending!.deliveryId,
+      ownership: "owned",
+    });
+    await reconciliation;
+
     expect(store.getPendingInputDelivery(pending!.deliveryId)).toBeUndefined();
     expect(store.listMessages("session-1")).toEqual([
       expect.objectContaining({ content: "already executed" }),
@@ -3953,6 +3977,140 @@ describe("SessionCommandService", () => {
     expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
   });
 
+  it("backfills receipt requirements for every durable legacy start shape", async () => {
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    const durableRunner = {
+      ...durableRunnerRegistration(),
+      runnerId: "runner-durable",
+    };
+    const legacyRunner = {
+      ...runnerRegistration(),
+      runnerId: "runner-legacy",
+    };
+    store.setRunnerOnline(durableRunner, false, createdAt);
+    store.setRunnerOnline(legacyRunner, false, createdAt);
+
+    const shapes = [
+      { name: "initial", initialSessionCreate: true, persistMessage: true },
+      { name: "followup", resume: true, persistMessage: true },
+      { name: "control", resume: true, persistMessage: false },
+      { name: "promoted", persistMessage: true },
+      { name: "legacy", persistMessage: true, legacy: true },
+    ] as const;
+    for (const shape of shapes) {
+      const sessionId = `session-receipt-migration-${shape.name}`;
+      const deliveryId = `delivery-receipt-migration-${shape.name}`;
+      const runnerId = shape.legacy ? legacyRunner.runnerId : durableRunner.runnerId;
+      const projectId = `project-receipt-migration-${shape.name}`;
+      store.createProject({
+        ...projectRecord(),
+        id: projectId,
+        runnerId,
+      });
+      const session = store.createSession({
+        ...sessionRecord(),
+        id: sessionId,
+        projectId,
+        runnerId,
+        status: "pending",
+        ...(shape.resume ? { agentThreadId: `thread-${shape.name}` } : {}),
+        createdAt,
+        updatedAt: createdAt,
+      });
+      store.putPendingInputDelivery({
+        deliveryId,
+        kind: "start",
+        runnerId,
+        sessionId,
+        message: {
+          ...pendingUserMessage(deliveryId, `legacy ${shape.name}`, createdAt),
+          sessionId,
+        },
+        attachments: [],
+        startCommand: {
+          type: "startSession",
+          requestId: `request-${shape.name}`,
+          deliveryId,
+          session,
+          prompt: `legacy ${shape.name}`,
+          attachments: [],
+          ...(shape.resume ? { resumeThreadId: `thread-${shape.name}` } : {}),
+        },
+        ...(shape.persistMessage ? {} : { persistMessage: false }),
+        ...(shape.initialSessionCreate ? { initialSessionCreate: true } : {}),
+        createdAt,
+      });
+    }
+
+    const dbPath = store.dbPath;
+    store.close();
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      DELETE FROM schema_migrations
+      WHERE key = 'backfill_pending_start_receipt_required_v1';
+      ALTER TABLE pending_input_deliveries DROP COLUMN receipt_required;
+    `);
+    legacyDb.close();
+    store = new ServerStore(dataDir);
+
+    for (const shape of shapes) {
+      const pending = store.getPendingInputDelivery(
+        `delivery-receipt-migration-${shape.name}`,
+      );
+      expect(pending?.receiptRequired).toBe(shape.legacy ? undefined : true);
+    }
+
+    const retainedName = "initial";
+    for (const shape of shapes) {
+      if (shape.name !== retainedName) {
+        store.deletePendingInputDelivery(
+          `delivery-receipt-migration-${shape.name}`,
+        );
+      }
+    }
+    const sessionId = `session-receipt-migration-${retainedName}`;
+    const deliveryId = `delivery-receipt-migration-${retainedName}`;
+    store.updateSessionStatus(sessionId, "running", new Date().toISOString());
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(
+      { ...runnerRegistration(), runnerId: durableRunner.runnerId },
+      fakeSocket(runnerMessages),
+    );
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const reconciliation = service.reconcilePendingInputDeliveries(
+      durableRunner.runnerId,
+    );
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const retry = runnerMessages[0];
+    if (retry?.type !== "startSession") {
+      throw new Error("migrated durable start was not retried");
+    }
+    expect(retry.deliveryId).toBe(deliveryId);
+    expect(store.listMessages(sessionId)).toEqual([]);
+    expect(store.getPendingInputDelivery(deliveryId)?.receiptRequired).toBe(
+      true,
+    );
+    rpc.resolveRunnerResponse(durableRunner.runnerId, {
+      requestId: retry.requestId!,
+      sessionId,
+      deliveryId,
+      ownership: "owned",
+    });
+    await reconciliation;
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages(sessionId)).toEqual([
+      expect.objectContaining({ content: "legacy initial" }),
+    ]);
+  });
+
   it("backfills legacy initial starts without misclassifying historical follow-ups", () => {
     const createdAt = "2026-06-05T00:00:00.000Z";
     const addLegacyInitial = (
@@ -4062,6 +4220,7 @@ describe("SessionCommandService", () => {
       DELETE FROM schema_migrations
       WHERE key = 'backfill_initial_session_create_v1';
       ALTER TABLE pending_input_deliveries DROP COLUMN initial_session_create;
+      ALTER TABLE pending_input_deliveries DROP COLUMN receipt_required;
     `);
     legacyDb.close();
     store = new ServerStore(dataDir);
@@ -4086,6 +4245,12 @@ describe("SessionCommandService", () => {
     ).toBe(true);
     expect(
       store.getPendingInputDelivery(historicalDeliveryId)?.initialSessionCreate,
+    ).toBeUndefined();
+    expect(
+      store.getPendingInputDelivery(fingerprinted.deliveryId)?.receiptRequired,
+    ).toBeUndefined();
+    expect(
+      store.getPendingInputDelivery(historicalDeliveryId)?.receiptRequired,
     ).toBeUndefined();
 
     const controlProjectId = "project-control-resume";

@@ -268,6 +268,12 @@ describe("RunnerConnection", () => {
     ).toEqual(["runnerAuthenticate"]);
 
     releaseAuthentication();
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventResume",
+        protocol: "legacy",
+      }),
+    });
     await liveSend;
     await vi.waitFor(async () => {
       expect(
@@ -307,6 +313,13 @@ describe("RunnerConnection", () => {
     await vi.waitFor(() => {
       expect(firstSocket.sent).toHaveLength(1);
     });
+    firstSocket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventResume",
+        protocol: "legacy",
+      }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     firstSocket.sendError = new Error("socket write failed");
 
     const running = connection.send({
@@ -490,6 +503,224 @@ describe("RunnerConnection", () => {
     ]);
     connection.stop();
     await expect(started).resolves.toBeInstanceOf(Error);
+  });
+
+  it("keeps ACK negotiation pending beyond 500ms and then sends envelopes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "roam-runner-slow-resume-"));
+    const cache = new EventCache(join(dir, "pending.jsonl"));
+    await cache.append({
+      type: "sessionStatus",
+      sessionId: "slow-resume",
+      status: "running",
+    });
+    const socket = new FakeSocket();
+    const connection = new RunnerConnection({
+      serverUrl: "wss://example.test/runners",
+      token: "secret",
+      registration: testRegistration(dir),
+      cache,
+      audit: new AuditLog(join(dir, "audit.jsonl")),
+      onCommand: () => undefined,
+      createSocket: () => socket,
+      minBackoffMs: 1,
+      maxBackoffMs: 1,
+      ackNegotiationTimeoutMs: 2_000,
+      ackTimeoutMs: 1_000,
+    });
+    const started = connection.start().catch((error: unknown) => error);
+    socket.emit("open");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const auth = JSON.parse(socket.sent[0]!) as {
+      eventDelivery: { streamId: string };
+    };
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 550));
+    expect(socket.readyState).toBe(1);
+    expect(eventEnvelopes(socket)).toEqual([]);
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventResume",
+        protocol: "ack_v1",
+        streamId: auth.eventDelivery.streamId,
+        ackThrough: 0,
+      }),
+    });
+
+    await vi.waitFor(() => expect(eventEnvelopes(socket)).toHaveLength(1));
+    expect(eventEnvelopes(socket)[0]).toMatchObject({
+      sequence: 1,
+      event: { sessionId: "slow-resume" },
+    });
+    connection.stop();
+    await expect(started).resolves.toBeInstanceOf(Error);
+  });
+
+  it("uses raw delivery only after an explicit legacy protocol signal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "roam-runner-explicit-legacy-"));
+    const cache = new EventCache(join(dir, "pending.jsonl"));
+    await cache.append({
+      type: "sessionStatus",
+      sessionId: "legacy",
+      status: "running",
+    });
+    const socket = new FakeSocket();
+    const connection = new RunnerConnection({
+      serverUrl: "wss://example.test/runners",
+      token: "secret",
+      registration: testRegistration(dir),
+      cache,
+      audit: new AuditLog(join(dir, "audit.jsonl")),
+      onCommand: () => undefined,
+      createSocket: () => socket,
+      minBackoffMs: 1,
+      maxBackoffMs: 1,
+      ackNegotiationTimeoutMs: 1_000,
+    });
+    const started = connection.start().catch((error: unknown) => error);
+    socket.emit("open");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventResume",
+        protocol: "legacy",
+      }),
+    });
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    expect(JSON.parse(socket.sent[1]!)).toMatchObject({
+      type: "sessionStatus",
+      sessionId: "legacy",
+    });
+    expect(eventEnvelopes(socket)).toEqual([]);
+    expect(await cache.readAll()).toEqual([]);
+    connection.stop();
+    await expect(started).resolves.toBeInstanceOf(Error);
+  });
+
+  it("reconnects after negotiation timeout and releases queued commands after resume", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "roam-runner-resume-timeout-"));
+    const firstSocket = new FakeSocket();
+    const secondSocket = new FakeSocket();
+    const sockets = [firstSocket, secondSocket];
+    const cache = new EventCache(join(dir, "pending.jsonl"));
+    await cache.append({
+      type: "sessionStatus",
+      sessionId: "queued-across-negotiation-timeout",
+      status: "running",
+    });
+    const handled: string[] = [];
+    let markFirstAuthenticated!: () => void;
+    const firstAuthenticated = new Promise<void>((resolve) => {
+      markFirstAuthenticated = resolve;
+    });
+    let markSecondAuthenticated!: (streamId: string) => void;
+    const secondAuthenticated = new Promise<string>((resolve) => {
+      markSecondAuthenticated = resolve;
+    });
+    let markEnvelopeSent!: () => void;
+    const envelopeSent = new Promise<void>((resolve) => {
+      markEnvelopeSent = resolve;
+    });
+    let markCommandHandled!: () => void;
+    const commandHandled = new Promise<void>((resolve) => {
+      markCommandHandled = resolve;
+    });
+    firstSocket.sendHook = (data) => {
+      const frame = JSON.parse(data) as { type?: string };
+      if (frame.type === "runnerAuthenticate") {
+        markFirstAuthenticated();
+      }
+    };
+    secondSocket.sendHook = (data) => {
+      const frame = JSON.parse(data) as {
+        type?: string;
+        eventDelivery?: { streamId: string };
+      };
+      if (frame.type === "runnerAuthenticate" && frame.eventDelivery) {
+        const { streamId } = frame.eventDelivery;
+        markSecondAuthenticated(streamId);
+        queueMicrotask(() => {
+          secondSocket.emit("message", {
+            data: JSON.stringify({
+              type: "runnerEventResume",
+              protocol: "ack_v1",
+              streamId,
+              ackThrough: 0,
+            }),
+          });
+        });
+      } else if (frame.type === "runnerEvent") {
+        markEnvelopeSent();
+      }
+    };
+
+    vi.useFakeTimers();
+    let connection: RunnerConnection | undefined;
+    let started: Promise<unknown> | undefined;
+    try {
+      connection = new RunnerConnection({
+        serverUrl: "wss://example.test/runners",
+        token: "secret",
+        registration: testRegistration(dir),
+        cache,
+        audit: new AuditLog(join(dir, "audit.jsonl")),
+        onCommand: (command) => {
+          handled.push(command.type);
+          markCommandHandled();
+        },
+        createSocket: () => {
+          const socket = sockets.shift() ?? new FakeSocket();
+          if (socket === secondSocket) {
+            queueMicrotask(() => socket.emit("open"));
+          }
+          return socket;
+        },
+        minBackoffMs: 1,
+        maxBackoffMs: 1,
+        ackNegotiationTimeoutMs: 25,
+        ackTimeoutMs: 1_000,
+      });
+      started = connection.start().catch((error: unknown) => error);
+      firstSocket.emit("open");
+      await firstAuthenticated;
+
+      // Drive only the first negotiation past its deadline. Advancing the
+      // reconnect backoff then creates the second socket; its send hook emits
+      // resume as a microtask before any further fake time can elapse.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(firstSocket.readyState).toBe(3);
+      expect(handled).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      const streamId = await secondAuthenticated;
+      await envelopeSent;
+
+      secondSocket.emit("message", {
+        data: JSON.stringify({
+          type: "deliverInput",
+          sessionId: "s1",
+          content: "after reconnect",
+        }),
+      });
+      await Promise.resolve();
+      expect(handled).toEqual([]);
+      secondSocket.emit("message", {
+        data: JSON.stringify({
+          type: "runnerEventAck",
+          protocol: "ack_v1",
+          streamId,
+          ackThrough: 1,
+        }),
+      });
+      await commandHandled;
+      expect(handled).toEqual(["deliverInput"]);
+      connection.stop();
+      await expect(started).resolves.toBeInstanceOf(Error);
+    } finally {
+      connection?.stop();
+      await started;
+      vi.useRealTimers();
+    }
   });
 
   it("waits for a handshake send to persist and receive its ACK before running commands", async () => {

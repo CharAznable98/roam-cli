@@ -27,7 +27,10 @@ import type {
   SessionStatus,
   SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
-import { AgentRuntimeConfigSchema } from "@roamcli/shared/protocol";
+import {
+  AgentRuntimeConfigSchema,
+  RunnerRegistrationSchema,
+} from "@roamcli/shared/protocol";
 
 interface ProjectRow {
   id: string;
@@ -131,6 +134,7 @@ interface PendingInputDeliveryRow {
   start_command_json: string | null;
   persist_message: number;
   initial_session_create: number;
+  receipt_required: number;
   attempt_count: number;
   last_attempt_at: string | null;
   last_error: string | null;
@@ -252,6 +256,7 @@ export interface PendingInputDelivery {
   startCommand?: Extract<RunnerCommand, { type: "startSession" }>;
   persistMessage?: boolean;
   initialSessionCreate?: boolean;
+  receiptRequired?: boolean;
   attemptCount: number;
   lastAttemptAt?: string;
   lastError?: string;
@@ -1071,9 +1076,9 @@ export class ServerStore {
       .prepare(
         `INSERT INTO pending_input_deliveries
            (delivery_id, kind, runner_id, session_id, input_request_id, message_json,
-            attachments_json, start_command_json, persist_message, initial_session_create, attempt_count,
+            attachments_json, start_command_json, persist_message, initial_session_create, receipt_required, attempt_count,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
          ON CONFLICT(delivery_id) DO NOTHING`,
       )
       .run(
@@ -1087,6 +1092,7 @@ export class ServerStore {
         delivery.startCommand ? JSON.stringify(delivery.startCommand) : null,
         delivery.persistMessage === false ? 0 : 1,
         delivery.initialSessionCreate ? 1 : 0,
+        delivery.receiptRequired ? 1 : 0,
         delivery.createdAt,
         delivery.createdAt,
       );
@@ -1132,6 +1138,7 @@ export class ServerStore {
   promotePendingInputDeliveryToStart(
     deliveryId: string,
     startCommand: Extract<RunnerCommand, { type: "startSession" }>,
+    receiptRequired: boolean,
     restartedAt: string,
   ): { delivery: PendingInputDelivery; session: Session } {
     this.db.exec("BEGIN IMMEDIATE");
@@ -1144,11 +1151,17 @@ export class ServerStore {
         .prepare(
           `UPDATE pending_input_deliveries
            SET kind = 'start', input_request_id = NULL, start_command_json = ?,
+               receipt_required = ?,
                attempt_count = 0, last_attempt_at = NULL, last_error = NULL,
                updated_at = ?
            WHERE delivery_id = ? AND kind = 'input'`,
         )
-        .run(JSON.stringify(startCommand), restartedAt, deliveryId);
+        .run(
+          JSON.stringify(startCommand),
+          receiptRequired ? 1 : 0,
+          restartedAt,
+          deliveryId,
+        );
       const restarted = this.updateSessionStatus(
         pending.sessionId,
         "pending",
@@ -2111,6 +2124,7 @@ export class ServerStore {
         start_command_json TEXT,
         persist_message INTEGER NOT NULL DEFAULT 1,
         initial_session_create INTEGER NOT NULL DEFAULT 0,
+        receipt_required INTEGER NOT NULL DEFAULT 0,
         attempt_count INTEGER NOT NULL DEFAULT 0,
         last_attempt_at TEXT,
         last_error TEXT,
@@ -2256,6 +2270,7 @@ export class ServerStore {
       "persist_message",
       "INTEGER NOT NULL DEFAULT 1",
     );
+    this.migratePendingStartReceiptRequirement();
     this.migrateInitialSessionCreateMarker();
     this.addColumnIfMissing("projects", "pinned_at", "TEXT");
     this.addColumnIfMissing(
@@ -2339,6 +2354,77 @@ export class ServerStore {
         continue;
       }
       markInitial.run(row.delivery_id);
+    }
+  }
+
+  private migratePendingStartReceiptRequirement(): void {
+    const migrationKey = "backfill_pending_start_receipt_required_v1";
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.addColumnIfMissing(
+        "pending_input_deliveries",
+        "receipt_required",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      const applied = this.db
+        .prepare("SELECT 1 FROM schema_migrations WHERE key = ?")
+        .get(migrationKey);
+      if (!applied) {
+        const rows = this.db
+          .prepare(
+            `SELECT pending.delivery_id, sessions.agent,
+                    sessions.runner_id, runners.registration_json
+             FROM pending_input_deliveries AS pending
+             INNER JOIN sessions ON sessions.id = pending.session_id
+             LEFT JOIN runners ON runners.runner_id = sessions.runner_id
+             WHERE pending.kind = 'start'
+               AND pending.receipt_required = 0`,
+          )
+          .all() as Array<{
+          delivery_id: string;
+          agent: AgentKind;
+          runner_id: string;
+          registration_json: string | null;
+        }>;
+        const requireReceipt = this.db.prepare(
+          `UPDATE pending_input_deliveries
+           SET receipt_required = 1
+           WHERE delivery_id = ? AND kind = 'start'`,
+        );
+        for (const row of rows) {
+          if (!row.registration_json) {
+            continue;
+          }
+          let registration: unknown;
+          try {
+            registration = JSON.parse(row.registration_json);
+          } catch {
+            continue;
+          }
+          const parsed = RunnerRegistrationSchema.safeParse(registration);
+          if (
+            !parsed.success ||
+            parsed.data.runnerId !== row.runner_id ||
+            !parsed.data.capabilities.some(
+              (capability) =>
+                capability.kind === row.agent &&
+                capability.supportsDurableSessionStart === true,
+            )
+          ) {
+            continue;
+          }
+          requireReceipt.run(row.delivery_id);
+        }
+        this.db
+          .prepare(
+            "INSERT INTO schema_migrations (key, applied_at) VALUES (?, ?)",
+          )
+          .run(migrationKey, new Date().toISOString());
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
     }
   }
 
@@ -2453,6 +2539,7 @@ function toPendingInputDelivery(
       : {}),
     ...(row.persist_message === 0 ? { persistMessage: false } : {}),
     ...(row.initial_session_create ? { initialSessionCreate: true } : {}),
+    ...(row.receipt_required ? { receiptRequired: true } : {}),
     attemptCount: row.attempt_count,
     ...(row.last_attempt_at ? { lastAttemptAt: row.last_attempt_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),

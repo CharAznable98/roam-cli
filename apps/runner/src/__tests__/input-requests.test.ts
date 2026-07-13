@@ -1,6 +1,9 @@
 import type { RunnerEvent } from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
-import { UserInputRequestTracker } from "../input-requests/tracker.js";
+import {
+  UserInputAcceptanceRetryableError,
+  UserInputRequestTracker,
+} from "../input-requests/tracker.js";
 import { SessionWaitCoordinator } from "../sessions/wait-coordinator.js";
 
 const plainQuestion = {
@@ -90,10 +93,138 @@ describe("UserInputRequestTracker", () => {
     ) {
       throw new Error("user input request was not emitted");
     }
-    expect(tracker.resolve("s1", request.inputRequestId, "Continue")).toBe(
-      true,
-    );
+    await expect(
+      tracker.resolve("s1", request.inputRequestId, "Continue"),
+    ).resolves.toBe(true);
     await expect(decision).resolves.toMatchObject({ content: "Continue" });
+  });
+
+  it("does not acknowledge an answer until it has synchronously settled the pending decision", async () => {
+    const events: RunnerEvent[] = [];
+    let releaseRunningStatus: (() => void) | undefined;
+    const runningStatusGate = new Promise<void>((resolve) => {
+      releaseRunningStatus = resolve;
+    });
+    let blockRunningStatus = false;
+    const emit = (event: RunnerEvent) => {
+      events.push(event);
+      if (
+        blockRunningStatus &&
+        event.type === "sessionStatus" &&
+        event.status === "running"
+      ) {
+        return runningStatusGate;
+      }
+    };
+    const waits = new SessionWaitCoordinator(emit);
+    const token = waits.begin("s1");
+    const tracker = new UserInputRequestTracker({ emit, waits });
+    const decision = tracker.request(
+      token,
+      { id: "s1", agent: "codex" },
+      { summary: "Need input", questions: [plainQuestion], payload: {} },
+    );
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      });
+    });
+    const request = events.find(
+      (
+        event,
+      ): event is Extract<RunnerEvent, { type: "agentActivity" }> & {
+        inputRequestId: string;
+      } => event.type === "agentActivity" && event.inputRequestId !== undefined,
+    );
+    if (request === undefined) {
+      throw new Error("user input request was not emitted");
+    }
+
+    let delivered = 0;
+    void decision.then(() => {
+      delivered += 1;
+    });
+    blockRunningStatus = true;
+    const acceptance = tracker.resolve(
+      "s1",
+      request.inputRequestId,
+      "Continue",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(delivered).toBe(0);
+    await expect(
+      tracker.resolve("s1", request.inputRequestId, "Duplicate"),
+    ).resolves.toBe(false);
+    expect(delivered).toBe(0);
+
+    releaseRunningStatus?.();
+    await expect(acceptance).resolves.toBe(true);
+    await expect(decision).resolves.toMatchObject({ content: "Continue" });
+    expect(delivered).toBe(1);
+    await expect(
+      tracker.resolve("s1", request.inputRequestId, "Late duplicate"),
+    ).resolves.toBe(false);
+  });
+
+  it("keeps the pending answer retryable when status synchronization fails", async () => {
+    const events: RunnerEvent[] = [];
+    let failNextRunningStatus = true;
+    const emit = (event: RunnerEvent) => {
+      events.push(event);
+      if (
+        failNextRunningStatus &&
+        event.type === "sessionStatus" &&
+        event.status === "running"
+      ) {
+        failNextRunningStatus = false;
+        throw new Error("status sink failed");
+      }
+    };
+    const waits = new SessionWaitCoordinator(emit);
+    const token = waits.begin("s1");
+    const tracker = new UserInputRequestTracker({ emit, waits });
+    const decision = tracker.request(
+      token,
+      { id: "s1", agent: "codex" },
+      { summary: "Need input", questions: [plainQuestion], payload: {} },
+    );
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      });
+    });
+    const request = events.find(
+      (
+        event,
+      ): event is Extract<RunnerEvent, { type: "agentActivity" }> & {
+        inputRequestId: string;
+      } => event.type === "agentActivity" && event.inputRequestId !== undefined,
+    );
+    if (request === undefined) {
+      throw new Error("user input request was not emitted");
+    }
+
+    let delivered = 0;
+    void decision.then(() => {
+      delivered += 1;
+    });
+    await expect(
+      tracker.resolve("s1", request.inputRequestId, "First attempt"),
+    ).rejects.toBeInstanceOf(UserInputAcceptanceRetryableError);
+    await Promise.resolve();
+    expect(delivered).toBe(0);
+
+    await expect(
+      tracker.resolve("s1", request.inputRequestId, "Retry"),
+    ).resolves.toBe(true);
+    await expect(decision).resolves.toMatchObject({ content: "Retry" });
+    expect(delivered).toBe(1);
   });
 
   it.each(["activity", "waiting status"] as const)(
@@ -152,11 +283,13 @@ describe("UserInputRequestTracker", () => {
         staleRequest?.type === "agentActivity" &&
         staleRequest.inputRequestId !== undefined
       ) {
-        expect(
+        await expect(
           tracker.resolve("s1", staleRequest.inputRequestId, "stale"),
-        ).toBe(false);
+        ).resolves.toBe(false);
       }
-      expect(tracker.resolve("s1", undefined, "current legacy")).toBe(true);
+      await expect(
+        tracker.resolve("s1", undefined, "current legacy"),
+      ).resolves.toBe(true);
       await expect(nextDecision).resolves.toMatchObject({
         content: "current legacy",
       });
@@ -180,7 +313,9 @@ describe("UserInputRequestTracker", () => {
     await vi.waitFor(() => {
       expect(events.some((event) => event.type === "agentActivity")).toBe(true);
     });
-    expect(tracker.resolve("s1", undefined, "legacy")).toBe(true);
+    await expect(
+      tracker.resolve("s1", undefined, "legacy"),
+    ).resolves.toBe(true);
     await expect(first).resolves.toMatchObject({ content: "legacy" });
 
     events.length = 0;
@@ -192,7 +327,9 @@ describe("UserInputRequestTracker", () => {
     await vi.waitFor(() => {
       expect(events.some((event) => event.type === "agentActivity")).toBe(true);
     });
-    expect(tracker.resolve("s1", undefined, "legacy again")).toBe(true);
+    await expect(
+      tracker.resolve("s1", undefined, "legacy again"),
+    ).resolves.toBe(true);
     await expect(second).resolves.toMatchObject({ content: "legacy again" });
   });
 
@@ -234,7 +371,9 @@ describe("UserInputRequestTracker", () => {
     await expect(first).rejects.toThrow(
       "Session ended before user input was provided",
     );
-    expect(tracker.resolve("s1", undefined, "stale legacy")).toBe(false);
+    await expect(
+      tracker.resolve("s1", undefined, "stale legacy"),
+    ).resolves.toBe(false);
 
     events.length = 0;
     const secondToken = waits.begin("s1");
@@ -252,10 +391,12 @@ describe("UserInputRequestTracker", () => {
         ),
       ).toBe(true);
     });
-    expect(
+    await expect(
       tracker.resolve("s1", firstRequest.inputRequestId, "stale exact"),
-    ).toBe(false);
-    expect(tracker.resolve("s1", undefined, "current legacy")).toBe(true);
+    ).resolves.toBe(false);
+    await expect(
+      tracker.resolve("s1", undefined, "current legacy"),
+    ).resolves.toBe(true);
     await expect(second).resolves.toMatchObject({ content: "current legacy" });
   });
 });

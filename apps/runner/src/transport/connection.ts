@@ -88,6 +88,7 @@ export class RunnerConnection {
   #fatalError?: Error;
   #mode: DeliveryMode | undefined;
   #negotiation?: NegotiationState;
+  #legacySignalSocket: WebSocketLike | undefined;
   #ackWaiter: AckWaiter | undefined;
   #commandReady = createCommandReadySignal();
   #messageTail: Promise<void> = Promise.resolve();
@@ -103,7 +104,7 @@ export class RunnerConnection {
       createSocket: options.createSocket ?? createGlobalWebSocket,
       minBackoffMs: options.minBackoffMs ?? 500,
       maxBackoffMs: options.maxBackoffMs ?? 30_000,
-      ackNegotiationTimeoutMs: options.ackNegotiationTimeoutMs ?? 500,
+      ackNegotiationTimeoutMs: options.ackNegotiationTimeoutMs ?? 10_000,
       ackTimeoutMs: options.ackTimeoutMs ?? 5_000,
     };
   }
@@ -153,6 +154,7 @@ export class RunnerConnection {
     const socket = this.#options.createSocket(this.#options.serverUrl);
     this.#socket = socket;
     this.#mode = undefined;
+    this.#legacySignalSocket = undefined;
     this.#connected = false;
     this.#resetCommandReadySignal();
 
@@ -285,7 +287,16 @@ export class RunnerConnection {
       return;
     }
 
-    this.#downgradeNegotiation(socket);
+    if (isLegacyDeliverySignal(parsed)) {
+      this.#downgradeNegotiation(socket);
+      return;
+    }
+    // An ACK-capable server always sends runnerEventResume before dispatching
+    // commands. A valid command arriving first is therefore an unambiguous
+    // legacy-capability signal, rather than a timing-based guess.
+    if (RunnerCommandSchema.safeParse(parsed).success) {
+      this.#downgradeNegotiation(socket);
+    }
     void this.#enqueueMessage(parsed).catch(
       (error: unknown) => void this.sendError(error),
     );
@@ -533,13 +544,12 @@ export class RunnerConnection {
       settled: false,
       resumeObserved: false,
       timer: setTimeout(() => {
-        if (
-          !negotiation.settled &&
-          !negotiation.resumeObserved &&
-          this.#socket === socket
-        ) {
+        if (!negotiation.settled && this.#socket === socket) {
           negotiation.settled = true;
-          negotiation.resolve("legacy");
+          negotiation.reject(
+            new Error("Timed out negotiating runner event delivery"),
+          );
+          this.#failSocket(socket);
         }
       }, this.#options.ackNegotiationTimeoutMs),
       resolve: resolvePromise,
@@ -547,14 +557,21 @@ export class RunnerConnection {
       promise,
     };
     this.#negotiation = negotiation;
+    if (this.#legacySignalSocket === socket) {
+      this.#downgradeNegotiation(socket);
+    }
     return negotiation;
   }
 
   #downgradeNegotiation(socket: WebSocketLike): void {
     const negotiation = this.#negotiation;
+    if (negotiation === undefined || negotiation.socket !== socket) {
+      if (this.#socket === socket) {
+        this.#legacySignalSocket = socket;
+      }
+      return;
+    }
     if (
-      negotiation === undefined ||
-      negotiation.socket !== socket ||
       negotiation.settled ||
       negotiation.resumeObserved
     ) {
@@ -626,7 +643,7 @@ export class RunnerConnection {
     ) {
       negotiation.settled = true;
       clearTimeout(negotiation.timer);
-      negotiation.resolve("legacy");
+      negotiation.reject(error);
     }
     const waiter = this.#ackWaiter;
     if (waiter?.socket === socket) {
@@ -759,6 +776,17 @@ function isServerErrorFrame(value: unknown): value is { type: "error" } {
     typeof value === "object" &&
     "type" in value &&
     value.type === "error"
+  );
+}
+
+function isLegacyDeliverySignal(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "type" in value &&
+    value.type === "runnerEventResume" &&
+    "protocol" in value &&
+    value.protocol === "legacy"
   );
 }
 

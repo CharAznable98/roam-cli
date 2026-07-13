@@ -24,6 +24,7 @@ import {
 } from "@roamcli/shared/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
+import { UserInputAcceptanceRetryableError } from "../input-requests/tracker.js";
 import {
   type StartDeliveryRecord,
   StartDeliveryStore,
@@ -131,8 +132,8 @@ describe("SessionManager", () => {
   it.each([
     {
       state: "launching" as const,
-      ownership: "not_owned" as const,
-      created: 0,
+      ownership: "owned" as const,
+      created: 1,
     },
     { state: "launched" as const, ownership: "owned" as const, created: 1 },
   ])(
@@ -202,6 +203,76 @@ describe("SessionManager", () => {
       });
     },
   );
+
+  it("suppresses a duplicate launching receipt from the same boot", async () => {
+    const bootId = "same-boot";
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-start-same-boot-launching-"),
+    );
+    const stateDir = join(workspace, ".runner-state");
+    const events: RunnerEvent[] = [];
+    const tracked = startCountingCodexAgent();
+    const firstManager = new SessionManager({
+      workspace,
+      stateDir,
+      profile: "standard",
+      agents: [tracked.agent],
+      startDeliveryBootId: bootId,
+      emit: (event) => {
+        events.push(event);
+      },
+    });
+    const command = {
+      type: "startSession" as const,
+      requestId: "request-same-boot",
+      deliveryId: "delivery-same-boot",
+      session: makeSession(workspace),
+      prompt: "start once",
+      attachments: [],
+    };
+    await firstManager.handle(command);
+
+    const receiptPath = join(stateDir, "start-delivery-receipts.json");
+    let completedReceipt: StartDeliveryRecord | undefined;
+    await vi.waitFor(async () => {
+      const document = JSON.parse(await readFile(receiptPath, "utf8")) as {
+        receipts: StartDeliveryRecord[];
+      };
+      expect(document.receipts[0]?.state).toBe("completed");
+      completedReceipt = document.receipts[0];
+    });
+    await new StartDeliveryStore(stateDir).put({
+      ...completedReceipt!,
+      state: "launching",
+    });
+
+    const retryEvents: RunnerEvent[] = [];
+    const sameBootManager = new SessionManager({
+      workspace,
+      stateDir,
+      profile: "standard",
+      agents: [tracked.agent],
+      startDeliveryBootId: bootId,
+      emit: (event) => {
+        retryEvents.push(event);
+      },
+    });
+    await sameBootManager.handle({
+      ...command,
+      requestId: "request-same-boot-retry",
+    });
+
+    expect(tracked.created()).toBe(1);
+    expect(retryEvents).toContainEqual({
+      type: "sessionStartResult",
+      result: {
+        requestId: "request-same-boot-retry",
+        sessionId: "s1",
+        deliveryId: "delivery-same-boot",
+        ownership: "not_owned",
+      },
+    });
+  });
 
   it("launches an accepted intent only after the server explicitly retries it", async () => {
     const workspace = await mkdtemp(
@@ -1867,6 +1938,202 @@ describe("SessionManager", () => {
         },
       },
     });
+  });
+
+  it("emits an owned input-request receipt only after delivering the answer", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-input-receipt-order-"),
+    );
+    const events: RunnerEvent[] = [];
+    let releaseRunningStatus: (() => void) | undefined;
+    const runningStatusGate = new Promise<void>((resolve) => {
+      releaseRunningStatus = resolve;
+    });
+    let blockAnswerStatus = false;
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [userInputCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+        if (
+          blockAnswerStatus &&
+          event.type === "sessionStatus" &&
+          event.status === "running"
+        ) {
+          return runningStatusGate;
+        }
+      },
+    });
+
+    const started = manager.start(makeSession(workspace), "wait");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      });
+    });
+    const request = events.find(
+      (
+        event,
+      ): event is Extract<RunnerEvent, { type: "agentActivity" }> & {
+        inputRequestId: string;
+      } => event.type === "agentActivity" && event.inputRequestId !== undefined,
+    );
+    if (request === undefined) {
+      throw new Error("user input request was not emitted");
+    }
+
+    blockAnswerStatus = true;
+    const handled = manager.handle({
+      type: "checkSessionStatus",
+      requestId: "ordered-input-receipt",
+      sessionId: "s1",
+      deliverInput: {
+        deliveryId: "ordered-input-delivery",
+        inputRequestId: request.inputRequestId,
+        content: "continue",
+      },
+    });
+    await vi.waitFor(() => {
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "sessionStatus" && event.status === "running",
+        ),
+      ).toHaveLength(2);
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "sessionStatusCheckResult" &&
+          event.result.requestId === "ordered-input-receipt",
+      ),
+    ).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "agentActivity" && event.label === "answered: continue",
+      ),
+    ).toBe(false);
+
+    releaseRunningStatus?.();
+    await handled;
+    await started;
+
+    const answerIndex = events.findIndex(
+      (event) =>
+        event.type === "agentActivity" && event.label === "answered: continue",
+    );
+    const receiptIndex = events.findIndex(
+      (event) =>
+        event.type === "sessionStatusCheckResult" &&
+        event.result.requestId === "ordered-input-receipt" &&
+        event.result.inputReceipt?.ownership === "owned",
+    );
+    expect(answerIndex).toBeGreaterThanOrEqual(0);
+    expect(receiptIndex).toBeGreaterThan(answerIndex);
+  });
+
+  it("retries the same input delivery after status synchronization fails", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-session-input-receipt-retry-"),
+    );
+    const events: RunnerEvent[] = [];
+    let answerPhase = false;
+    let failNextAnswerStatus = true;
+    const manager = new SessionManager({
+      workspace,
+      profile: "standard",
+      agents: [userInputCodexAgent()],
+      emit: (event) => {
+        events.push(event);
+        if (
+          answerPhase &&
+          failNextAnswerStatus &&
+          event.type === "sessionStatus" &&
+          event.status === "running"
+        ) {
+          failNextAnswerStatus = false;
+          throw new Error("status sink failed");
+        }
+      },
+    });
+
+    const started = manager.start(makeSession(workspace), "wait");
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      });
+    });
+    const request = events.find(
+      (
+        event,
+      ): event is Extract<RunnerEvent, { type: "agentActivity" }> & {
+        inputRequestId: string;
+      } => event.type === "agentActivity" && event.inputRequestId !== undefined,
+    );
+    if (request === undefined) {
+      throw new Error("user input request was not emitted");
+    }
+    const command = {
+      type: "checkSessionStatus" as const,
+      sessionId: "s1",
+      deliverInput: {
+        deliveryId: "retryable-input-delivery",
+        inputRequestId: request.inputRequestId,
+        content: "continue once",
+      },
+    };
+
+    answerPhase = true;
+    await expect(
+      manager.handle({ ...command, requestId: "retryable-input-first" }),
+    ).rejects.toBeInstanceOf(UserInputAcceptanceRetryableError);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "sessionStatusCheckResult" &&
+          event.result.requestId === "retryable-input-first",
+      ),
+    ).toBe(false);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "agentActivity" &&
+          event.label === "answered: continue once",
+      ),
+    ).toBe(false);
+
+    await manager.handle({ ...command, requestId: "retryable-input-second" });
+    await started;
+
+    const receipts = events.filter(
+      (event) =>
+        event.type === "sessionStatusCheckResult" &&
+        event.result.inputReceipt?.deliveryId === "retryable-input-delivery",
+    );
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        result: expect.objectContaining({
+          requestId: "retryable-input-second",
+          inputReceipt: {
+            deliveryId: "retryable-input-delivery",
+            ownership: "owned",
+          },
+        }),
+      }),
+    ]);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "agentActivity" &&
+          event.label === "answered: continue once",
+      ),
+    ).toHaveLength(1);
   });
 
   it("reports an active atomic input rejection without claiming delivery", async () => {

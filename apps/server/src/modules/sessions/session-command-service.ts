@@ -685,6 +685,7 @@ export class SessionCommandService {
           message,
           attachments: storedAttachments,
           startCommand,
+          receiptRequired: this.sessionStartRequiresReceipt(session),
           createdAt: message.createdAt,
         },
         restartedAt,
@@ -882,8 +883,11 @@ export class SessionCommandService {
         return;
       }
       const session = this.store.getSession(pending.sessionId);
+      const durableStart =
+        pending.kind === "start" && pending.receiptRequired === true;
       if (
         pending.kind === "start" &&
+        !durableStart &&
         session &&
         !session.archivedAt &&
         (session.status === "running" ||
@@ -897,7 +901,11 @@ export class SessionCommandService {
         this.store.deletePendingInputDelivery(pending.deliveryId);
         continue;
       }
-      if (pending.kind === "start" && session.status !== "pending") {
+      if (
+        pending.kind === "start" &&
+        !durableStart &&
+        session.status !== "pending"
+      ) {
         this.store.deletePendingInputDelivery(pending.deliveryId);
         continue;
       }
@@ -991,7 +999,7 @@ export class SessionCommandService {
     let confirmedStartOwnership = false;
     try {
       if (pending.kind === "start") {
-        if (!this.runnerSupportsDurableSessionStart(pending)) {
+        if (!pending.receiptRequired) {
           if (
             !pending.startCommand ||
             !this.hub.sendToRunner(pending.runnerId, pending.startCommand)
@@ -1100,13 +1108,9 @@ export class SessionCommandService {
     return completed;
   }
 
-  private runnerSupportsDurableSessionStart(
-    pending: PendingInputDelivery,
-  ): boolean {
-    const session = this.store.getSession(pending.sessionId);
-    const runner = this.store.getRunner(pending.runnerId);
+  private sessionStartRequiresReceipt(session: Session): boolean {
+    const runner = this.store.getRunner(session.runnerId);
     return Boolean(
-      session &&
       runner?.capabilities.some(
         (capability) =>
           capability.kind === session.agent &&
@@ -1470,6 +1474,7 @@ export class SessionCommandService {
         attachments: storedAttachments,
         startCommand,
         initialSessionCreate: true,
+        receiptRequired: this.sessionStartRequiresReceipt(session),
         createdAt: message.createdAt,
       },
       creationRequestFingerprint,
@@ -1606,6 +1611,7 @@ export class SessionCommandService {
         attachments: [],
         startCommand,
         persistMessage: false,
+        receiptRequired: this.sessionStartRequiresReceipt(session),
         createdAt: receipt.createdAt,
       },
       restartedAt,
@@ -1648,6 +1654,7 @@ export class SessionCommandService {
     const promoted = this.store.promotePendingInputDeliveryToStart(
       pending.deliveryId,
       startCommand,
+      this.sessionStartRequiresReceipt(session),
       restartedAt,
     );
     this.hub.broadcast({ type: "session:updated", session: promoted.session });

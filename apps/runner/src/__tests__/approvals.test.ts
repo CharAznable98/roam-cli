@@ -175,7 +175,9 @@ describe("ApprovalTracker", () => {
       ),
     ).toHaveLength(0);
 
-    expect(inputs.resolve("s1", input.inputRequestId, "continue")).toBe(true);
+    await expect(
+      inputs.resolve("s1", input.inputRequestId, "continue"),
+    ).resolves.toBe(true);
     await expect(inputDecision).resolves.toMatchObject({ content: "continue" });
     expect(
       events.filter(

@@ -17,7 +17,10 @@ import type {
 } from "@roamcli/shared/protocol";
 import type { LoadedAgent } from "../agents/registry.js";
 import { ApprovalTracker } from "../approvals/tracker.js";
-import { UserInputRequestTracker } from "../input-requests/tracker.js";
+import {
+  UserInputAcceptanceRetryableError,
+  UserInputRequestTracker,
+} from "../input-requests/tracker.js";
 import { buildArtifact } from "../persistence/artifacts.js";
 import { InputDeliveryStore } from "../persistence/input-deliveries.js";
 import {
@@ -48,6 +51,8 @@ export interface SessionManagerOptions {
   agents: readonly LoadedAgent[];
   emit: RunnerEventSink;
   agentAcceptanceTimeoutMs?: number;
+  /** @internal Deterministic process identity for receipt state-machine tests. */
+  startDeliveryBootId?: string;
 }
 
 interface TerminalPublication {
@@ -90,7 +95,7 @@ export class SessionManager {
   readonly #inputDeliveryStore: InputDeliveryStore;
   readonly #startDeliveryStore: StartDeliveryStore;
   readonly #agentAcceptanceTimeoutMs: number;
-  readonly #bootId = randomUUID();
+  readonly #bootId: string;
   readonly #sessions = new Map<string, RunningSession>();
   readonly #sessionGenerations = new Map<string, SessionGeneration>();
   readonly #startingSessionIds = new Set<string>();
@@ -102,6 +107,7 @@ export class SessionManager {
 
   public constructor(options: SessionManagerOptions) {
     this.#workspace = options.workspace;
+    this.#bootId = options.startDeliveryBootId ?? randomUUID();
     const stateDir = options.stateDir ?? join(this.#workspace, ".roam-runner");
     this.#attachments = new SessionAttachmentStore(stateDir);
     this.#inputDeliveryStore = new InputDeliveryStore(stateDir);
@@ -279,7 +285,7 @@ export class SessionManager {
         this.resolveApproval(command.approvalId, command.approved);
         return;
       case "resolveUserInput":
-        this.resolveUserInput(
+        await this.resolveUserInput(
           command.sessionId,
           command.content,
           command.inputRequestId,
@@ -477,6 +483,15 @@ export class SessionManager {
         return;
       }
       if (existing.state === "launching") {
+        if (existing.bootId !== this.#bootId) {
+          // The previous process may have exited after durably recording the
+          // launch attempt but before the agent accepted the prompt. Nothing
+          // in this boot owns that attempt, so an explicit server retry may
+          // safely launch it again. Same-boot retries remain suppressed below
+          // to avoid delivering the prompt twice to an in-flight agent.
+          await this.#launchAcceptedStart(existing, command.requestId);
+          return;
+        }
         const notOwned: StartDeliveryRecord = {
           ...existing,
           state: "not_owned",
@@ -861,8 +876,9 @@ export class SessionManager {
       return concurrent.ownership;
     }
 
-    const ownership = this.#performStableInputDelivery(sessionId, input).then(
-      async (result) => {
+    let ownership: Promise<"owned" | "not_owned">;
+    ownership = this.#performStableInputDelivery(sessionId, input)
+      .then(async (result) => {
         await this.#inputDeliveryStore.put({
           deliveryId: input.deliveryId,
           sessionId,
@@ -873,8 +889,16 @@ export class SessionManager {
           ownership: result,
         });
         return result;
-      },
-    );
+      })
+      .catch((error: unknown) => {
+        if (error instanceof UserInputAcceptanceRetryableError) {
+          const current = this.#stableInputDeliveries.get(input.deliveryId);
+          if (current?.ownership === ownership) {
+            this.#stableInputDeliveries.delete(input.deliveryId);
+          }
+        }
+        throw error;
+      });
     this.#stableInputDeliveries.set(input.deliveryId, {
       sessionId,
       ...(input.inputRequestId === undefined
@@ -900,11 +924,11 @@ export class SessionManager {
     input: { deliveryId: string; inputRequestId?: string; content: string },
   ): Promise<"owned" | "not_owned"> {
     if (input.inputRequestId !== undefined) {
-      return this.#userInputs.resolve(
+      return (await this.#userInputs.resolve(
         sessionId,
         input.inputRequestId,
         input.content,
-      )
+      ))
         ? "owned"
         : "not_owned";
     }
@@ -1054,12 +1078,12 @@ export class SessionManager {
     this.#approvals.resolve(approvalId, approved);
   }
 
-  public resolveUserInput(
+  public async resolveUserInput(
     sessionId: string,
     content: string,
     inputRequestId?: string,
-  ): void {
-    this.#userInputs.resolve(sessionId, inputRequestId, content);
+  ): Promise<void> {
+    await this.#userInputs.resolve(sessionId, inputRequestId, content);
   }
 
   public control(

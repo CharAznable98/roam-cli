@@ -215,6 +215,7 @@ describe("server", () => {
         prompt: "deliver after reconnect",
         attachments: [],
       },
+      false,
       promotedAt,
     );
     const promotedDetail = await app.inject({

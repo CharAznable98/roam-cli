@@ -15,18 +15,25 @@ export interface UserInputRequestTrackerOptions {
   waits: SessionWaitCoordinator;
 }
 
+export class UserInputAcceptanceRetryableError extends Error {
+  public constructor(cause: unknown) {
+    super("User input acceptance status could not be synchronized", { cause });
+    this.name = "UserInputAcceptanceRetryableError";
+  }
+}
+
+interface PendingUserInputRequest {
+  inputRequestId: string;
+  token: SessionGeneration;
+  resolve: (decision: UserInputDecision) => void;
+  reject: (error: Error) => void;
+  accepting: boolean;
+}
+
 export class UserInputRequestTracker {
   readonly #emit: RunnerEventSink;
   readonly #waits: SessionWaitCoordinator;
-  readonly #pendingBySession = new Map<
-    string,
-    {
-      inputRequestId: string;
-      token: SessionGeneration;
-      resolve: (decision: UserInputDecision) => void;
-      reject: (error: Error) => void;
-    }
-  >();
+  readonly #pendingBySession = new Map<string, PendingUserInputRequest>();
 
   public constructor(options: UserInputRequestTrackerOptions) {
     this.#emit = options.emit;
@@ -56,6 +63,7 @@ export class UserInputRequestTracker {
         token,
         resolve,
         reject,
+        accepting: false,
       });
     });
     void decision.catch(() => undefined);
@@ -102,11 +110,11 @@ export class UserInputRequestTracker {
     return decision;
   }
 
-  public resolve(
+  public async resolve(
     sessionId: string,
     inputRequestId: string | undefined,
     content: string,
-  ): boolean {
+  ): Promise<boolean> {
     const pending = this.#pendingBySession.get(sessionId);
     if (pending === undefined) {
       return false;
@@ -117,18 +125,35 @@ export class UserInputRequestTracker {
     ) {
       return false;
     }
+    if (pending.accepting) {
+      return false;
+    }
+
+    pending.accepting = true;
+    if (!this.#waits.remove(pending.token, pending.inputRequestId)) {
+      pending.accepting = false;
+      return false;
+    }
+
+    try {
+      await this.#waits.syncStatus(pending.token);
+    } catch (error: unknown) {
+      if (this.#pendingBySession.get(sessionId) === pending) {
+        pending.accepting = false;
+        this.#waits.add(pending.token, pending.inputRequestId, "input");
+      }
+      throw new UserInputAcceptanceRetryableError(error);
+    }
+
+    if (this.#pendingBySession.get(sessionId) !== pending) {
+      return false;
+    }
     this.#pendingBySession.delete(sessionId);
-    this.#waits.remove(pending.token, pending.inputRequestId);
-    void this.#waits
-      .syncStatus(pending.token)
-      .catch(() => undefined)
-      .finally(() => {
-        pending.resolve({
-          inputRequestId: pending.inputRequestId,
-          content,
-          answeredAt: nowIso(),
-        });
-      });
+    pending.resolve({
+      inputRequestId: pending.inputRequestId,
+      content,
+      answeredAt: nowIso(),
+    });
     return true;
   }
 
