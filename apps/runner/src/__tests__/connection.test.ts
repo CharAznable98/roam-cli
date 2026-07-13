@@ -492,6 +492,120 @@ describe("RunnerConnection", () => {
     await expect(started).resolves.toBeInstanceOf(Error);
   });
 
+  it("waits for a handshake send to persist and receive its ACK before running commands", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "roam-runner-handshake-tail-"));
+    const cache = new EventCache(join(dir, "pending.jsonl"));
+    await cache.append({
+      type: "sessionStatus",
+      sessionId: "snapshot",
+      status: "running",
+    });
+    const append = cache.append.bind(cache);
+    let markAppendStarted!: () => void;
+    const appendStarted = new Promise<void>((resolve) => {
+      markAppendStarted = resolve;
+    });
+    let releaseAppend!: () => void;
+    const appendGate = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    vi.spyOn(cache, "append").mockImplementation(async (event) => {
+      if (event.type === "sessionStatus" && event.sessionId === "handshake-tail") {
+        markAppendStarted();
+        await appendGate;
+      }
+      return append(event);
+    });
+    const socket = new FakeSocket();
+    const handled: string[] = [];
+    const connection = new RunnerConnection({
+      serverUrl: "wss://example.test/runners",
+      token: "secret",
+      registration: testRegistration(dir),
+      cache,
+      audit: new AuditLog(join(dir, "audit.jsonl")),
+      onCommand: (command) => {
+        if (command.type === "deliverInput") {
+          handled.push(command.content);
+        }
+      },
+      createSocket: () => socket,
+      minBackoffMs: 1,
+      maxBackoffMs: 1,
+      ackNegotiationTimeoutMs: 1_000,
+      ackTimeoutMs: 1_000,
+    });
+    const started = connection.start().catch((error: unknown) => error);
+    socket.emit("open");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const auth = JSON.parse(socket.sent[0]!) as {
+      eventDelivery: { streamId: string };
+    };
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventResume",
+        protocol: "ack_v1",
+        streamId: auth.eventDelivery.streamId,
+        ackThrough: 0,
+      }),
+    });
+
+    await vi.waitFor(() => expect(eventEnvelopes(socket)).toHaveLength(1));
+    const liveSend = connection.send({
+      type: "sessionStatus",
+      sessionId: "handshake-tail",
+      status: "running",
+    });
+    await appendStarted;
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "deliverInput",
+        sessionId: "s1",
+        content: "after durable handshake tail",
+      }),
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventAck",
+        protocol: "ack_v1",
+        streamId: auth.eventDelivery.streamId,
+        ackThrough: 1,
+      }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(() => setImmediate(resolve));
+    });
+    expect(handled).toEqual([]);
+
+    releaseAppend();
+    await liveSend;
+    await vi.waitFor(() => expect(eventEnvelopes(socket)).toHaveLength(2));
+    expect(
+      eventEnvelopes(socket).map((frame) => [
+        frame.sequence,
+        frame.event.sessionId,
+      ]),
+    ).toEqual([
+      [1, "snapshot"],
+      [2, "handshake-tail"],
+    ]);
+    expect(handled).toEqual([]);
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "runnerEventAck",
+        protocol: "ack_v1",
+        streamId: auth.eventDelivery.streamId,
+        ackThrough: 2,
+      }),
+    });
+    await vi.waitFor(() =>
+      expect(handled).toEqual(["after durable handshake tail"]),
+    );
+    await vi.waitFor(async () => expect(await cache.readAll()).toEqual([]));
+    connection.stop();
+    await expect(started).resolves.toBeInstanceOf(Error);
+  });
+
   it("advances a large stop-and-wait backlog without calling readAll per ACK", async () => {
     const dir = await mkdtemp(join(tmpdir(), "roam-runner-connection-linear-"));
     const cache = new EventCache(join(dir, "pending.jsonl"));

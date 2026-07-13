@@ -291,11 +291,13 @@ export class SessionCommandService {
     if (shouldRemoveWorktree && !session.worktreeDeletedAt) {
       return this.startArchiveRemoveWorktreeJob(session);
     }
-    await this.deleteRunnerAttachments(session, archivedAt);
     const archived = this.store.archiveSession(session.id, archivedAt);
     if (archived) {
       this.hub.broadcast({ type: "session:updated", session: archived });
     }
+    void this.reconcileAttachmentCleanupJobs(session.runnerId).catch(
+      () => undefined,
+    );
     return ok({});
   }
 
@@ -319,7 +321,7 @@ export class SessionCommandService {
     if (archived) {
       this.hub.broadcast({ type: "session:updated", session: archived });
     }
-    void this.deleteRunnerAttachments(session, archivedAt).catch(
+    void this.reconcileAttachmentCleanupJobs(session.runnerId).catch(
       () => undefined,
     );
   }
@@ -380,24 +382,18 @@ export class SessionCommandService {
 
   async handleProjectArchived(
     projectId: string,
-    archivedAt: string,
+    _archivedAt: string,
   ): Promise<void> {
-    const sessions = this.store
-      .listSessions({ includeArchived: true })
-      .filter((session) => session.projectId === projectId);
     const cleanupRunnerIds = new Set(
       this.store
         .listAttachmentCleanupJobs(projectId)
         .map((job) => job.runnerId),
     );
-    await Promise.all([
-      ...sessions.map((session) =>
-        this.deleteRunnerAttachments(session, archivedAt),
-      ),
-      ...[...cleanupRunnerIds].map((runnerId) =>
+    await Promise.all(
+      [...cleanupRunnerIds].map((runnerId) =>
         this.reconcileAttachmentCleanupJobs(runnerId),
       ),
-    ]);
+    );
   }
 
   public reconcileAttachmentCleanupJobs(runnerId: string): Promise<void> {
@@ -939,6 +935,51 @@ export class SessionCommandService {
         }
         this.rejectPendingInputDelivery(pending.deliveryId, message);
       }
+    }
+  }
+
+  public settleCommittedDeliveryReceipt(
+    sourceRunnerId: string,
+    result: SessionStartResult | SessionStatusCheckResult,
+  ): void {
+    if ("deliveryId" in result) {
+      const pending = this.store.getPendingInputDelivery(result.deliveryId);
+      if (
+        !pending ||
+        pending.kind !== "start" ||
+        pending.runnerId !== sourceRunnerId ||
+        pending.sessionId !== result.sessionId
+      ) {
+        return;
+      }
+      if (result.ownership === "owned") {
+        this.finalizePendingInputDelivery(pending.deliveryId);
+      } else {
+        this.rejectPendingSessionStart(pending.deliveryId);
+      }
+      return;
+    }
+
+    const receipt = result.inputReceipt;
+    if (!receipt) {
+      return;
+    }
+    const pending = this.store.getPendingInputDelivery(receipt.deliveryId);
+    if (
+      !pending ||
+      pending.kind !== "input" ||
+      pending.runnerId !== sourceRunnerId ||
+      pending.sessionId !== result.sessionId
+    ) {
+      return;
+    }
+    if (receipt.ownership === "owned") {
+      this.finalizePendingInputDelivery(pending.deliveryId);
+    } else {
+      this.rejectPendingInputDelivery(
+        pending.deliveryId,
+        "runner no longer owns the pending input delivery",
+      );
     }
   }
 
@@ -1777,64 +1818,6 @@ export class SessionCommandService {
     }));
   }
 
-  private async deleteRunnerAttachments(
-    session: Session,
-    deletedAt: string,
-  ): Promise<void> {
-    const attachments = this.store
-      .listStoredMessageAttachments(session.id)
-      .filter((attachment) => attachment.status === "available");
-    if (attachments.length === 0) {
-      return;
-    }
-
-    const batches: StoredMessageAttachment[][] = [];
-    for (
-      let offset = 0;
-      offset < attachments.length;
-      offset += MAX_ATTACHMENTS_PER_REQUEST
-    ) {
-      batches.push(
-        attachments.slice(offset, offset + MAX_ATTACHMENTS_PER_REQUEST),
-      );
-    }
-    await Promise.all(
-      batches.map(async (batch) => {
-        let result: AttachmentDeleteResult;
-        try {
-          result = await this.rpc.requestRunner<AttachmentDeleteResult>(
-            session.runnerId,
-            {
-              type: "deleteSessionAttachments",
-              requestId: newId("attachment_delete"),
-              sessionId: session.id,
-              attachments: batch.map((attachment) => ({
-                id: attachment.id,
-                runnerStoragePath: attachment.runnerStoragePath,
-              })),
-            },
-            this.runnerRpcTimeoutMs,
-          );
-        } catch (error) {
-          if (error instanceof RunnerRpcError) {
-            return;
-          }
-          throw error;
-        }
-        const batchIds = new Set(batch.map((attachment) => attachment.id));
-        const confirmedDeletedIds = result.deleted.filter((id) =>
-          batchIds.has(id),
-        );
-        const deleted = this.store.markSessionAttachmentsDeleted(
-          session.id,
-          confirmedDeletedIds,
-          deletedAt,
-        );
-        this.broadcastAttachments(deleted);
-      }),
-    );
-  }
-
   private async deleteUncommittedRunnerAttachments(
     runnerId: string,
     sessionId: string,
@@ -1932,7 +1915,13 @@ export class SessionCommandService {
         }
         const batchIds = new Set(batch.map((job) => job.attachmentId));
         const deleted = result.deleted.filter((id) => batchIds.has(id));
+        const stored = this.store.markSessionAttachmentsDeleted(
+          first.sessionId,
+          deleted,
+          nowIso(),
+        );
         this.store.deleteAttachmentCleanupJobs(first.sessionId, deleted);
+        this.broadcastAttachments(stored);
         return deleted.length;
       }),
     );

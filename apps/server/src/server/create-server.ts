@@ -92,6 +92,8 @@ export async function createServer(
     rpc,
     gitJobRunner,
     (job) => sessionService.archiveSessionAfterWorktreeRemoval(job),
+    (sourceRunnerId, result) =>
+      sessionService.settleCommittedDeliveryReceipt(sourceRunnerId, result),
   );
 
   const context: AppContext = {

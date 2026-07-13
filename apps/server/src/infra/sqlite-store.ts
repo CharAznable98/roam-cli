@@ -517,6 +517,18 @@ export class ServerStore {
       }
       this.db
         .prepare(
+          `INSERT OR IGNORE INTO attachment_cleanup_jobs
+             (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+           SELECT sessions.project_id, message_attachments.session_id,
+                  message_attachments.runner_id, message_attachments.id,
+                  message_attachments.runner_storage_path, ?
+           FROM message_attachments
+           INNER JOIN sessions ON sessions.id = message_attachments.session_id
+           WHERE sessions.project_id = ? AND message_attachments.status = 'available'`,
+        )
+        .run(archivedAt, id);
+      this.db
+        .prepare(
           `DELETE FROM sessions
            WHERE project_id = ? AND status = 'pending'
              AND id IN (
@@ -797,6 +809,43 @@ export class ServerStore {
   archiveSession(id: string, archivedAt: string): Session | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const session = this.db
+        .prepare("SELECT project_id FROM sessions WHERE id = ?")
+        .get(id) as { project_id: string } | undefined;
+      if (session) {
+        const pendingRows = this.db
+          .prepare(
+            "SELECT * FROM pending_input_deliveries WHERE session_id = ?",
+          )
+          .all(id) as unknown as PendingInputDeliveryRow[];
+        const insertCleanup = this.db.prepare(
+          `INSERT OR IGNORE INTO attachment_cleanup_jobs
+             (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of pendingRows) {
+          const pending = toPendingInputDelivery(row);
+          for (const attachment of pending.attachments) {
+            insertCleanup.run(
+              session.project_id,
+              id,
+              pending.runnerId,
+              attachment.id,
+              attachment.runnerStoragePath,
+              archivedAt,
+            );
+          }
+        }
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO attachment_cleanup_jobs
+               (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+             SELECT ?, session_id, runner_id, id, runner_storage_path, ?
+             FROM message_attachments
+             WHERE session_id = ? AND status = 'available'`,
+          )
+          .run(session.project_id, archivedAt, id);
+      }
       this.db
         .prepare("DELETE FROM pending_input_deliveries WHERE session_id = ?")
         .run(id);

@@ -4,12 +4,15 @@ import {
   nowIso,
   type Message,
   type RunnerEvent,
+  type SessionStartResult,
   type SessionStatus,
+  type SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "../../infra/connection-hub.js";
 import {
   RunnerRpcClient,
   RunnerRpcError,
+  type RunnerRpcResult,
 } from "../../infra/runner-rpc-client.js";
 import type { ServerStore } from "../../infra/sqlite-store.js";
 import { newId } from "../../infra/ids.js";
@@ -26,15 +29,33 @@ export class RunnerEventService {
     private readonly onArchiveRemoveWorktreeJobSucceeded?: (
       job: GitJob,
     ) => void,
+    private readonly onCommittedSessionDeliveryReceipt?: (
+      sourceRunnerId: string,
+      result: SessionStartResult | SessionStatusCheckResult,
+    ) => void,
   ) {
     this.reconcileCommittedEffects();
   }
 
   handle(event: RunnerEvent): void;
   handle(event: RunnerEvent, deferUntilCommit: true): () => void;
-  handle(event: RunnerEvent, deferUntilCommit = false): void | (() => void) {
+  handle(
+    event: RunnerEvent,
+    deferUntilCommit: true,
+    sourceRunnerId: string,
+  ): () => void;
+  handle(
+    event: RunnerEvent,
+    deferUntilCommit?: false,
+    sourceRunnerId?: string,
+  ): void;
+  handle(
+    event: RunnerEvent,
+    deferUntilCommit = false,
+    sourceRunnerId?: string,
+  ): void | (() => void) {
     const effects: Array<() => void> = [];
-    this.persist(event, (effect) => effects.push(effect));
+    this.persist(event, sourceRunnerId, (effect) => effects.push(effect));
     const afterCommit = () => {
       for (const effect of effects) {
         try {
@@ -74,8 +95,21 @@ export class RunnerEventService {
 
   private persist(
     event: RunnerEvent,
+    sourceRunnerId: string | undefined,
     defer: (effect: () => void) => void,
   ): void {
+    const deferRunnerResponse = (
+      result: RunnerRpcResult,
+      onMatched?: () => void,
+    ): void => {
+      if (sourceRunnerId) {
+        defer(() => {
+          if (this.rpc.resolveRunnerResponse(sourceRunnerId, result)) {
+            onMatched?.();
+          }
+        });
+      }
+    };
     if (event.type === "registered") {
       return;
     }
@@ -111,27 +145,47 @@ export class RunnerEventService {
     }
 
     if (event.type === "sessionStatusCheckResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() => {
+        const matchedLiveRequest = sourceRunnerId
+          ? this.rpc.resolveRunnerResponse(sourceRunnerId, event.result)
+          : false;
+        if (!matchedLiveRequest && sourceRunnerId) {
+          this.onCommittedSessionDeliveryReceipt?.(
+            sourceRunnerId,
+            event.result,
+          );
+        }
+      });
       return;
     }
 
     if (event.type === "sessionStartResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() => {
+        const matchedLiveRequest = sourceRunnerId
+          ? this.rpc.resolveRunnerResponse(sourceRunnerId, event.result)
+          : false;
+        if (!matchedLiveRequest && sourceRunnerId) {
+          this.onCommittedSessionDeliveryReceipt?.(
+            sourceRunnerId,
+            event.result,
+          );
+        }
+      });
       return;
     }
 
     if (event.type === "agentSkillListResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "agentRuntimeConfigOptionsResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "pathSearchResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
@@ -185,109 +239,110 @@ export class RunnerEventService {
     }
 
     if (event.type === "fileTreeResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
       if (isRunnerDirectoryResult(event.result.sessionId)) {
+        deferRunnerResponse(event.result);
         return;
       }
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "file:tree", result: event.result }),
       );
       return;
     }
 
     if (event.type === "fileContentResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "file:content", result: event.result }),
       );
       return;
     }
 
     if (event.type === "fileWriteResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "file:written", result: event.result }),
       );
       return;
     }
 
     if (event.type === "directoryCreateResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "attachmentWriteResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "attachmentContentResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "attachmentDeleteResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      deferRunnerResponse(event.result);
       return;
     }
 
     if (event.type === "patchApplyResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "patch:applied", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitStatusResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:status", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitFileDiffResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:diff", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitBlameResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:blame", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitCommitPageResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:history", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitCommitFilesResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:commitFiles", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitBranchListResult") {
-      defer(() => this.rpc.resolveRunnerResponse(event.result));
-      defer(() =>
+      deferRunnerResponse(event.result, () =>
         this.hub.broadcast({ type: "git:branches", result: event.result }),
       );
       return;
     }
 
     if (event.type === "gitJobResult") {
+      const authoritativeJob = this.store.getGitJob(event.job.id);
+      const authoritativeProject = authoritativeJob
+        ? this.store.getProject(authoritativeJob.projectId)
+        : undefined;
+      if (
+        !sourceRunnerId ||
+        authoritativeProject?.runnerId !== sourceRunnerId
+      ) {
+        return;
+      }
       const job =
         this.gitJobs?.normalizeRunnerJobResult(event.job) ?? event.job;
       if (this.gitJobs && !this.gitJobs.canAcceptRunnerJobResult(job)) {
@@ -296,7 +351,7 @@ export class RunnerEventService {
       this.store.upsertGitJob(job);
       this.applyGitJobSessionEffects(job, defer);
       defer(() => this.gitJobs?.completeRunnerJobResult(job));
-      defer(() => this.rpc.resolveRunnerResponse(job));
+      deferRunnerResponse(job);
       defer(() => this.hub.broadcast({ type: "git:job", job }));
       return;
     }
@@ -351,7 +406,7 @@ export class RunnerEventService {
       return;
     }
 
-    this.handleErrorEvent(event, defer);
+    this.handleErrorEvent(event, sourceRunnerId, defer);
   }
 
   private applyGitJobSessionEffects(
@@ -422,15 +477,20 @@ export class RunnerEventService {
 
   private handleErrorEvent(
     event: Extract<RunnerEvent, { type: "error" }>,
+    sourceRunnerId: string | undefined,
     defer: (effect: () => void) => void,
   ): void {
-    if (event.requestId) {
+    if (event.requestId && sourceRunnerId) {
       defer(() =>
         this.rpc.rejectRunnerResponse(
+          sourceRunnerId,
           event.requestId!,
           new RunnerRpcError(event.message, "runner_error", event.code),
         ),
       );
+      return;
+    }
+    if (event.requestId) {
       return;
     }
 

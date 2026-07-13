@@ -23,7 +23,7 @@ import type {
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "./connection-hub.js";
 
-type RunnerRpcResult =
+export type RunnerRpcResult =
   | AgentSkillListResult
   | AgentRuntimeConfigOptionsResult
   | AttachmentWriteResult
@@ -148,10 +148,13 @@ export class RunnerRpcClient {
     });
   }
 
-  resolveRunnerResponse(result: RunnerRpcResult): boolean {
+  resolveRunnerResponse(
+    sourceRunnerId: string,
+    result: RunnerRpcResult,
+  ): boolean {
     const requestId = "requestId" in result ? result.requestId : result.id;
     const pending = this.pendingRunnerRpcs.get(requestId);
-    if (!pending) {
+    if (!pending || pending.runnerId !== sourceRunnerId) {
       return false;
     }
 
@@ -161,9 +164,13 @@ export class RunnerRpcClient {
     return true;
   }
 
-  rejectRunnerResponse(requestId: string, error: RunnerRpcError): boolean {
+  rejectRunnerResponse(
+    sourceRunnerId: string,
+    requestId: string,
+    error: RunnerRpcError,
+  ): boolean {
     const pending = this.pendingRunnerRpcs.get(requestId);
-    if (!pending) {
+    if (!pending || pending.runnerId !== sourceRunnerId) {
       return false;
     }
 

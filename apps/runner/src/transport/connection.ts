@@ -221,9 +221,24 @@ export class RunnerConnection {
         this.#socket === socket &&
         socket.readyState === 1
       ) {
+        const handshakePersistenceTail = this.#persistenceTail;
         this.#connected = true;
         this.#attempt = 0;
-        this.#releaseCommandWaiters();
+        // Events can be appended after the delivery-state snapshot above. The
+        // bounded handshake flush intentionally stops at that snapshot, so
+        // wait for sends already persisting at the ready boundary, then drain
+        // their tail before allowing server commands to run. Capturing the
+        // current tail avoids chasing sends that begin after the connection is
+        // already live.
+        await handshakePersistenceTail;
+        await this.#flushConnectedOutbox();
+        if (
+          this.#connected &&
+          this.#socket === socket &&
+          socket.readyState === 1
+        ) {
+          this.#releaseCommandWaiters();
+        }
       }
     } catch (error) {
       this.#failSocket(socket);
@@ -639,7 +654,8 @@ export class RunnerConnection {
       if (
         this.#connected &&
         this.#socket !== undefined &&
-        this.#socket.readyState === 1
+        this.#socket.readyState === 1 &&
+        this.#commandReady.settled
       ) {
         return true;
       }

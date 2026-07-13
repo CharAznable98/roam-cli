@@ -114,6 +114,32 @@ describe("RunnerRpcClient", () => {
 
     await expect(pending).rejects.toMatchObject({ code: "runner_offline" });
   });
+
+  it("binds live RPC responses to the authenticated runner", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    hub.registerRunner(runnerRegistration(), fakeSocket<RunnerCommand>([]));
+    const result = {
+      requestId: "runner-bound-request",
+      sessionId: "session-1",
+      root: { path: ".", name: ".", type: "directory" as const, children: [] },
+    };
+    const pending = rpc.requestRunner(
+      "runner-1",
+      {
+        type: "readFileTree",
+        requestId: result.requestId,
+        sessionId: result.sessionId,
+        path: ".",
+        depth: 1,
+      },
+      100,
+    );
+
+    expect(rpc.resolveRunnerResponse("runner-2", result)).toBe(false);
+    expect(rpc.resolveRunnerResponse("runner-1", result)).toBe(true);
+    await expect(pending).resolves.toEqual(result);
+  });
 });
 
 describe("SessionCommandService", () => {
@@ -449,7 +475,7 @@ describe("SessionCommandService", () => {
       throw new Error("initial durable start was not reconciled");
     }
     expect(start.deliveryId).toBe(pending!.deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: start.requestId!,
       sessionId: pending!.sessionId,
       deliveryId: pending!.deliveryId,
@@ -561,7 +587,7 @@ describe("SessionCommandService", () => {
       throw new Error("attachment write command was not sent");
     }
     const runnerAttachment = runnerAttachmentRef(writeCommand.sessionId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: writeCommand.requestId,
       sessionId: writeCommand.sessionId,
       attachments: [runnerAttachment],
@@ -626,7 +652,7 @@ describe("SessionCommandService", () => {
       throw new Error("attachment write command was not sent");
     }
     const runnerAttachment = runnerAttachmentRef(writeCommand.sessionId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: writeCommand.requestId,
       sessionId: writeCommand.sessionId,
       attachments: [runnerAttachment],
@@ -676,6 +702,7 @@ describe("SessionCommandService", () => {
       throw new Error("attachment write command was not sent");
     }
     rpc.rejectRunnerResponse(
+      "runner-1",
       writeCommand.requestId,
       new RunnerRpcError("disk full", "runner_error", "ATTACHMENT_ERROR"),
     );
@@ -820,7 +847,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -869,7 +896,7 @@ describe("SessionCommandService", () => {
     }
     expect(retry.requestId).not.toBe(first.requestId);
     expect(retry.deliverInput?.deliveryId).toBe(first.deliverInput?.deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retry.requestId,
       sessionId: "session-1",
       active: true,
@@ -911,7 +938,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -969,7 +996,7 @@ describe("SessionCommandService", () => {
     if (receiptCheck?.type !== "checkSessionStatus") {
       throw new Error("legacy fallback receipt was not checked");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: receiptCheck.requestId,
       sessionId: "session-1",
       active: true,
@@ -1019,7 +1046,7 @@ describe("SessionCommandService", () => {
       throw new Error("stable input command was not sent");
     }
     const deliveryId = firstCommand.deliverInput!.deliveryId!;
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: firstCommand.requestId,
       sessionId: "session-1",
       active: true,
@@ -1041,7 +1068,7 @@ describe("SessionCommandService", () => {
     if (retryCommand?.type !== "checkSessionStatus") {
       throw new Error("stable input retry was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retryCommand.requestId,
       sessionId: "session-1",
       active: true,
@@ -1088,7 +1115,7 @@ describe("SessionCommandService", () => {
     if (writeCommand?.type !== "writeSessionAttachments") {
       throw new Error("attachment write command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: writeCommand.requestId,
       sessionId: "session-1",
       attachments: [runnerAttachmentRef("session-1")],
@@ -1153,7 +1180,7 @@ describe("SessionCommandService", () => {
       throw new Error("stable input command was not sent");
     }
     const deliveryId = firstCommand.deliverInput!.deliveryId!;
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: firstCommand.requestId,
       sessionId: "session-1",
       active: true,
@@ -1187,7 +1214,7 @@ describe("SessionCommandService", () => {
       throw new Error("pending input was not reconciled");
     }
     expect(retryCommand.deliverInput?.deliveryId).toBe(deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retryCommand.requestId,
       sessionId: "session-1",
       active: true,
@@ -1240,7 +1267,7 @@ describe("SessionCommandService", () => {
     expect(
       store.getPendingInputDelivery(command.deliverInput!.deliveryId!),
     ).toBeDefined();
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -1306,7 +1333,7 @@ describe("SessionCommandService", () => {
       resumeThreadId: "thread-before-crash",
     });
     expect(store.listMessages("session-1")).toEqual([]);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: firstStart.requestId!,
       sessionId: "session-1",
       deliveryId: firstStart.deliveryId!,
@@ -1339,7 +1366,7 @@ describe("SessionCommandService", () => {
     }
     expect(retriedStart.deliveryId).toBe(firstStart.deliveryId);
     expect(retriedStart.requestId).not.toBe(firstStart.requestId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retriedStart.requestId!,
       sessionId: "session-1",
       deliveryId: retriedStart.deliveryId!,
@@ -1405,7 +1432,7 @@ describe("SessionCommandService", () => {
       throw new Error("durable start retry was not sent");
     }
     expect(retriedStart.deliveryId).toBe(firstStart.deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retriedStart.requestId!,
       sessionId: "session-1",
       deliveryId: retriedStart.deliveryId!,
@@ -1417,6 +1444,179 @@ describe("SessionCommandService", () => {
       store.getPendingInputDelivery(firstStart.deliveryId!),
     ).toBeUndefined();
     expect(store.listMessages("session-1")).toHaveLength(1);
+  });
+
+  it("finalizes a timed-out durable start when its committed receipt arrives late", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    const events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (sourceRunnerId, result) =>
+        service.settleCommittedDeliveryReceipt(sourceRunnerId, result),
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "late-start-receipt",
+        content: "finish without reconnect",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    const start = runnerMessages[0];
+    if (start?.type !== "startSession") {
+      throw new Error("durable start command was not sent");
+    }
+    expect(store.getPendingInputDelivery(start.deliveryId!)).toBeDefined();
+
+    for (const [sourceRunnerId, event] of [
+      [
+        "runner-2",
+        {
+          type: "sessionStartResult",
+          result: {
+            requestId: start.requestId!,
+            sessionId: "session-1",
+            deliveryId: start.deliveryId!,
+            ownership: "owned",
+          },
+        },
+      ],
+      [
+        "runner-1",
+        {
+          type: "sessionStartResult",
+          result: {
+            requestId: start.requestId!,
+            sessionId: "session-other",
+            deliveryId: start.deliveryId!,
+            ownership: "owned",
+          },
+        },
+      ],
+      [
+        "runner-1",
+        {
+          type: "sessionStatusCheckResult",
+          result: {
+            requestId: start.requestId!,
+            sessionId: "session-1",
+            active: true,
+            inputReceipt: {
+              deliveryId: start.deliveryId!,
+              ownership: "owned",
+            },
+          },
+        },
+      ],
+      [
+        "runner-1",
+        {
+          type: "sessionStartResult",
+          result: {
+            requestId: start.requestId!,
+            sessionId: "session-1",
+            deliveryId: "delivery-other",
+            ownership: "owned",
+          },
+        },
+      ],
+    ] as const) {
+      events.handle(event, false, sourceRunnerId);
+      expect(store.getPendingInputDelivery(start.deliveryId!)).toBeDefined();
+    }
+
+    events.handle(
+      {
+        type: "sessionStartResult",
+        result: {
+          requestId: start.requestId!,
+          sessionId: "session-1",
+          deliveryId: start.deliveryId!,
+          ownership: "owned",
+        },
+      },
+      false,
+      "runner-1",
+    );
+
+    expect(store.getPendingInputDelivery(start.deliveryId!)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "finish without reconnect" }),
+    ]);
+  });
+
+  it("finalizes timed-out input when its committed status receipt arrives late", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    const events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (sourceRunnerId, result) =>
+        service.settleCommittedDeliveryReceipt(sourceRunnerId, result),
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "running" });
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "late-input-receipt",
+        content: "persist without reconnect",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    const statusCheck = runnerMessages.at(-1);
+    if (
+      statusCheck?.type !== "checkSessionStatus" ||
+      !statusCheck.deliverInput?.deliveryId
+    ) {
+      throw new Error("durable input status check was not sent");
+    }
+    const deliveryId = statusCheck.deliverInput.deliveryId;
+    expect(store.getPendingInputDelivery(deliveryId)).toBeDefined();
+
+    events.handle(
+      {
+        type: "sessionStatusCheckResult",
+        result: {
+          requestId: statusCheck.requestId,
+          sessionId: "session-1",
+          active: true,
+          inputReceipt: { deliveryId, ownership: "owned" },
+        },
+      },
+      false,
+      "runner-1",
+    );
+
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "persist without reconnect" }),
+    ]);
   });
 
   it("cancels an offline pending start before archiving and never reconciles it", async () => {
@@ -1496,7 +1696,7 @@ describe("SessionCommandService", () => {
       20, 20, 5,
     ]);
     for (const batch of deleteBatches) {
-      rpc.resolveRunnerResponse({
+      rpc.resolveRunnerResponse("runner-1", {
         requestId: batch.requestId,
         sessionId: "session-1",
         deleted: batch.attachments.map((attachment) => attachment.id),
@@ -1517,6 +1717,173 @@ describe("SessionCommandService", () => {
     );
   });
 
+  it("atomically moves pending session attachments to cleanup jobs when archiving", () => {
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "running" });
+    const pendingMessage = pendingUserMessage(
+      "archive-session-pending",
+      "must never materialize",
+      createdAt,
+    );
+    const attachment = storedAttachment(pendingMessage.id, createdAt);
+    store.putPendingInputDelivery({
+      deliveryId: pendingMessage.id,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      message: pendingMessage,
+      attachments: [attachment],
+      createdAt,
+    });
+
+    const archivedAt = "2026-06-05T00:00:01.000Z";
+    store.archiveSession("session-1", archivedAt);
+
+    expect(store.getSession("session-1")).toMatchObject({ archivedAt });
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.listMessageAttachments("session-1")).toEqual([]);
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        projectId: "project-1",
+        sessionId: "session-1",
+        runnerId: "runner-1",
+        attachmentId: attachment.id,
+        runnerStoragePath: attachment.runnerStoragePath,
+      }),
+    ]);
+  });
+
+  it("archives immediately while runner attachment cleanup is still blocked", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      1_000,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 1);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(service.deleteSession("session-1")).resolves.toMatchObject({
+      ok: true,
+    });
+    const deleteCommand = runnerMessages.find(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    );
+    if (!deleteCommand) {
+      throw new Error("attachment cleanup was not started");
+    }
+    expect(store.getSession("session-1")?.archivedAt).toEqual(
+      expect.any(String),
+    );
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: "session-1",
+        attachmentId: "attachment-1",
+      }),
+    ]);
+
+    rpc.resolveRunnerResponse("runner-1", {
+      requestId: deleteCommand.requestId,
+      sessionId: "session-1",
+      deleted: ["attachment-1"],
+      failed: [],
+    });
+    await vi.waitFor(() => {
+      expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+      expect(
+        store.getStoredMessageAttachment("session-1", "attachment-1"),
+      ).toMatchObject({ status: "deleted" });
+    });
+  });
+
+  it("replays stored attachment cleanup after the archive delete RPC times out", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 1);
+    const firstConnectionMessages: RunnerCommand[] = [];
+    hub.registerRunner(
+      runnerRegistration(),
+      fakeSocket(firstConnectionMessages),
+    );
+
+    await expect(service.deleteSession("session-1")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(store.getSession("session-1")?.archivedAt).toEqual(
+      expect.any(String),
+    );
+    expect(
+      store.getStoredMessageAttachment("session-1", "attachment-1"),
+    ).toMatchObject({ status: "available" });
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: "session-1",
+        attachmentId: "attachment-1",
+      }),
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    hub.markRunnerOffline("runner-1");
+    const reconnectedMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(reconnectedMessages));
+    const replay = service.reconcileAttachmentCleanupJobs("runner-1");
+    await vi.waitFor(() => {
+      expect(
+        reconnectedMessages.filter(
+          (command) => command.type === "deleteSessionAttachments",
+        ),
+      ).toHaveLength(1);
+    });
+    const deleteCommand = reconnectedMessages.find(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    );
+    if (!deleteCommand) {
+      throw new Error("stored attachment cleanup replay was not delivered");
+    }
+    rpc.resolveRunnerResponse("runner-1", {
+      requestId: deleteCommand.requestId,
+      sessionId: "session-1",
+      deleted: ["attachment-1"],
+      failed: [],
+    });
+
+    await replay;
+    await vi.waitFor(() => {
+      expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+      expect(
+        store.getStoredMessageAttachment("session-1", "attachment-1"),
+      ).toMatchObject({ status: "deleted", deletedAt: expect.any(String) });
+    });
+  });
+
   it("converges attachment metadata after a delete response is lost and retried", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -1525,7 +1892,7 @@ describe("SessionCommandService", () => {
       hub,
       new ApprovalService(store, hub),
       rpc,
-      20,
+      100,
     );
     store.createProject(projectRecord());
     store.createSession({ ...sessionRecord(), status: "completed" });
@@ -1559,17 +1926,21 @@ describe("SessionCommandService", () => {
     if (!retryCommand) {
       throw new Error("attachment delete retry was not delivered");
     }
-    rpc.resolveRunnerResponse({
-      requestId: retryCommand.requestId,
-      sessionId: "session-1",
-      deleted: ["attachment-1"],
-      failed: [],
-    });
+    expect(
+      rpc.resolveRunnerResponse("runner-1", {
+        requestId: retryCommand.requestId,
+        sessionId: "session-1",
+        deleted: ["attachment-1"],
+        failed: [],
+      }),
+    ).toBe(true);
 
     await expect(retry).resolves.toMatchObject({ ok: true });
-    expect(
-      store.getStoredMessageAttachment("session-1", "attachment-1"),
-    ).toMatchObject({ status: "deleted" });
+    await vi.waitFor(() => {
+      expect(
+        store.getStoredMessageAttachment("session-1", "attachment-1"),
+      ).toMatchObject({ status: "deleted" });
+    });
   });
 
   it("preserves attachments from partial results and undelivered batches", async () => {
@@ -1614,7 +1985,7 @@ describe("SessionCommandService", () => {
     if (!firstBatch) {
       throw new Error("attachment delete batch was not delivered");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: firstBatch.requestId,
       sessionId: "session-1",
       deleted: firstBatch.attachments
@@ -1666,7 +2037,7 @@ describe("SessionCommandService", () => {
       archivedAt,
     );
     const attachment = runnerAttachmentRef(writeCommand.sessionId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: writeCommand.requestId,
       sessionId: writeCommand.sessionId,
       attachments: [attachment],
@@ -1701,7 +2072,7 @@ describe("SessionCommandService", () => {
         runnerStoragePath: attachment.runnerStoragePath,
       },
     ]);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: deleteCommand.requestId,
       sessionId: writeCommand.sessionId,
       deleted: [attachment.id],
@@ -1755,7 +2126,7 @@ describe("SessionCommandService", () => {
       throw new Error("attachment write was not delivered");
     }
     const attachment = runnerAttachmentRef(writeCommand.sessionId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: writeCommand.requestId,
       sessionId: writeCommand.sessionId,
       attachments: [attachment],
@@ -1772,7 +2143,7 @@ describe("SessionCommandService", () => {
         attachmentId: attachment.id,
       }),
     ]);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: deleteCommand.requestId,
       sessionId: writeCommand.sessionId,
       deleted: [attachment.id],
@@ -1861,7 +2232,7 @@ describe("SessionCommandService", () => {
     if (deleteCommand?.type !== "deleteSessionAttachments") {
       throw new Error("cleanup outbox retry was not delivered");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: deleteCommand.requestId,
       sessionId: "session-1",
       deleted: ["attachment-archived-pending-input"],
@@ -1939,7 +2310,7 @@ describe("SessionCommandService", () => {
     if (firstCommand?.type !== "deleteSessionAttachments") {
       throw new Error("first cleanup command was not delivered");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: firstCommand.requestId,
       sessionId: first.sessionId,
       deleted: [],
@@ -1969,13 +2340,13 @@ describe("SessionCommandService", () => {
       sessionId: second.sessionId,
       attachments: [expect.objectContaining({ id: second.attachmentId })],
     });
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: retryCommand.requestId,
       sessionId: first.sessionId,
       deleted: [],
       failed: [first.attachmentId],
     });
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: secondCommand.requestId,
       sessionId: second.sessionId,
       deleted: [second.attachmentId],
@@ -2079,7 +2450,7 @@ describe("SessionCommandService", () => {
     if (deleteCommand?.type !== "deleteSessionAttachments") {
       throw new Error("archived project attachment cleanup was not delivered");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: deleteCommand.requestId,
       sessionId: "session-1",
       deleted: ["attachment-1"],
@@ -2187,6 +2558,15 @@ describe("SessionCommandService", () => {
       rpc,
       100,
     );
+    const events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (sourceRunnerId, result) =>
+        service.settleCommittedDeliveryReceipt(sourceRunnerId, result),
+    );
     const durableRunner = durableRunnerRegistration();
     store.createProject(projectRecord());
     store.createSession({
@@ -2226,12 +2606,19 @@ describe("SessionCommandService", () => {
     if (start?.type !== "startSession") {
       throw new Error("control resume was not reconciled");
     }
-    rpc.resolveRunnerResponse({
-      requestId: start.requestId!,
-      sessionId: "session-1",
-      deliveryId: start.deliveryId!,
-      ownership: "owned",
-    });
+    events.handle(
+      {
+        type: "sessionStartResult",
+        result: {
+          requestId: start.requestId!,
+          sessionId: "session-1",
+          deliveryId: start.deliveryId!,
+          ownership: "owned",
+        },
+      },
+      false,
+      "runner-1",
+    );
     await reconciliation;
 
     expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
@@ -2274,7 +2661,7 @@ describe("SessionCommandService", () => {
     if (start?.type !== "startSession") {
       throw new Error("durable start command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: start.requestId!,
       sessionId: "session-1",
       deliveryId: start.deliveryId!,
@@ -2323,7 +2710,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2375,7 +2762,7 @@ describe("SessionCommandService", () => {
       "completed",
       new Date().toISOString(),
     );
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2438,7 +2825,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2493,7 +2880,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2542,7 +2929,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("atomic input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -2584,7 +2971,7 @@ describe("SessionCommandService", () => {
       "completed",
       new Date().toISOString(),
     );
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2624,7 +3011,7 @@ describe("SessionCommandService", () => {
       "completed",
       new Date().toISOString(),
     );
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -2664,7 +3051,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("legacy status command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -2701,7 +3088,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("atomic input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -2741,7 +3128,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -2785,7 +3172,7 @@ describe("SessionCommandService", () => {
     if (delivery?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: delivery.requestId,
       sessionId: "session-1",
       active: false,
@@ -2801,7 +3188,7 @@ describe("SessionCommandService", () => {
       throw new Error("session restart command was not sent");
     }
     expect(restart.deliveryId).toBe(delivery.deliverInput!.deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: restart.requestId!,
       sessionId: "session-1",
       deliveryId: restart.deliveryId!,
@@ -2865,7 +3252,7 @@ describe("SessionCommandService", () => {
         throw new Error("stable input command was not sent");
       }
       const deliveryId = initialCheck.deliverInput!.deliveryId!;
-      rpc.resolveRunnerResponse({
+      rpc.resolveRunnerResponse("runner-1", {
         requestId: initialCheck.requestId,
         sessionId: "session-1",
         active: false,
@@ -2911,7 +3298,7 @@ describe("SessionCommandService", () => {
         throw new Error("queued input receipt was not reconciled");
       }
       expect(recheck.deliverInput?.deliveryId).toBe(deliveryId);
-      rpc.resolveRunnerResponse({
+      rpc.resolveRunnerResponse("runner-1", {
         requestId: recheck.requestId,
         sessionId: "session-1",
         active: false,
@@ -2927,7 +3314,7 @@ describe("SessionCommandService", () => {
         prompt: "keep this exact durable turn",
         attachments: [],
       });
-      rpc.resolveRunnerResponse({
+      rpc.resolveRunnerResponse("runner-1", {
         requestId: restart.requestId!,
         sessionId: "session-1",
         deliveryId,
@@ -2982,7 +3369,7 @@ describe("SessionCommandService", () => {
       throw new Error("terminal input receipt was not checked");
     }
     expect(receiptCheck.deliverInput?.deliveryId).toBe(deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: receiptCheck.requestId,
       sessionId: "session-1",
       active: false,
@@ -3055,7 +3442,7 @@ describe("SessionCommandService", () => {
       throw new Error("same-request pending receipt was not checked");
     }
     expect(receiptCheck.deliverInput?.deliveryId).toBe(deliveryId);
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: receiptCheck.requestId,
       sessionId: "session-1",
       active: false,
@@ -3076,7 +3463,7 @@ describe("SessionCommandService", () => {
         },
       ],
     });
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: restart.requestId!,
       sessionId: "session-1",
       deliveryId,
@@ -3136,7 +3523,7 @@ describe("SessionCommandService", () => {
     if (receiptCheck?.type !== "checkSessionStatus") {
       throw new Error("pending input receipt was not checked");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: receiptCheck.requestId,
       sessionId: "session-1",
       active: false,
@@ -3215,7 +3602,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("stable input command was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -3567,7 +3954,7 @@ describe("SessionCommandService", () => {
     if (command?.type !== "checkSessionStatus") {
       throw new Error("session status check was not sent");
     }
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -3614,7 +4001,7 @@ describe("SessionCommandService", () => {
       new Date().toISOString(),
     );
     expect(running?.status).toBe("running");
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: true,
@@ -3652,7 +4039,7 @@ describe("SessionCommandService", () => {
       "completed",
       new Date().toISOString(),
     );
-    rpc.resolveRunnerResponse({
+    rpc.resolveRunnerResponse("runner-1", {
       requestId: command.requestId,
       sessionId: "session-1",
       active: false,
@@ -3877,7 +4264,7 @@ describe("SessionCommandService", () => {
         startedAt: now,
         finishedAt: now,
       },
-    });
+    }, false, "runner-1");
 
     const archived = store.getSession("session-1");
     expect(archived).toMatchObject({
@@ -4015,7 +4402,7 @@ describe("SessionCommandService", () => {
         startedAt: lateFinishedAt,
         finishedAt: lateFinishedAt,
       },
-    });
+    }, false, "runner-1");
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
         id: stageCommand.requestId,
@@ -4144,7 +4531,7 @@ describe("SessionCommandService", () => {
         errorCode: "GIT_OPERATION_ERROR",
         errorSummary: "Directory is not a git repository",
       },
-    });
+    }, false, "runner-1");
 
     await expect(pending).resolves.toMatchObject({
       ok: true,
@@ -4283,7 +4670,7 @@ describe("SessionCommandService", () => {
         startedAt: now,
         finishedAt: now,
       },
-    });
+    }, false, "runner-1");
 
     const archived = store.getSession("session-1");
     expect(archived).toMatchObject({
@@ -4692,7 +5079,7 @@ describe("RunnerEventService", () => {
     const service = new RunnerEventService(store, hub, rpc, gitJobs);
     expect(gitJobs.hasActiveWorktreeRemovalJob("session-1")).toBe(true);
 
-    service.handle({
+    const terminalReplay = {
       type: "gitJobResult",
       job: {
         id: "orphaned-remove-job",
@@ -4704,7 +5091,12 @@ describe("RunnerEventService", () => {
         createdAt: now,
         finishedAt: now,
       },
-    });
+    } as const;
+    service.handle(terminalReplay, false, "runner-2");
+    expect(store.getGitJob("orphaned-remove-job")?.status).toBe("running");
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+
+    service.handle(terminalReplay, false, "runner-1");
 
     expect(store.getGitJob("orphaned-remove-job")).toMatchObject({
       projectId: "project-1",
@@ -4765,7 +5157,7 @@ describe("RunnerEventService", () => {
         startedAt: old,
         finishedAt,
       },
-    });
+    }, false, "runner-1");
 
     expect(store.getGitJob("expired-orphan-remove-job")).toMatchObject({
       status: "succeeded",
@@ -4822,6 +5214,7 @@ describe("RunnerEventService", () => {
         },
       },
       true,
+      "runner-1",
     );
     expect(store.getGitJob("archive-job")?.status).toBe("succeeded");
     expect(archive).not.toHaveBeenCalled();
@@ -4851,12 +5244,9 @@ describe("RunnerEventService", () => {
     );
   });
 
-  it("isolates legacy runner-event effects so one failure does not skip later broadcasts", () => {
+  it("does not broadcast an RPC result without a matching runner request", () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
-    vi.spyOn(rpc, "resolveRunnerResponse").mockImplementationOnce(() => {
-      throw new Error("injected RPC resolution failure");
-    });
     const broadcast = vi.spyOn(hub, "broadcast");
     const service = new RunnerEventService(store, hub, rpc);
     const result = {
@@ -4870,12 +5260,9 @@ describe("RunnerEventService", () => {
     };
 
     expect(() =>
-      service.handle({ type: "fileContentResult", result }),
+      service.handle({ type: "fileContentResult", result }, false, "runner-1"),
     ).not.toThrow();
-    expect(broadcast).toHaveBeenCalledWith({
-      type: "file:content",
-      result,
-    });
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("rolls back event state and lifecycle metadata with the durable high-water", () => {
@@ -4930,7 +5317,7 @@ describe("RunnerEventService", () => {
       mode: "append",
       done: false,
       encrypted: false,
-    });
+    }, false, "runner-1");
     expect(store.listMessages(session.id)).toMatchObject([
       {
         role: "assistant",
@@ -5051,14 +5438,18 @@ describe("RunnerEventService", () => {
       },
       100,
     );
-    service.handle({
+    const fileTreeResult = {
       type: "fileTreeResult",
       result: {
         requestId: "request-1",
         sessionId: session.id,
         root: { path: ".", name: ".", type: "directory", children: [] },
       },
-    });
+    } as const;
+    const resolveResponse = vi.spyOn(rpc, "resolveRunnerResponse");
+    service.handle(fileTreeResult, false, "runner-2");
+    expect(resolveResponse.mock.results.at(-1)?.value).toBe(false);
+    service.handle(fileTreeResult, false, "runner-1");
     await expect(pending).resolves.toMatchObject({ requestId: "request-1" });
 
     const failed = rpc.requestRunner(
@@ -5078,7 +5469,7 @@ describe("RunnerEventService", () => {
       sessionId: session.id,
       message: "Session cwd is unavailable",
       code: "SESSION_NOT_FOUND",
-    });
+    }, false, "runner-1");
     await expect(failed).rejects.toBeInstanceOf(RunnerRpcError);
     await expect(failed).rejects.toMatchObject({
       code: "runner_error",
@@ -5104,7 +5495,7 @@ describe("RunnerEventService", () => {
       sessionId: session.id,
       message: "ENOENT: no such file or directory",
       code: "ATTACHMENT_READ_ERROR",
-    });
+    }, false, "runner-1");
     await expect(missingAttachment).rejects.toMatchObject({
       code: "runner_error",
       runnerCode: "ATTACHMENT_READ_ERROR",

@@ -104,6 +104,7 @@ export function registerRunnerSocketRoute(
         }
 
         const payload = parseSocketJson(data);
+        const sourceRunnerId = registeredRunner.runnerId;
         if (eventStream) {
           const envelope = RunnerEventEnvelopeSchema.safeParse(payload);
           if (!envelope.success) {
@@ -125,6 +126,7 @@ export function registerRunnerSocketRoute(
                 afterCommit = context.services.runnerEvents.handle(
                   envelope.data.event,
                   true,
+                  sourceRunnerId,
                 );
               },
             );
@@ -176,7 +178,11 @@ export function registerRunnerSocketRoute(
           return;
         }
         const event = RunnerEventSchema.parse(payload);
-        context.services.runnerEvents.handle(event);
+        context.services.runnerEvents.handle(
+          event,
+          false,
+          sourceRunnerId,
+        );
       } catch (error) {
         request.log.warn(
           { err: error },
