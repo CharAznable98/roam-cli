@@ -1,7 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import {
+  basename,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import {
   RunnerProfileSchema,
   type RunnerProfile,
@@ -73,12 +90,20 @@ export async function resolveRunnerConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedRunnerConfig> {
   const cli = parseRawCliArgs(argv);
-  const locator = resolveConfigLocator(cli, env);
+  const locator = await resolveConfigLocator(cli, env);
   const fileConfig = await readRunnerConfigFile(locator.configPath);
-  const options = resolveOptions(cli, env, fileConfig, locator.configPath);
+  const workspace = await resolveEffectiveWorkspace(cli, env, fileConfig);
+  const options = resolveOptions(
+    cli,
+    env,
+    fileConfig,
+    locator.configPath,
+    workspace,
+  );
+  await resolveRunnerDataDir(options.workspace, options.dataDir, false);
   if (options.token === undefined || options.token.length === 0) {
     throw new Error(
-      "Missing --token or ROAM_RUNNER_TOKEN or local config token",
+      "Missing --token or ROAM_RUNNER_TOKEN (legacy local config tokens are read only for migration)",
     );
   }
   if (options.agentPlugins.length === 0) {
@@ -88,7 +113,7 @@ export async function resolveRunnerConfig(
   }
   return {
     options,
-    configPath: locator.configPath,
+    configPath: await resolveConfigPath(workspace, locator.dataDir),
   };
 }
 
@@ -97,8 +122,9 @@ export async function resolveRunnerConfigDraft(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedRunnerConfigDraft> {
   const cli = parseRawCliArgs(argv);
-  const locator = resolveConfigLocator(cli, env);
+  const locator = await resolveConfigLocator(cli, env);
   const fileConfig = await readRunnerConfigFile(locator.configPath);
+  const workspace = await resolveEffectiveWorkspace(cli, env, fileConfig);
   const server = cli.server ?? env.ROAM_RUNNER_SERVER ?? fileConfig?.server;
   const profileValue =
     cli.profile ?? env.ROAM_RUNNER_PROFILE ?? fileConfig?.profile ?? "standard";
@@ -113,12 +139,7 @@ export async function resolveRunnerConfigDraft(
       locator.configPath,
       () => RunnerProfileSchema.parse(profileValue),
     ),
-    workspace: resolve(
-      cli.workspace ??
-        env.ROAM_RUNNER_WORKSPACE ??
-        fileConfig?.workspace ??
-        defaultWorkspace(env),
-    ),
+    workspace,
     dataDir: withConfigErrorContext(
       valueSource(cli.dataDir, env.ROAM_RUNNER_DATA_DIR, fileConfig?.dataDir),
       locator.configPath,
@@ -145,7 +166,11 @@ export async function resolveRunnerConfigDraft(
   if (runnerId !== undefined) {
     draft.runnerId = runnerId;
   }
-  return { options: draft, configPath: locator.configPath };
+  await resolveRunnerDataDir(draft.workspace, draft.dataDir, false);
+  return {
+    options: draft,
+    configPath: await resolveConfigPath(workspace, locator.dataDir),
+  };
 }
 
 export async function persistRunnerConfig(
@@ -155,7 +180,6 @@ export async function persistRunnerConfig(
   const content = `${JSON.stringify(
     {
       server: options.server,
-      token: options.token,
       profile: options.profile,
       runnerId: options.runnerId,
       workspace: options.workspace,
@@ -165,33 +189,104 @@ export async function persistRunnerConfig(
     null,
     2,
   )}\n`;
-  const effectiveConfigPath = join(
-    options.workspace,
-    options.dataDir,
-    "config.json",
+  const workspace = await resolveCanonicalWorkspace(options.workspace);
+  const dataDirs = [...new Set([options.dataDir, DEFAULT_DATA_DIR])];
+  const targets = await Promise.all(
+    dataDirs.map(async (dataDir) => {
+      const directory = await resolveRunnerDataDir(workspace, dataDir, true);
+      const path = join(directory, "config.json");
+      await assertSafeConfigFile(path);
+      return { directory, path };
+    }),
   );
-  const discoverableConfigPath = join(
-    options.workspace,
-    DEFAULT_DATA_DIR,
-    "config.json",
-  );
-  const configPaths = new Set([
-    configPath,
-    effectiveConfigPath,
-    discoverableConfigPath,
-  ]);
+  const expectedConfigPaths = new Set(targets.map((target) => target.path));
+  if (!expectedConfigPaths.has(resolve(configPath))) {
+    throw new Error(
+      `Runner config path must use the selected workspace and data directory: ${configPath}`,
+    );
+  }
 
-  for (const targetPath of configPaths) {
-    await writeRunnerConfigFile(targetPath, content);
+  for (const target of targets) {
+    await writeRunnerConfigFile(target, content);
   }
 }
 
 async function writeRunnerConfigFile(
-  configPath: string,
+  target: { directory: string; path: string },
   content: string,
 ): Promise<void> {
-  await mkdir(dirname(configPath), { recursive: true });
-  await writeFile(configPath, content, "utf8");
+  const temporaryPath = join(
+    target.directory,
+    `.${basename(target.path)}.tmp-${process.pid}-${randomUUID()}`,
+  );
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    file = await open(temporaryPath, "wx", 0o600);
+    await file.writeFile(content, "utf8");
+    await file.sync();
+    await file.close();
+    file = undefined;
+    await rename(temporaryPath, target.path);
+    await hardenConfigFile(target.path);
+  } catch (error) {
+    await file?.close().catch(() => undefined);
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function resolveRunnerDataDir(
+  workspace: string,
+  dataDir: string,
+  create: boolean,
+): Promise<string> {
+  const canonicalWorkspace = await resolveCanonicalWorkspace(workspace);
+  const candidate = resolve(canonicalWorkspace, parseDataDir(dataDir));
+  if (!isInside(canonicalWorkspace, candidate)) {
+    throw new Error("--data-dir must stay inside the canonical workspace");
+  }
+
+  const relativePath = relative(canonicalWorkspace, candidate);
+  let current = canonicalWorkspace;
+  for (const segment of relativePath.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    let info: Awaited<ReturnType<typeof lstat>>;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        throw error;
+      }
+      if (!create) {
+        return candidate;
+      }
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (!isNodeError(mkdirError) || mkdirError.code !== "EEXIST") {
+          throw mkdirError;
+        }
+      }
+      info = await lstat(current);
+    }
+    if (info.isSymbolicLink()) {
+      throw new Error(`Runner data path cannot contain symlinks: ${current}`);
+    }
+    if (!info.isDirectory()) {
+      throw new Error(
+        `Runner data path component is not a directory: ${current}`,
+      );
+    }
+    const canonicalCurrent = await realpath(current);
+    if (
+      canonicalCurrent !== current ||
+      !isInside(canonicalWorkspace, canonicalCurrent)
+    ) {
+      throw new Error(`Runner data path escapes workspace: ${current}`);
+    }
+  }
+  await hardenRunnerDataDirectory(candidate);
+  return candidate;
 }
 
 function parseRawCliArgs(argv: readonly string[]): RawRunnerCliOptions {
@@ -243,6 +338,7 @@ function resolveOptions(
   env: NodeJS.ProcessEnv,
   fileConfig: RunnerConfigFile | undefined,
   configPath?: string,
+  canonicalWorkspace?: string,
 ): RunnerCliOptions {
   const serverSource = valueSource(
     cli.server,
@@ -268,12 +364,14 @@ function resolveOptions(
     configPath,
     () => RunnerProfileSchema.parse(profileValue),
   );
-  const workspace = resolve(
-    cli.workspace ??
-      env.ROAM_RUNNER_WORKSPACE ??
-      fileConfig?.workspace ??
-      defaultWorkspace(env),
-  );
+  const workspace =
+    canonicalWorkspace ??
+    resolve(
+      cli.workspace ??
+        env.ROAM_RUNNER_WORKSPACE ??
+        fileConfig?.workspace ??
+        defaultWorkspace(env),
+    );
   const dataDirValue =
     cli.dataDir ??
     env.ROAM_RUNNER_DATA_DIR ??
@@ -355,7 +453,22 @@ function normalizeServerUrl(value: string): string {
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error("--server must use ws, wss, http, or https");
   }
+  if (url.protocol === "ws:" && !isLoopbackHostname(url.hostname)) {
+    throw new Error(
+      "Plaintext runner connections are limited to loopback hosts; use wss:// for remote servers",
+    );
+  }
   return url.toString();
+}
+
+function isLoopbackHostname(hostnameValue: string): boolean {
+  const hostname = hostnameValue.toLowerCase();
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  );
 }
 
 function helpText(): string {
@@ -363,11 +476,11 @@ function helpText(): string {
     "Usage: roam-runner --server <wss-url> [options]",
     "",
     "Runner reads and writes local config at <workspace>/<data-dir>/config.json.",
-    "CLI options and environment variables override local config and are persisted.",
+    "CLI options and environment variables override local config. Runner tokens are never persisted.",
     "",
     "Options:",
-    "  --server      Server websocket URL. http/https are converted to ws/wss.",
-    "  --token       Runner token used during websocket registration.",
+    "  --server      Server websocket URL. Remote servers require wss; ws is loopback-only.",
+    "  --token       Runner token used during websocket registration. Prefer ROAM_RUNNER_TOKEN.",
     "  --profile     Permission profile: strict, standard, trusted. Default: standard.",
     "  --runner-id   Stable runner id. Default: hostname plus UUID.",
     "  --workspace   Workspace root exposed to sessions. Default: package invocation cwd or cwd.",
@@ -376,21 +489,108 @@ function helpText(): string {
   ].join("\n");
 }
 
-function resolveConfigLocator(
+async function resolveConfigLocator(
   cli: RawRunnerCliOptions,
   env: NodeJS.ProcessEnv,
-): { workspace: string; dataDir: string; configPath: string } {
-  const workspace = resolve(
+): Promise<{ workspace: string; dataDir: string; configPath: string }> {
+  const workspace = await resolveCanonicalWorkspace(
     cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? defaultWorkspace(env),
   );
   const dataDir = parseDataDir(
     cli.dataDir ?? env.ROAM_RUNNER_DATA_DIR ?? DEFAULT_DATA_DIR,
   );
+  const directory = await resolveRunnerDataDir(workspace, dataDir, false);
   return {
     workspace,
     dataDir,
-    configPath: join(workspace, dataDir, "config.json"),
+    configPath: join(directory, "config.json"),
   };
+}
+
+async function resolveEffectiveWorkspace(
+  cli: RawRunnerCliOptions,
+  env: NodeJS.ProcessEnv,
+  fileConfig: RunnerConfigFile | undefined,
+): Promise<string> {
+  return resolveCanonicalWorkspace(
+    cli.workspace ??
+      env.ROAM_RUNNER_WORKSPACE ??
+      fileConfig?.workspace ??
+      defaultWorkspace(env),
+  );
+}
+
+async function resolveConfigPath(
+  workspace: string,
+  locatorDataDir: string,
+): Promise<string> {
+  const directory = await resolveRunnerDataDir(
+    workspace,
+    locatorDataDir,
+    false,
+  );
+  return join(directory, "config.json");
+}
+
+async function resolveCanonicalWorkspace(path: string): Promise<string> {
+  const canonical = await realpath(resolve(path));
+  const info = await stat(canonical);
+  if (!info.isDirectory()) {
+    throw new Error(`Runner workspace is not a directory: ${path}`);
+  }
+  return canonical;
+}
+
+async function assertSafeConfigFile(path: string): Promise<void> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) {
+      throw new Error(`Runner config path cannot be a symlink: ${path}`);
+    }
+    if (!info.isFile()) {
+      throw new Error(`Runner config path is not a regular file: ${path}`);
+    }
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function hardenConfigFile(path: string): Promise<void> {
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = await file.stat();
+    if (!info.isFile()) {
+      throw new Error(`Runner config path is not a regular file: ${path}`);
+    }
+    await file.chmod(0o600);
+  } finally {
+    await file?.close().catch(() => undefined);
+  }
+}
+
+async function hardenRunnerDataDirectory(path: string): Promise<void> {
+  let directory: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    directory = await open(
+      path,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    const info = await directory.stat();
+    if (!info.isDirectory()) {
+      throw new Error(`Runner data path component is not a directory: ${path}`);
+    }
+    await directory.chmod(0o700);
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
+}
+
+function isInside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
 }
 
 function parseDataDir(value: string): string {
@@ -418,13 +618,33 @@ async function readRunnerConfigFile(
   configPath: string,
 ): Promise<RunnerConfigFile | undefined> {
   let content: string;
+  let file: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    content = await readFile(configPath, "utf8");
+    const info = await lstat(configPath);
+    if (info.isSymbolicLink()) {
+      throw new Error(`Runner config path cannot be a symlink: ${configPath}`);
+    }
+    if (!info.isFile()) {
+      throw new Error(
+        `Runner config path is not a regular file: ${configPath}`,
+      );
+    }
+    file = await open(configPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const openedInfo = await file.stat();
+    if (!openedInfo.isFile()) {
+      throw new Error(
+        `Runner config path is not a regular file: ${configPath}`,
+      );
+    }
+    await file.chmod(0o600);
+    content = await file.readFile("utf8");
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
     }
     throw error;
+  } finally {
+    await file?.close().catch(() => undefined);
   }
 
   let parsed: unknown;

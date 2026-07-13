@@ -8,19 +8,20 @@ import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import type {
-  AgentDefinition,
-  AgentInput,
-  AgentOutputParser,
-  AgentParseResult,
-  AgentPlugin,
-  AgentPluginContext,
-  AgentRuntimeConfigOptionsContext,
-  AgentSession,
-  AgentSessionContext,
-  AssistantOutputEvent,
-  ApprovalRequestDraft,
-  ArtifactDraft,
+import {
+  AgentInputUnavailableError,
+  type AgentDefinition,
+  type AgentInput,
+  type AgentOutputParser,
+  type AgentParseResult,
+  type AgentPlugin,
+  type AgentPluginContext,
+  type AgentRuntimeConfigOptionsContext,
+  type AgentSession,
+  type AgentSessionContext,
+  type AssistantOutputEvent,
+  type ApprovalRequestDraft,
+  type ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
 import {
   type AgentRuntimeConfig,
@@ -73,6 +74,7 @@ export const codexAgent: AgentDefinition = {
           ? "codex-json"
           : "codex-app-server",
       supportsResume: true,
+      supportsDurableSessionStart: true,
       supportsImages: true,
       supportedImageMimeTypes: SUPPORTED_IMAGE_MIME_TYPES,
       maxImagesPerTurn: DEFAULT_MAX_IMAGES_PER_TURN,
@@ -164,20 +166,51 @@ class CodexProcessSession implements AgentSession {
     child.on("close", (code, signal) => {
       void this.#finish(code, signal).catch(() => undefined);
     });
+    await waitForSpawn(child);
     if (shouldCloseStdinAfterStart(this.#options.args)) {
       child.stdin.end();
     }
   }
 
-  public deliverInput(input: AgentInput): void {
+  public async deliverInput(input: AgentInput): Promise<void> {
     const child = this.#child;
-    if (!child) {
-      return;
+    if (
+      !child ||
+      child.exitCode !== null ||
+      child.signalCode !== null ||
+      child.stdin.destroyed ||
+      child.stdin.writableEnded ||
+      !child.stdin.writable
+    ) {
+      throw new AgentInputUnavailableError();
     }
-    this.#write(input.content);
-    if (!input.content.endsWith("\n")) {
-      this.#write("\n");
-    }
+    const content = input.content.endsWith("\n")
+      ? input.content
+      : `${input.content}\n`;
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        child.stdin.off("error", onError);
+        reject(new AgentInputUnavailableError(error.message));
+      };
+      child.stdin.once("error", onError);
+      try {
+        child.stdin.write(content, (error) => {
+          child.stdin.off("error", onError);
+          if (error) {
+            reject(new AgentInputUnavailableError(error.message));
+          } else {
+            resolve();
+          }
+        });
+      } catch (error: unknown) {
+        child.stdin.off("error", onError);
+        reject(
+          new AgentInputUnavailableError(
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    });
   }
 
   public control(signal: "interrupt" | "stop" | "resume"): void {
@@ -291,24 +324,51 @@ class CodexProcessSession implements AgentSession {
   }
 }
 
+function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onSpawn = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Codex process closed before it started"));
+    };
+    const cleanup = () => {
+      child.off("spawn", onSpawn);
+      child.off("error", onError);
+      child.off("close", onClose);
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
+
 export function approvalResponsePayload(decision: {
   approvalId: string;
   approved: boolean;
   signedAt: string;
-  signature: string;
+  signature?: string;
 }): {
   type: "approvalResponse";
   approvalId: string;
   approved: boolean;
   signedAt: string;
-  signature: string;
+  signature?: string;
 } {
   return {
     type: "approvalResponse",
     approvalId: decision.approvalId,
     approved: decision.approved,
     signedAt: decision.signedAt,
-    signature: decision.signature,
+    ...(decision.signature === undefined
+      ? {}
+      : { signature: decision.signature }),
   };
 }
 
@@ -359,16 +419,18 @@ export class CodexJsonParser implements AgentOutputParser {
       const directives = parseTextDirectives(event.item.text);
       approvals.push(...directives.approvals);
       artifacts.push(...directives.artifacts);
-      assistantOutputs.push({
-        type: "assistantOutput",
-        outputId:
-          typeof event.item.id === "string"
-            ? this.#scopedOutputId(event.item.id)
-            : this.#nextOutputId(),
-        content: event.item.text,
-        mode: "replace",
-        done: true,
-      });
+      if (directives.displayText.length > 0) {
+        assistantOutputs.push({
+          type: "assistantOutput",
+          outputId:
+            typeof event.item.id === "string"
+              ? this.#scopedOutputId(event.item.id)
+              : this.#nextOutputId(),
+          content: directives.displayText,
+          mode: "replace",
+          done: true,
+        });
+      }
     }
     return {
       assistantOutputs,

@@ -108,6 +108,7 @@ export interface RoamApiClient {
     presetIds: string[],
   ): Promise<ProjectPromptPreset[]>;
   createSession(input: {
+    requestId: string;
     projectId: string;
     agent: AgentKind;
     executionMode?: ExecutionMode;
@@ -120,8 +121,16 @@ export interface RoamApiClient {
   }): Promise<Session>;
   createUserMessage(
     sessionId: string,
-    input: { content: string; attachments?: ImageAttachmentUpload[] },
-  ): Promise<{ message: Message; attachments: MessageAttachment[] }>;
+    input: {
+      requestId: string;
+      content: string;
+      attachments?: ImageAttachmentUpload[];
+    },
+  ): Promise<{
+    message: Message;
+    attachments: MessageAttachment[];
+    queued?: true;
+  }>;
   fetchSessionDetail(sessionId: string): Promise<SessionDetailPayload>;
   updateSession(sessionId: string, input: ApiUpdateSession): Promise<Session>;
   checkSessionStatus(sessionId: string): Promise<Session>;
@@ -214,6 +223,7 @@ interface CreateSessionResponse {
 interface CreateMessageResponse {
   message: Message;
   attachments: MessageAttachment[];
+  queued?: true;
 }
 
 interface SessionResponse {
@@ -324,17 +334,30 @@ export function createRoamApiClient(
   const fetchImpl = options.fetchImpl ?? fetch;
   const WebSocketImpl = options.WebSocketImpl ?? globalThis.WebSocket;
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    init: RequestInit = {},
+    options: { retryNetworkError?: boolean } = {},
+  ): Promise<T> {
     const headers = new Headers(init.headers);
     if (init.body !== undefined && !headers.has("content-type")) {
       headers.set("content-type", "application/json");
     }
 
-    const response = await fetchImpl(`${baseUrl}${path}`, {
+    const requestInit: RequestInit = {
       ...init,
       headers,
       credentials: init.credentials ?? "same-origin",
-    });
+    };
+    let response: Response;
+    try {
+      response = await fetchImpl(`${baseUrl}${path}`, requestInit);
+    } catch (error) {
+      if (!options.retryNetworkError) {
+        throw error;
+      }
+      response = await fetchImpl(`${baseUrl}${path}`, requestInit);
+    }
     if (!response.ok) {
       const body = await response.text();
       const contentType = response.headers.get("content-type") ?? "";
@@ -559,8 +582,9 @@ export function createRoamApiClient(
     },
 
     async createSession(input) {
-      const payload: ApiCreateSession = input.title
+      const payload: ApiCreateSession & { requestId: string } = input.title
         ? {
+            requestId: input.requestId,
             projectId: input.projectId,
             agent: input.agent,
             executionMode: input.executionMode ?? "direct",
@@ -578,6 +602,7 @@ export function createRoamApiClient(
             title: input.title,
           }
         : {
+            requestId: input.requestId,
             projectId: input.projectId,
             agent: input.agent,
             executionMode: input.executionMode ?? "direct",
@@ -593,10 +618,14 @@ export function createRoamApiClient(
             prompt: input.prompt,
             attachments: input.attachments ?? [],
           };
-      const { session } = await request<CreateSessionResponse>("/v1/sessions", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const { session } = await request<CreateSessionResponse>(
+        "/v1/sessions",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        { retryNetworkError: true },
+      );
       return session;
     },
 
@@ -606,10 +635,12 @@ export function createRoamApiClient(
         {
           method: "POST",
           body: JSON.stringify({
+            requestId: input.requestId,
             content: input.content,
             attachments: input.attachments ?? [],
           }),
         },
+        { retryNetworkError: true },
       );
     },
 

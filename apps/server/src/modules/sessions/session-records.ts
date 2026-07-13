@@ -10,7 +10,8 @@ import {
 import { newId } from "../../infra/ids.js";
 
 export type SessionCreateInput =
-  | (ApiCreateSession & {
+  | (Omit<ApiCreateSession, "requestId"> & {
+      requestId?: string;
       runnerId: string;
       executionFolder: string;
       projectDirectory?: string;

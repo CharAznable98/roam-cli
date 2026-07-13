@@ -12,8 +12,9 @@ import type {
   ContentBlockParam,
   MessageParam,
 } from "@anthropic-ai/sdk/resources";
-import type {
-  AgentDefinition,
+import {
+  AgentInputUnavailableError,
+  type AgentDefinition,
   AgentInput,
   AgentLaunchAttachment,
   AgentPlugin,
@@ -60,6 +61,7 @@ export const claudeCodeAgent: AgentDefinition = {
       args: [],
       parser: "claude-agent-sdk",
       supportsResume: true,
+      supportsDurableSessionStart: true,
       supportsImages: true,
       supportedImageMimeTypes: [...SUPPORTED_IMAGE_MIME_TYPES],
       maxImagesPerTurn: DEFAULT_MAX_IMAGES_PER_TURN,
@@ -113,13 +115,16 @@ class ClaudeCodeSession implements AgentSession {
   }
 
   public async start(): Promise<void> {
+    const acceptance = createInputAcceptance();
     this.#queue.push({
       content: this.#context.prompt,
+      acceptance,
       ...(this.#context.attachments
         ? { attachments: this.#context.attachments }
         : {}),
     });
     this.#startDrain();
+    await acceptance.promise;
   }
 
   public deliverInput(input: AgentInput): void {
@@ -137,7 +142,7 @@ class ClaudeCodeSession implements AgentSession {
     }
     if (signal === "stop") {
       this.#closed = true;
-      this.#queue.length = 0;
+      this.#rejectQueuedInputs(new AgentInputUnavailableError());
       this.#abortController?.abort();
       this.#query?.close();
       await this.#emit({ type: "status", status: "stopped" });
@@ -147,7 +152,7 @@ class ClaudeCodeSession implements AgentSession {
 
   public close(): void {
     this.#closed = true;
-    this.#queue.length = 0;
+    this.#rejectQueuedInputs(new AgentInputUnavailableError());
     this.#abortController?.abort();
     this.#query?.close();
   }
@@ -163,7 +168,9 @@ class ClaudeCodeSession implements AgentSession {
           return;
         }
         this.#closed = true;
-        this.#queue.length = 0;
+        this.#rejectQueuedInputs(
+          error instanceof Error ? error : new Error(String(error)),
+        );
         void this.#emit({
           type: "error",
           message: error instanceof Error ? error.message : String(error),
@@ -199,11 +206,20 @@ class ClaudeCodeSession implements AgentSession {
     this.#lastOutputId = undefined;
     this.#runOutputPrefix = `claude-run-${randomUUID()}-${++this.#runSequence}`;
     this.#streamedOutputIds.clear();
-    const sdkQuery = query({
-      prompt: promptForInput(input),
-      options: this.#options(),
-    });
+    let sdkQuery: ReturnType<typeof query>;
+    try {
+      sdkQuery = query({
+        prompt: promptForInput(input),
+        options: this.#options(),
+      });
+    } catch (error) {
+      input.acceptance?.reject(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      throw error;
+    }
     this.#query = sdkQuery;
+    input.acceptance?.resolve();
 
     for await (const message of sdkQuery) {
       await this.#handleMessage(message);
@@ -438,11 +454,35 @@ class ClaudeCodeSession implements AgentSession {
       ? undefined
       : `${this.#runOutputPrefix}:${outputId}`;
   }
+
+  #rejectQueuedInputs(error: Error): void {
+    for (const input of this.#queue.splice(0)) {
+      input.acceptance?.reject(error);
+    }
+  }
 }
 
 interface ClaudeCodeInput {
   content: string;
   attachments?: readonly AgentLaunchAttachment[];
+  acceptance?: InputAcceptance;
+}
+
+interface InputAcceptance {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+function createInputAcceptance(): InputAcceptance {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  void promise.catch(() => undefined);
+  return { promise, resolve, reject };
 }
 
 function promptForInput(

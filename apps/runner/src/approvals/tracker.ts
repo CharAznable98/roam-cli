@@ -5,27 +5,37 @@ import type {
 } from "@roamcli/agent-plugin-sdk";
 import type { Approval } from "@roamcli/shared/protocol";
 import { nowIso } from "@roamcli/shared/protocol";
+import type {
+  SessionGeneration,
+  SessionWaitCoordinator,
+} from "../sessions/wait-coordinator.js";
 import type { RunnerEventSink } from "../sessions/types.js";
 
 export interface ApprovalTrackerOptions {
   emit: RunnerEventSink;
+  waits: SessionWaitCoordinator;
 }
 
 export class ApprovalTracker {
   readonly #emit: RunnerEventSink;
+  readonly #waits: SessionWaitCoordinator;
   readonly #pending = new Map<
     string,
     {
       sessionId: string;
+      token: SessionGeneration;
       resolve: (decision: ApprovalDecision) => void;
+      reject: (error: Error) => void;
     }
   >();
 
   public constructor(options: ApprovalTrackerOptions) {
     this.#emit = options.emit;
+    this.#waits = options.waits;
   }
 
   public async request(
+    token: SessionGeneration,
     session: {
       id: string;
       runnerId: string;
@@ -42,18 +52,40 @@ export class ApprovalTracker {
       status: "pending",
       requestedAt: nowIso(),
     };
-    const decision = new Promise<ApprovalDecision>((resolve) => {
+    const decision = new Promise<ApprovalDecision>((resolve, reject) => {
       this.#pending.set(approval.id, {
         sessionId: session.id,
+        token,
         resolve,
+        reject,
       });
     });
-    await this.#emit({
-      type: "sessionStatus",
-      sessionId: session.id,
-      status: "waiting_approval",
-    });
-    await this.#emit({ type: "approvalRequested", approval });
+    void decision.catch(() => undefined);
+    if (!this.#waits.add(token, approval.id, "approval")) {
+      const pending = this.#pending.get(approval.id);
+      this.#pending.delete(approval.id);
+      const error = new Error(
+        `Session ended before approval was requested: ${session.id}`,
+      );
+      pending?.reject(error);
+      throw error;
+    }
+    try {
+      await this.#waits.syncStatus(token);
+      if (!this.#isPending(approval.id, token)) {
+        return decision;
+      }
+      await this.#emit({ type: "approvalRequested", approval });
+    } catch (error: unknown) {
+      if (this.#isPending(approval.id, token)) {
+        const pending = this.#pending.get(approval.id);
+        this.#pending.delete(approval.id);
+        this.#waits.remove(token, approval.id);
+        pending?.reject(toError(error));
+        await this.#waits.syncStatus(token).catch(() => undefined);
+      }
+      throw error;
+    }
     return decision;
   }
 
@@ -63,37 +95,45 @@ export class ApprovalTracker {
       return;
     }
     this.#pending.delete(approvalId);
-    void Promise.resolve()
-      .then(() =>
-        this.#emit({
-          type: "sessionStatus",
-          sessionId: pending.sessionId,
-          status: "running",
-        }),
-      )
+    this.#waits.remove(pending.token, approvalId);
+    void this.#waits
+      .syncStatus(pending.token)
       .catch(() => undefined)
       .finally(() => {
         pending.resolve({
           approvalId,
           approved,
           signedAt: nowIso(),
-          signature: "",
         });
       });
   }
 
-  public clear(sessionId: string): void {
+  public clear(sessionId: string, token?: SessionGeneration): void {
     for (const [approvalId, pending] of this.#pending) {
-      if (pending.sessionId === sessionId) {
+      if (
+        pending.sessionId === sessionId &&
+        (token === undefined || pending.token.generation === token.generation)
+      ) {
         this.#pending.delete(approvalId);
+        this.#waits.remove(pending.token, approvalId);
         pending.resolve({
           approvalId,
           approved: false,
           signedAt: nowIso(),
-          signature: "",
         });
       }
     }
   }
 
+  #isPending(approvalId: string, token: SessionGeneration): boolean {
+    const pending = this.#pending.get(approvalId);
+    return (
+      pending?.token.generation === token.generation &&
+      this.#waits.has(token, approvalId)
+    );
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

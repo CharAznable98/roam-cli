@@ -1,8 +1,11 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyUnifiedDiff, extractUnifiedDiffPaths } from "../workspace/patch.js";
+import {
+  applyUnifiedDiff,
+  extractUnifiedDiffPaths,
+} from "../workspace/patch.js";
 
 describe("runner patch operations", () => {
   it("applies a unified diff inside the session cwd", async () => {
@@ -21,8 +24,8 @@ describe("runner patch operations", () => {
         "@@ -1 +1 @@",
         "-old",
         "+new",
-        ""
-      ].join("\n")
+        "",
+      ].join("\n"),
     });
 
     expect(result).toEqual({
@@ -31,13 +34,17 @@ describe("runner patch operations", () => {
       applied: true,
       changedFiles: ["README.md"],
       message: "applied",
-      rejected: []
+      rejected: [],
     });
-    await expect(readFile(join(sessionCwd, "README.md"), "utf8")).resolves.toBe("new\n");
+    await expect(readFile(join(sessionCwd, "README.md"), "utf8")).resolves.toBe(
+      "new\n",
+    );
   });
 
   it("returns an error result for paths that escape the session cwd", async () => {
-    const { workspace, sessionCwd } = await makeWorkspace("roam-runner-patch-escape-");
+    const { workspace, sessionCwd } = await makeWorkspace(
+      "roam-runner-patch-escape-",
+    );
 
     const result = await applyUnifiedDiff({
       workspace,
@@ -51,14 +58,43 @@ describe("runner patch operations", () => {
         "@@ -1 +1 @@",
         "-old",
         "+new",
-        ""
-      ].join("\n")
+        "",
+      ].join("\n"),
     });
 
     expect(result.applied).toBe(false);
     expect(result.changedFiles).toEqual([]);
     expect(result.message).toContain("escapes session cwd");
     expect(result.rejected[0]).toContain("escapes session cwd");
+  });
+
+  it("rejects patches through symlinks that resolve outside the session cwd", async () => {
+    const { workspace, sessionCwd } = await makeWorkspace(
+      "roam-runner-patch-link-",
+    );
+    const outsidePath = join(workspace, "outside.txt");
+    await writeFile(outsidePath, "old\n");
+    await symlink(outsidePath, join(sessionCwd, "linked.txt"));
+
+    const result = await applyUnifiedDiff({
+      workspace,
+      sessionCwd,
+      requestId: "patch-link",
+      sessionId: "s1",
+      patch: [
+        "diff --git a/linked.txt b/linked.txt",
+        "--- a/linked.txt",
+        "+++ b/linked.txt",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+    });
+
+    expect(result.applied).toBe(false);
+    expect(result.message).toContain("escapes session cwd");
+    await expect(readFile(outsidePath, "utf8")).resolves.toBe("old\n");
   });
 
   it("extracts paths from common unified diff headers", () => {
@@ -68,15 +104,17 @@ describe("runner patch operations", () => {
         "rename from src/old.ts",
         "rename to src/new.ts",
         "--- a/src/old.ts",
-        "+++ b/src/new.ts"
-      ].join("\n")
+        "+++ b/src/new.ts",
+      ].join("\n"),
     );
 
     expect([...paths].sort()).toEqual(["src/new.ts", "src/old.ts"]);
   });
 });
 
-async function makeWorkspace(prefix: string): Promise<{ workspace: string; sessionCwd: string }> {
+async function makeWorkspace(
+  prefix: string,
+): Promise<{ workspace: string; sessionCwd: string }> {
   const workspace = await mkdtemp(join(tmpdir(), prefix));
   const sessionCwd = join(workspace, "project");
   await mkdir(sessionCwd, { recursive: true });

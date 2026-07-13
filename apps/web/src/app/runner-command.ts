@@ -32,11 +32,10 @@ export function buildRunnerCommand(
     .map((packageName) => `  --agent-plugin ${shellQuote(packageName)}`)
     .join(" \\\n");
   const baseCommand = [
-    "npx --yes \\",
+    `ROAM_RUNNER_TOKEN=${shellQuote(token)} npx --yes \\`,
     packageArgs,
     "  -- roam-runner \\",
-    `  --server ${shellQuote(serverUrl)} \\`,
-    `  --token ${shellQuote(token)}`,
+    `  --server ${shellQuote(serverUrl)}`,
   ];
   if (pluginArgs.length === 0) {
     return baseCommand.join("\n");

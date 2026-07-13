@@ -24,9 +24,9 @@ pnpm --filter @roamcli/server dev
 Start a local Runner from the workspace you want to expose:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```

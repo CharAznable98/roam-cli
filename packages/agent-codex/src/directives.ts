@@ -3,6 +3,13 @@ import type {
   ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
 
+const DIRECTIVE_TAGS = [
+  "APPROVAL_REQUEST",
+  "ROAMCLI_APPROVAL",
+  "ARTIFACT",
+  "ROAMCLI_ARTIFACT",
+] as const;
+
 export function parseJsonObject(
   value: string,
 ): Record<string, unknown> | undefined {
@@ -17,12 +24,15 @@ export function parseJsonObject(
 export function parseTextDirectives(text: string): {
   approvals: ApprovalRequestDraft[];
   artifacts: ArtifactDraft[];
+  displayText: string;
 } {
   const approvals: ApprovalRequestDraft[] = [];
   const artifacts: ArtifactDraft[] = [];
+  const displayLines: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length === 0) {
+      displayLines.push(line);
       continue;
     }
     const approval = parseApprovalLine(trimmed);
@@ -33,9 +43,57 @@ export function parseTextDirectives(text: string): {
     const artifact = parseArtifactLine(trimmed);
     if (artifact !== undefined) {
       artifacts.push(artifact);
+      continue;
     }
+    displayLines.push(line);
   }
-  return { approvals, artifacts };
+  while (displayLines[0]?.trim().length === 0) {
+    displayLines.shift();
+  }
+  while (displayLines.at(-1)?.trim().length === 0) {
+    displayLines.pop();
+  }
+  return { approvals, artifacts, displayText: displayLines.join("\n") };
+}
+
+export function streamingDisplayText(text: string): string {
+  let displayText = "";
+  let lineStart = 0;
+  for (const match of text.matchAll(/\r?\n/g)) {
+    const lineEnd = match.index;
+    const line = text.slice(lineStart, lineEnd);
+    if (!isDirectiveLine(line.trim())) {
+      displayText += `${line}\n`;
+    }
+    lineStart = lineEnd + match[0].length;
+  }
+
+  const finalLine = text.slice(lineStart);
+  const trimmed = finalLine.trim();
+  if (!isDirectiveLine(trimmed) && !couldBecomeDirective(finalLine)) {
+    displayText += finalLine;
+  }
+  return displayText;
+}
+
+function isDirectiveLine(line: string): boolean {
+  return (
+    parseApprovalLine(line) !== undefined ||
+    parseArtifactLine(line) !== undefined
+  );
+}
+
+function couldBecomeDirective(line: string): boolean {
+  const value = line.trimStart();
+  if (value.length === 0 || value.startsWith("{")) {
+    return true;
+  }
+  return DIRECTIVE_TAGS.some(
+    (tag) =>
+      tag.startsWith(value) ||
+      value.startsWith(`${tag}:`) ||
+      value.startsWith(`${tag} `),
+  );
 }
 
 function parseApprovalLine(line: string): ApprovalRequestDraft | undefined {

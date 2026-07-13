@@ -44,13 +44,12 @@ describe("buildRunnerCommand", () => {
       ),
     ).toBe(
       [
-        "npx --yes \\",
+        "ROAM_RUNNER_TOKEN='secure-token' npx --yes \\",
         "  --package '@roamcli/runner@1.1.0' \\",
         "  --package '@roamcli/agent-codex@1.1.0' \\",
         "  --package '@roamcli/agent-claude-code@1.1.0' \\",
         "  -- roam-runner \\",
         "  --server 'wss://roam.example.com/v1/runner' \\",
-        "  --token 'secure-token' \\",
         "  --agent-plugin '@roamcli/agent-codex' \\",
         "  --agent-plugin '@roamcli/agent-claude-code'",
       ].join("\n"),
@@ -63,7 +62,7 @@ describe("buildRunnerCommand", () => {
         protocol: "http:",
         host: "localhost:8787",
       }),
-    ).toContain("--token ''");
+    ).toContain("ROAM_RUNNER_TOKEN='' npx");
   });
 
   it("quotes tokens so copied commands remain shell-safe", () => {
@@ -77,7 +76,7 @@ describe("buildRunnerCommand", () => {
           host: "localhost:8787",
         },
       ),
-    ).toContain("--token 'pa ss'\\''$(echo unsafe)'");
+    ).toContain("ROAM_RUNNER_TOKEN='pa ss'\\''$(echo unsafe)' npx");
   });
 
   it("quotes custom plugin packages so copied commands remain shell-safe", () => {

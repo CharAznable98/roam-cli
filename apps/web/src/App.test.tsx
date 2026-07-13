@@ -30,7 +30,44 @@ import { LAST_SELECTION_STORAGE_KEY } from "./app/selection-storage";
 
 const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-vi.mock("@monaco-editor/react", () => {
+vi.mock("@monaco-editor/react", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+  type FakeUri = { path: string };
+  type FakeModel = {
+    uri: FakeUri;
+    getValue: () => string;
+    setValue: (value: string) => void;
+    isDisposed: () => boolean;
+    dispose: () => void;
+  };
+  const models = new Map<string, FakeModel>();
+  const monaco = {
+    Uri: {
+      parse: (path: string): FakeUri => ({ path }),
+    },
+    editor: {
+      createModel: (initialValue: string, _language: string, uri: FakeUri) => {
+        let value = initialValue;
+        let disposed = false;
+        const model: FakeModel = {
+          uri,
+          getValue: () => value,
+          setValue: (nextValue) => {
+            value = nextValue;
+          },
+          isDisposed: () => disposed,
+          dispose: () => {
+            disposed = true;
+            models.delete(uri.path);
+          },
+        };
+        models.set(uri.path, model);
+        return model;
+      },
+      getModel: (uri: FakeUri) => models.get(uri.path) ?? null,
+    },
+  };
+
   function Editor({
     value = "",
     onChange,
@@ -59,16 +96,79 @@ vi.mock("@monaco-editor/react", () => {
 
   function DiffEditor({
     className,
+    original = "",
     modified = "",
+    originalModelPath,
+    modifiedModelPath,
+    keepCurrentOriginalModel = false,
+    keepCurrentModifiedModel = false,
+    beforeMount,
+    onMount,
   }: {
     className?: string;
+    original?: string;
     modified?: string;
+    originalModelPath?: string;
+    modifiedModelPath?: string;
+    keepCurrentOriginalModel?: boolean;
+    keepCurrentModifiedModel?: boolean;
+    beforeMount?: (monaco: unknown) => void;
+    onMount?: (editor: unknown, monaco: unknown) => void;
   }) {
+    const [renderedModified, setRenderedModified] = React.useState(modified);
+    React.useEffect(() => {
+      const mountTimer = window.setTimeout(() => {
+        beforeMount?.(monaco);
+        const originalUri = monaco.Uri.parse(originalModelPath ?? "original");
+        const modifiedUri = monaco.Uri.parse(modifiedModelPath ?? "modified");
+        const originalModel =
+          monaco.editor.getModel(originalUri) ??
+          monaco.editor.createModel(original, "plaintext", originalUri);
+        const modifiedModel =
+          monaco.editor.getModel(modifiedUri) ??
+          monaco.editor.createModel(modified, "plaintext", modifiedUri);
+        let currentModels = {
+          original: originalModel,
+          modified: modifiedModel,
+        };
+        let lineChanges: unknown[] | null = [];
+        const diffListeners = new Set<() => void>();
+        onMount?.(
+          {
+            getModel: () => currentModels,
+            getLineChanges: () => lineChanges,
+            onDidUpdateDiff: (listener: () => void) => {
+              diffListeners.add(listener);
+              return {
+                dispose: () => diffListeners.delete(listener),
+              };
+            },
+            setModel: (nextModels: typeof currentModels) => {
+              currentModels = nextModels;
+              lineChanges = null;
+              setRenderedModified(nextModels.modified.getValue());
+              queueMicrotask(() => {
+                lineChanges = [];
+                for (const listener of diffListeners) {
+                  listener();
+                }
+              });
+            },
+          },
+          monaco,
+        );
+      }, 0);
+      return () => window.clearTimeout(mountTimer);
+    }, []);
     return (
       <div
         className={className}
         data-testid="monaco-diff-editor"
-        data-modified={modified}
+        data-modified={renderedModified}
+        data-original-model-path={originalModelPath}
+        data-modified-model-path={modifiedModelPath}
+        data-keep-original-model={String(keepCurrentOriginalModel)}
+        data-keep-modified-model={String(keepCurrentModifiedModel)}
       />
     );
   }
@@ -515,12 +615,15 @@ describe("App", () => {
   let deferredGitCommitFiles: Map<string, Deferred<Response>>;
   let deferredGitBlame: Map<string, Deferred<Response>>;
   let queuedRunnerResponses: Array<Deferred<Response>>;
+  let queuedSessionDetailResponses: Array<Deferred<Response>>;
   let extraRunners: Array<typeof runner>;
   let failBootstrapRunners: boolean;
   let failNextProjectCreate: boolean;
   let failNextSessionCreate: boolean;
   let failNextSessionRename: boolean;
   let failNextSessionArchive: boolean;
+  let queueNextMessageDelivery: boolean;
+  let deferredMessageDeliveryResponse: Deferred<Response> | undefined;
   let failSessionDetail: boolean;
   let emitSessionNotRunningOnArchive: boolean;
   let runnerOnline: boolean;
@@ -545,6 +648,12 @@ describe("App", () => {
   let failGitBlame: boolean;
   let sessionDetailMessages: Message[];
   let sessionDetailAttachments: MessageAttachment[];
+  let pendingSessionMessageDeliveries: Array<{
+    messageId: string;
+    content: string;
+    createdAt: string;
+    attachments: MessageAttachment[];
+  }>;
   let sessionDetailApprovals: Approval[];
   let sessionDetailArtifacts: Artifact[];
   let extraProjects: Project[];
@@ -579,6 +688,26 @@ describe("App", () => {
     ).length;
   }
 
+  function sessionDetailResponse(
+    pendingMessageDeliveries = pendingSessionMessageDeliveries,
+    messages = sessionDetailMessages,
+  ): Response {
+    return jsonResponse({
+      session: {
+        ...session,
+        title: remoteSessionTitle,
+        status: remoteSessionStatus,
+        executionMode: remoteSessionExecutionMode,
+        executionFolder: remoteSessionExecutionFolder,
+      },
+      messages,
+      attachments: sessionDetailAttachments,
+      pendingMessageDeliveries,
+      approvals: sessionDetailApprovals,
+      artifacts: sessionDetailArtifacts,
+    });
+  }
+
   beforeEach(() => {
     fetchRequests = [];
     fetchCalls = [];
@@ -589,6 +718,7 @@ describe("App", () => {
     deferredGitCommitFiles = new Map();
     deferredGitBlame = new Map();
     queuedRunnerResponses = [];
+    queuedSessionDetailResponses = [];
     queuedAccountSecurityResponses = [];
     queuedRunnerTokenResponses = [];
     projectPromptPresets = [
@@ -643,6 +773,8 @@ describe("App", () => {
     failNextSessionCreate = false;
     failNextSessionRename = false;
     failNextSessionArchive = false;
+    queueNextMessageDelivery = false;
+    deferredMessageDeliveryResponse = undefined;
     failSessionDetail = false;
     emitSessionNotRunningOnArchive = false;
     runnerOnline = true;
@@ -714,6 +846,7 @@ describe("App", () => {
       },
     ];
     sessionDetailAttachments = [];
+    pendingSessionMessageDeliveries = [];
     sessionDetailApprovals = [patchApproval];
     sessionDetailArtifacts = [patchArtifact];
     extraProjects = [];
@@ -985,6 +1118,12 @@ describe("App", () => {
           if ((init?.method ?? "GET") === "GET" && failSessionDetail) {
             return jsonResponse({ message: "session detail unavailable" }, 503);
           }
+          if ((init?.method ?? "GET") === "GET") {
+            const queuedResponse = queuedSessionDetailResponses.shift();
+            if (queuedResponse) {
+              return queuedResponse.promise;
+            }
+          }
           if (init?.method === "PATCH") {
             if (failNextSessionRename) {
               failNextSessionRename = false;
@@ -1069,6 +1208,7 @@ describe("App", () => {
             },
             messages: sessionDetailMessages,
             attachments: sessionDetailAttachments,
+            pendingMessageDeliveries: pendingSessionMessageDeliveries,
             approvals: sessionDetailApprovals,
             artifacts: sessionDetailArtifacts,
           });
@@ -1122,6 +1262,27 @@ describe("App", () => {
             encrypted: false,
             createdAt: "2026-06-05T00:00:02.000Z",
           };
+          if (queueNextMessageDelivery) {
+            queueNextMessageDelivery = false;
+            pendingSessionMessageDeliveries = [
+              ...pendingSessionMessageDeliveries,
+              {
+                messageId: message.id,
+                content: message.content,
+                createdAt: message.createdAt,
+                attachments: [],
+              },
+            ];
+            const deferredResponse = deferredMessageDeliveryResponse;
+            deferredMessageDeliveryResponse = undefined;
+            if (deferredResponse) {
+              return deferredResponse.promise;
+            }
+            return jsonResponse(
+              { message, attachments: [], queued: true },
+              202,
+            );
+          }
           sessionDetailMessages = [...sessionDetailMessages, message];
           return jsonResponse({ message, attachments: [] }, 201);
         }
@@ -1572,6 +1733,9 @@ describe("App", () => {
       screen.queryByRole("button", { name: "Open Account & Security" }),
     ).not.toBeInTheDocument();
     openSettingsTab();
+    expect(screen.getAllByRole("heading", { name: "Settings" })).toHaveLength(
+      1,
+    );
     fireEvent.click(screen.getByRole("button", { name: /Account & Security/ }));
 
     expect(
@@ -1580,7 +1744,9 @@ describe("App", () => {
     expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
-    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ROAM_RUNNER_TOKEN='runner-token'/),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Select or enter at least one agent plugin/),
     ).toBeInTheDocument();
@@ -1631,7 +1797,7 @@ describe("App", () => {
       await screen.findByText("runner-token-refreshed"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/--token 'runner-token-refreshed'/),
+      screen.getByText(/ROAM_RUNNER_TOKEN='runner-token-refreshed'/),
     ).toBeInTheDocument();
     expect(
       fetchCalls.filter(
@@ -1651,7 +1817,9 @@ describe("App", () => {
     expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
-    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ROAM_RUNNER_TOKEN='runner-token'/),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Custom plugin package")).toBeInTheDocument();
   });
 
@@ -2202,7 +2370,7 @@ describe("App", () => {
       "runner-token",
     );
     expect(
-      screen.getAllByText(/--token 'runner-token'/).length,
+      screen.getAllByText(/ROAM_RUNNER_TOKEN='runner-token'/).length,
     ).toBeGreaterThan(0);
   });
 
@@ -2377,7 +2545,9 @@ describe("App", () => {
     expect(await screen.findByLabelText("Runner token")).toHaveTextContent(
       "runner-token",
     );
-    expect(screen.getByText(/--token 'runner-token'/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ROAM_RUNNER_TOKEN='runner-token'/),
+    ).toBeInTheDocument();
   });
 
   it("ignores stale bootstrap failures after a later recovery succeeds", async () => {
@@ -2486,7 +2656,7 @@ describe("App", () => {
       ).toBe(true),
     );
     expect(await screen.findByText("Stopped")).toBeInTheDocument();
-    expect(screen.getByText("1 runners online")).toBeInTheDocument();
+    expect(screen.getByText("1 runner online")).toBeInTheDocument();
   });
 
   it("automatically repairs stale active session status from persisted session state", async () => {
@@ -2921,6 +3091,26 @@ describe("App", () => {
       expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
         "data-modified",
         "diff for src/App.tsx",
+      ),
+    );
+    expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+      "data-keep-original-model",
+      "true",
+    );
+    expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+      "data-keep-modified-model",
+      "true",
+    );
+    expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+      "data-original-model-path",
+      expect.stringMatching(
+        /^roam-git:\/\/diff\/instance-\d+\/bootstrap\/original$/,
+      ),
+    );
+    expect(screen.getByTestId("monaco-diff-editor")).toHaveAttribute(
+      "data-modified-model-path",
+      expect.stringMatching(
+        /^roam-git:\/\/diff\/instance-\d+\/bootstrap\/modified$/,
       ),
     );
 
@@ -4008,6 +4198,7 @@ describe("App", () => {
       );
       expect(JSON.parse(String(messageCall?.init?.body ?? "{}"))).toMatchObject(
         {
+          requestId: expect.stringMatching(/^message-/),
           content: "draft before reconnect",
           attachments: [],
         },
@@ -4015,6 +4206,431 @@ describe("App", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not commit a queued user message until the owned event arrives", async () => {
+    queueNextMessageDelivery = true;
+    const firstRender = render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
+      target: { value: "queued until owned" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(composer).toHaveValue(""));
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    expect(within(conversation).queryByText("queued until owned")).toBeNull();
+    expect(
+      screen.getByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+
+    firstRender.unmount();
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+    const reloadedSocket = sockets.at(-1);
+    pendingSessionMessageDeliveries = [];
+    sessionDetailMessages = [
+      ...sessionDetailMessages,
+      {
+        id: "message-sent",
+        sessionId: "session-1",
+        role: "user",
+        content: "queued until owned",
+        encrypted: false,
+        createdAt: "2026-06-05T00:00:02.000Z",
+      },
+    ];
+
+    act(() => {
+      reloadedSocket?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-sent",
+              sessionId: "session-1",
+              role: "user",
+              content: "queued until owned",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:02.000Z",
+            },
+          }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText("queued until owned")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Message queued — waiting for runner"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("does not leave a phantom message when queued input is not owned", async () => {
+    queueNextMessageDelivery = true;
+    const firstRender = render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
+      target: { value: "rejected after queue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(composer).toHaveValue(""));
+    expect(
+      screen.getByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+
+    firstRender.unmount();
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+    const reloadedSocket = sockets.at(-1);
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      reloadedSocket?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "error",
+            sessionId: "session-1",
+            code: "INPUT_NOT_OWNED",
+            message: "Runner did not accept the queued input.",
+          }),
+        }),
+      );
+    });
+
+    expect(
+      await screen.findByText("Runner did not accept the queued input."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Conversation" })).queryByText(
+        "rejected after queue",
+      ),
+    ).toBeNull();
+  });
+
+  it("removes a rehydrated promoted start after START_NOT_OWNED without a phantom bubble", async () => {
+    pendingSessionMessageDeliveries = [
+      {
+        messageId: "promoted-start-message",
+        content: "promoted but never owned",
+        createdAt: "2026-06-05T00:00:02.000Z",
+        attachments: [],
+      },
+    ];
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+    const conversation = screen.getByRole("region", { name: "Conversation" });
+    expect(
+      within(conversation).queryByText("promoted but never owned"),
+    ).toBeNull();
+
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "error",
+            sessionId: "session-1",
+            messageId: "promoted-start-message",
+            code: "START_NOT_OWNED",
+            message: "Runner rejected the promoted session start.",
+          }),
+        }),
+      );
+    });
+
+    expect(
+      await screen.findByText("Runner rejected the promoted session start."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(conversation).queryByText("promoted but never owned"),
+    ).toBeNull();
+  });
+
+  it("does not restore a queued banner when the owned event beats the HTTP response", async () => {
+    const delayedResponse = deferred<Response>();
+    deferredMessageDeliveryResponse = delayedResponse;
+    queueNextMessageDelivery = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
+      target: { value: "owned before response" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() =>
+      expect(deferredMessageDeliveryResponse).toBeUndefined(),
+    );
+
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-sent",
+              sessionId: "session-1",
+              role: "user",
+              content: "owned before response",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:02.000Z",
+            },
+          }),
+        }),
+      );
+      delayedResponse.resolve(
+        jsonResponse(
+          {
+            message: {
+              id: "message-sent",
+              sessionId: "session-1",
+              role: "user",
+              content: "owned before response",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:02.000Z",
+            },
+            attachments: [],
+            queued: true,
+          },
+          202,
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByText("owned before response"),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(composer).toHaveValue(""));
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not restore a queued banner when not-owned beats the HTTP response", async () => {
+    const delayedResponse = deferred<Response>();
+    deferredMessageDeliveryResponse = delayedResponse;
+    queueNextMessageDelivery = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, {
+      target: { value: "rejected before response" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() =>
+      expect(deferredMessageDeliveryResponse).toBeUndefined(),
+    );
+
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "error",
+            sessionId: "session-1",
+            messageId: "message-sent",
+            code: "INPUT_NOT_OWNED",
+            message: "Runner rejected before the HTTP response.",
+          }),
+        }),
+      );
+      delayedResponse.resolve(
+        jsonResponse(
+          {
+            message: {
+              id: "message-sent",
+              sessionId: "session-1",
+              role: "user",
+              content: "rejected before response",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:02.000Z",
+            },
+            attachments: [],
+            queued: true,
+          },
+          202,
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByText("Runner rejected before the HTTP response."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(composer).toHaveValue(""));
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Conversation" })).queryByText(
+        "rejected before response",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not let an older empty detail response clear a newly queued message", async () => {
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+    const staleDetail = deferred<Response>();
+    queuedSessionDetailResponses.push(staleDetail);
+    await waitFor(() => expect(queuedSessionDetailResponses).toHaveLength(0), {
+      timeout: 3_000,
+    });
+
+    queueNextMessageDelivery = true;
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "newer than detail" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+
+    act(() => {
+      staleDetail.resolve(sessionDetailResponse([]));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not let stale pending detail restore a message after owned", async () => {
+    queueNextMessageDelivery = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat composer" }), {
+      target: { value: "owned after stale detail" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+
+    const stalePending = [...pendingSessionMessageDeliveries];
+    const staleDetail = deferred<Response>();
+    queuedSessionDetailResponses.push(staleDetail);
+    await waitFor(() => expect(queuedSessionDetailResponses).toHaveLength(0), {
+      timeout: 3_000,
+    });
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "message:created",
+            message: {
+              id: "message-sent",
+              sessionId: "session-1",
+              role: "user",
+              content: "owned after stale detail",
+              encrypted: false,
+              createdAt: "2026-06-05T00:00:02.000Z",
+            },
+          }),
+        }),
+      );
+      staleDetail.resolve(sessionDetailResponse(stalePending));
+    });
+
+    expect(
+      await screen.findByText("owned after stale detail"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not let stale pending detail restore a message after not-owned", async () => {
+    queueNextMessageDelivery = true;
+    render(<App />);
+    await screen.findByText("Loaded from API");
+    act(() => {
+      sockets[0]?.dispatchEvent(new Event("open"));
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat composer" }), {
+      target: { value: "rejected after stale detail" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(
+      await screen.findByText("Message queued — waiting for runner"),
+    ).toBeInTheDocument();
+
+    const stalePending = [...pendingSessionMessageDeliveries];
+    const staleDetail = deferred<Response>();
+    queuedSessionDetailResponses.push(staleDetail);
+    await waitFor(() => expect(queuedSessionDetailResponses).toHaveLength(0), {
+      timeout: 3_000,
+    });
+    pendingSessionMessageDeliveries = [];
+    act(() => {
+      sockets[0]?.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "error",
+            sessionId: "session-1",
+            messageId: "message-sent",
+            code: "INPUT_NOT_OWNED",
+            message: "Runner rejected the stale pending delivery.",
+          }),
+        }),
+      );
+      staleDetail.resolve(sessionDetailResponse(stalePending));
+    });
+
+    expect(
+      await screen.findByText("Runner rejected the stale pending delivery."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Message queued — waiting for runner"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Conversation" })).queryByText(
+        "rejected after stale detail",
+      ),
+    ).toBeNull();
   });
 
   it("renders agent messages as markdown while keeping user messages literal", async () => {
@@ -4170,7 +4786,14 @@ describe("App", () => {
           ) {
             return false;
           }
-          return JSON.parse(String(call.init.body)).projectId === "project-1";
+          const body = JSON.parse(String(call.init.body)) as {
+            projectId?: string;
+            requestId?: string;
+          };
+          return (
+            body.projectId === "project-1" &&
+            /^session-/.test(body.requestId ?? "")
+          );
         }),
       ).toBe(true),
     );
@@ -4840,6 +5463,11 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "Switch Session: Backup session" }),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: "Chat composer" }),
+      ).toHaveAttribute("placeholder", "Session detail unavailable");
+    });
 
     const sessionSwitcher = openSessionSwitcher(/Backup session/);
     expect(sessionSwitcher.getByLabelText("Project")).toHaveValue(

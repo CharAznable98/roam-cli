@@ -4,34 +4,51 @@ import type {
   UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
 import { nowIso } from "@roamcli/shared/protocol";
+import type {
+  SessionGeneration,
+  SessionWaitCoordinator,
+} from "../sessions/wait-coordinator.js";
 import type { RunnerEventSink } from "../sessions/types.js";
 
 export interface UserInputRequestTrackerOptions {
   emit: RunnerEventSink;
+  waits: SessionWaitCoordinator;
+}
+
+export class UserInputAcceptanceRetryableError extends Error {
+  public constructor(cause: unknown) {
+    super("User input acceptance status could not be synchronized", { cause });
+    this.name = "UserInputAcceptanceRetryableError";
+  }
+}
+
+interface PendingUserInputRequest {
+  inputRequestId: string;
+  token: SessionGeneration;
+  resolve: (decision: UserInputDecision) => void;
+  reject: (error: Error) => void;
+  accepting: boolean;
 }
 
 export class UserInputRequestTracker {
   readonly #emit: RunnerEventSink;
-  readonly #pendingBySession = new Map<
-    string,
-    {
-      inputRequestId: string;
-      resolve: (decision: UserInputDecision) => void;
-      reject: (error: Error) => void;
-    }
-  >();
+  readonly #waits: SessionWaitCoordinator;
+  readonly #pendingBySession = new Map<string, PendingUserInputRequest>();
 
   public constructor(options: UserInputRequestTrackerOptions) {
     this.#emit = options.emit;
+    this.#waits = options.waits;
   }
 
   public async request(
+    token: SessionGeneration,
     session: {
       id: string;
       agent?: string;
     },
     draft: UserInputRequestDraft,
   ): Promise<UserInputDecision> {
+    const question = supportedQuestion(draft);
     const existing = this.#pendingBySession.get(session.id);
     if (existing !== undefined) {
       throw new Error(
@@ -43,57 +60,148 @@ export class UserInputRequestTracker {
     const decision = new Promise<UserInputDecision>((resolve, reject) => {
       this.#pendingBySession.set(session.id, {
         inputRequestId,
+        token,
         resolve,
         reject,
+        accepting: false,
       });
     });
+    void decision.catch(() => undefined);
 
-    await this.#emit({
-      type: "sessionStatus",
-      sessionId: session.id,
-      status: "waiting_input",
-    });
-    await this.#emit({
-      type: "agentActivity",
-      sessionId: session.id,
-      agent: session.agent ?? "unknown",
-      kind: "status",
-      label: draft.summary,
-    });
+    if (!this.#waits.add(token, inputRequestId, "input")) {
+      const pending = this.#pendingBySession.get(session.id);
+      this.#pendingBySession.delete(session.id);
+      const error = new Error(
+        `Session ended before user input was requested: ${session.id}`,
+      );
+      pending?.reject(error);
+      throw error;
+    }
+    try {
+      await this.#emit({
+        type: "agentActivity",
+        sessionId: session.id,
+        agent: session.agent ?? "unknown",
+        kind: "status",
+        label:
+          question.header.length > 0
+            ? `${question.header}: ${question.question}`
+            : question.question,
+        inputRequestId,
+      });
+      if (!this.#isPending(session.id, inputRequestId, token)) {
+        return decision;
+      }
+      await this.#waits.syncStatus(token);
+    } catch (error: unknown) {
+      const pending = this.#pendingBySession.get(session.id);
+      if (
+        pending?.inputRequestId === inputRequestId &&
+        pending.token.generation === token.generation
+      ) {
+        this.#pendingBySession.delete(session.id);
+        this.#waits.remove(token, inputRequestId);
+        pending.reject(toError(error));
+        await this.#waits.syncStatus(token).catch(() => undefined);
+      }
+      throw error;
+    }
 
     return decision;
   }
 
-  public resolve(sessionId: string, content: string): void {
+  public async resolve(
+    sessionId: string,
+    inputRequestId: string | undefined,
+    content: string,
+  ): Promise<boolean> {
     const pending = this.#pendingBySession.get(sessionId);
     if (pending === undefined) {
-      return;
+      return false;
+    }
+    if (
+      inputRequestId !== undefined &&
+      inputRequestId !== pending.inputRequestId
+    ) {
+      return false;
+    }
+    if (pending.accepting) {
+      return false;
+    }
+
+    pending.accepting = true;
+    if (!this.#waits.remove(pending.token, pending.inputRequestId)) {
+      pending.accepting = false;
+      return false;
+    }
+
+    try {
+      await this.#waits.syncStatus(pending.token);
+    } catch (error: unknown) {
+      if (this.#pendingBySession.get(sessionId) === pending) {
+        pending.accepting = false;
+        this.#waits.add(pending.token, pending.inputRequestId, "input");
+      }
+      throw new UserInputAcceptanceRetryableError(error);
+    }
+
+    if (this.#pendingBySession.get(sessionId) !== pending) {
+      return false;
     }
     this.#pendingBySession.delete(sessionId);
-    void Promise.resolve()
-      .then(() =>
-        this.#emit({
-          type: "sessionStatus",
-          sessionId,
-          status: "running",
-        }),
-      )
-      .catch(() => undefined)
-      .finally(() => {
-        pending.resolve({
-          inputRequestId: pending.inputRequestId,
-          content,
-          answeredAt: nowIso(),
-        });
-      });
+    pending.resolve({
+      inputRequestId: pending.inputRequestId,
+      content,
+      answeredAt: nowIso(),
+    });
+    return true;
   }
 
-  public clear(sessionId: string): void {
+  public clear(sessionId: string, token?: SessionGeneration): void {
     const pending = this.#pendingBySession.get(sessionId);
-    if (pending === undefined) {
+    if (
+      pending === undefined ||
+      (token !== undefined && pending.token.generation !== token.generation)
+    ) {
       return;
     }
     this.#pendingBySession.delete(sessionId);
+    this.#waits.remove(pending.token, pending.inputRequestId);
     pending.reject(new Error("Session ended before user input was provided"));
   }
+
+  #isPending(
+    sessionId: string,
+    inputRequestId: string,
+    token: SessionGeneration,
+  ): boolean {
+    const pending = this.#pendingBySession.get(sessionId);
+    return (
+      pending?.inputRequestId === inputRequestId &&
+      pending.token.generation === token.generation &&
+      this.#waits.has(token, inputRequestId)
+    );
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function supportedQuestion(
+  draft: UserInputRequestDraft,
+): UserInputRequestDraft["questions"][number] {
+  const question = draft.questions[0];
+  if (
+    draft.questions.length !== 1 ||
+    question === undefined ||
+    question.isSecret ||
+    question.isOther ||
+    (question.options?.length ?? 0) > 0
+  ) {
+    throw new Error(
+      "RoamCli currently supports a single non-secret free-text question; structured choices, multiple questions, and secrets are not supported",
+    );
+  }
+  return question;
 }

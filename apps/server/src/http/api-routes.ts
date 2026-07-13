@@ -29,8 +29,7 @@ import {
   ApiUpdateProjectPromptPresetSchema,
   ApiUpdateSessionSchema,
   ApiWriteFileSchema,
-  DEFAULT_MAX_IMAGE_BYTES,
-  DEFAULT_MAX_IMAGES_PER_TURN,
+  MAX_TOTAL_IMAGE_BYTES_PER_TURN,
   nowIso,
 } from "@roamcli/shared/protocol";
 import { newId } from "../infra/ids.js";
@@ -54,8 +53,17 @@ import {
 } from "./schemas.js";
 
 const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
-  Math.ceil(DEFAULT_MAX_IMAGE_BYTES * DEFAULT_MAX_IMAGES_PER_TURN * (4 / 3)) +
-  1024 * 1024;
+  Math.ceil(MAX_TOTAL_IMAGE_BYTES_PER_TURN * (4 / 3)) + 1024 * 1024;
+
+// requestId was added to make browser retries durable, but older HTTP clients
+// do not send it. Keep the public protocol strict for current clients while
+// accepting the legacy shape at the HTTP compatibility boundary.
+const HttpCreateSessionSchema = ApiCreateSessionSchema.extend({
+  requestId: ApiCreateSessionSchema.shape.requestId.optional(),
+});
+const HttpCreateMessageSchema = ApiCreateMessageSchema.extend({
+  requestId: ApiCreateMessageSchema.shape.requestId.optional(),
+});
 
 function toFileTreeQuery(parsed: {
   path: string;
@@ -323,14 +331,17 @@ function registerSessionRoutes(
     "/v1/sessions",
     { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const parsed = ApiCreateSessionSchema.safeParse(request.body);
+      const parsed = HttpCreateSessionSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply
           .code(400)
           .send({ error: "invalid_request", issues: parsed.error.issues });
       }
 
-      const result = await context.services.sessions.createSession(parsed.data);
+      const { requestId, ...legacyInput } = parsed.data;
+      const result = await context.services.sessions.createSession(
+        requestId === undefined ? legacyInput : { ...legacyInput, requestId },
+      );
       if (!result.ok) {
         if (result.error === "runner_offline") {
           return reply.code(409).send({ error: "runner_offline" });
@@ -392,6 +403,9 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      pendingMessageDeliveries: context.store.listPendingMessageDeliveries(
+        session.id,
+      ),
       activities: context.store.listAgentActivities(session.id),
       attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
@@ -421,16 +435,17 @@ function registerSessionRoutes(
     { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
     async (request, reply) => {
       const params = SessionParamsSchema.parse(request.params);
-      const parsed = ApiCreateMessageSchema.safeParse(request.body);
+      const parsed = HttpCreateMessageSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply
           .code(400)
           .send({ error: "invalid_request", issues: parsed.error.issues });
       }
 
+      const { requestId, ...legacyInput } = parsed.data;
       const result = await context.services.sessions.createUserMessage(
         params.id,
-        parsed.data,
+        requestId === undefined ? legacyInput : { ...legacyInput, requestId },
       );
       if (!result.ok) {
         if (result.error === "session_not_found") {
@@ -451,7 +466,7 @@ function registerSessionRoutes(
         }
         return reply.code(400).send({ error: result.error });
       }
-      return reply.code(201).send(result.value);
+      return reply.code(result.value.queued ? 202 : 201).send(result.value);
     },
   );
 
@@ -604,12 +619,14 @@ function registerProjectRoutes(
   app.post("/v1/projects/:id/archive", async (request, reply) => {
     const params = ProjectParamsSchema.parse(request.params);
     const archivedAt = nowIso();
-    context.services.sessions.handleProjectArchived(params.id, archivedAt);
     const project = context.store.archiveProject(params.id, archivedAt);
     if (!project) {
       return reply.code(404).send({ error: "project_not_found" });
     }
     context.hub.broadcast({ type: "project:updated", project });
+    void context.services.sessions
+      .handleProjectArchived(params.id, archivedAt)
+      .catch(() => undefined);
     return { project };
   });
 

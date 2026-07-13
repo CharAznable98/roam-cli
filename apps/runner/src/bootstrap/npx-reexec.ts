@@ -17,7 +17,34 @@ export function buildNpxRunnerArgs(input: {
     `${RUNNER_PACKAGE}@${PACKAGE_VERSION}`,
     ...input.agentPlugins.map(packageSpecForAgentPlugin),
   ].flatMap((packageName) => ["--package", packageName]);
-  return ["--yes", ...packageArgs, "--", "roam-runner", ...input.runnerArgs];
+  return [
+    "--yes",
+    ...packageArgs,
+    "--",
+    "roam-runner",
+    ...withoutRunnerToken(input.runnerArgs).args,
+  ];
+}
+
+export function buildNpxRunnerInvocation(input: {
+  agentPlugins: readonly string[];
+  runnerArgs: readonly string[];
+  token?: string;
+  env: NodeJS.ProcessEnv;
+}): { args: string[]; env: NodeJS.ProcessEnv } {
+  const scrubbed = withoutRunnerToken(input.runnerArgs);
+  const token = input.token ?? scrubbed.token ?? input.env.ROAM_RUNNER_TOKEN;
+  return {
+    args: buildNpxRunnerArgs({
+      agentPlugins: input.agentPlugins,
+      runnerArgs: scrubbed.args,
+    }),
+    env: {
+      ...input.env,
+      [REEXEC_ENV]: "1",
+      ...(token === undefined ? {} : { ROAM_RUNNER_TOKEN: token }),
+    },
+  };
 }
 
 export function hasAlreadyReexeced(
@@ -29,11 +56,13 @@ export function hasAlreadyReexeced(
 export async function reexecRunnerWithNpx(input: {
   agentPlugins: readonly string[];
   runnerArgs: readonly string[];
+  token?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<never> {
   const env = input.env ?? process.env;
-  const child = spawn("npx", buildNpxRunnerArgs(input), {
-    env: { ...env, [REEXEC_ENV]: "1" },
+  const invocation = buildNpxRunnerInvocation({ ...input, env });
+  const child = spawn("npx", invocation.args, {
+    env: invocation.env,
     stdio: "inherit",
   });
   const exitCode = await new Promise<number>((resolve, reject) => {
@@ -47,6 +76,30 @@ export async function reexecRunnerWithNpx(input: {
     });
   });
   process.exit(exitCode);
+}
+
+function withoutRunnerToken(args: readonly string[]): {
+  args: string[];
+  token?: string;
+} {
+  const safeArgs: string[] = [];
+  let token: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--token") {
+      token = args[index + 1] ?? token;
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--token=")) {
+      token = arg.slice("--token=".length);
+      continue;
+    }
+    if (arg !== undefined) {
+      safeArgs.push(arg);
+    }
+  }
+  return token === undefined ? { args: safeArgs } : { args: safeArgs, token };
 }
 
 export function isPluginLoadFailure(error: unknown): boolean {

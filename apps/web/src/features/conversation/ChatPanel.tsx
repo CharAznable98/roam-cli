@@ -140,6 +140,7 @@ export function ChatPanel({
   onRetrySessionDetail,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const draftRevisionRef = useRef(0);
   const [draftImages, setDraftImages] = useState<DraftImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
@@ -154,7 +155,6 @@ export function ChatPanel({
   const renameInputRef = useRef<HTMLInputElement>(null);
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
-  const compactComposerPlaceholder = useCompactComposerPlaceholder();
   const messageScrollKey = messages
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|");
@@ -300,14 +300,22 @@ export function ChatPanel({
     if (!cleanDraft || !canSubmitComposer || submitting) {
       return;
     }
+    const submittedDraftRevision = draftRevisionRef.current;
+    const submittedImageIds = new Set(
+      draftImages.map((attachment) => attachment.id),
+    );
 
     setSubmitting(true);
     setAttachmentError(undefined);
     try {
       await onSend(cleanDraft, await draftImagesToUploads(draftImages));
       draftImages.forEach(revokeDraftPreview);
-      setDraftImages([]);
-      setDraft("");
+      setDraftImages((current) =>
+        current.filter((attachment) => !submittedImageIds.has(attachment.id)),
+      );
+      if (draftRevisionRef.current === submittedDraftRevision) {
+        setDraft("");
+      }
     } catch (error) {
       setAttachmentError(getErrorMessage(error, "Message was not sent."));
     } finally {
@@ -692,7 +700,10 @@ export function ChatPanel({
           ) : null}
           <PromptComposer
             value={draft}
-            onChange={setDraft}
+            onChange={(value) => {
+              draftRevisionRef.current += 1;
+              setDraft(value);
+            }}
             runnerId={session.runnerId}
             agent={session.agent}
             basePath={session.executionFolder}
@@ -723,9 +734,7 @@ export function ChatPanel({
                   ? "Session detail unavailable"
                   : "Session is loading..."
                 : canSubmitMessage
-                  ? compactComposerPlaceholder
-                    ? "Message the active session"
-                    : "Message the active session, Cmd/Ctrl+Enter to send"
+                  ? "Message the active session"
                   : claudeTurnInProgress
                     ? "Waiting for Claude Code"
                     : "Stream is reconnecting"
@@ -886,21 +895,6 @@ function isNearMessageListBottom(list: HTMLElement): boolean {
   const distanceFromBottom =
     list.scrollHeight - list.scrollTop - list.clientHeight;
   return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-function useCompactComposerPlaceholder(): boolean {
-  const [compact, setCompact] = useState(() =>
-    typeof window === "undefined" ? false : window.innerWidth < 768,
-  );
-
-  useEffect(() => {
-    const listener = () => setCompact(window.innerWidth < 768);
-    listener();
-    window.addEventListener("resize", listener);
-    return () => window.removeEventListener("resize", listener);
-  }, []);
-
-  return compact;
 }
 
 function getErrorMessage(

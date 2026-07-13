@@ -3,8 +3,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import {
   commitGitChanges,
   discardGitPaths,
+  readGitBlame,
   readGitCommitFiles,
   readGitCommitPage,
   readGitFileDiff,
@@ -28,6 +31,283 @@ const context: GitContextRef = { kind: "project", projectId: "project-1" };
 const GIT_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 describe("runner git workspace operations", () => {
+  it("accepts a canonical workspace through a lexical directory alias", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roam-runner-git-alias-"));
+    const lexicalWorkspace = join(root, "workspace");
+    const workspaceAlias = join(root, "workspace-alias");
+    await mkdir(lexicalWorkspace);
+    await git(lexicalWorkspace, ["init"]);
+    await symlink(lexicalWorkspace, workspaceAlias, "dir");
+
+    const status = await readGitStatus({
+      workspace: await realpath(lexicalWorkspace),
+      cwd: workspaceAlias,
+      requestId: "status-alias",
+      projectId: "project-1",
+      context,
+    });
+
+    expect(status.kind).toBe("repository");
+  });
+
+  it("rejects revision option injection before git can write output files", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-git-revision-"),
+    );
+    const proofDirectory = await mkdtemp(
+      join(tmpdir(), "roam-runner-git-revision-proof-"),
+    );
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "root"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    await expectRejectedRevisionOutput(
+      join(proofDirectory, "history.out"),
+      undefined,
+      (revision) =>
+        readGitCommitPage({
+          workspace,
+          cwd: ".",
+          requestId: "history-injection",
+          projectId: "project-1",
+          context,
+          ref: revision,
+          limit: 20,
+        }),
+    );
+    await expectRejectedRevisionOutput(
+      join(proofDirectory, "blame.out"),
+      undefined,
+      (revision) =>
+        readGitBlame({
+          workspace,
+          cwd: ".",
+          requestId: "blame-injection",
+          projectId: "project-1",
+          context,
+          path: "README.md",
+          ref: revision,
+        }),
+    );
+    await expectRejectedRevisionOutput(
+      join(proofDirectory, "commit-files.out"),
+      undefined,
+      (revision) =>
+        readGitCommitFiles({
+          workspace,
+          cwd: ".",
+          requestId: "commit-files-injection",
+          projectId: "project-1",
+          context,
+          sha: revision,
+        }),
+    );
+
+    const oldDiffProof = join(proofDirectory, "old-diff.out");
+    await expectRejectedRevisionOutput(
+      oldDiffProof,
+      `${oldDiffProof}:README.md`,
+      (revision) =>
+        readGitFileDiff({
+          workspace,
+          cwd: ".",
+          requestId: "old-diff-injection",
+          projectId: "project-1",
+          context,
+          path: "README.md",
+          mode: "commit",
+          oldRef: revision,
+          newRef: head,
+        }),
+    );
+    const newDiffProof = join(proofDirectory, "new-diff.out");
+    await expectRejectedRevisionOutput(
+      newDiffProof,
+      `${newDiffProof}:README.md`,
+      (revision) =>
+        readGitFileDiff({
+          workspace,
+          cwd: ".",
+          requestId: "new-diff-injection",
+          projectId: "project-1",
+          context,
+          path: "README.md",
+          mode: "commit",
+          oldRef: head,
+          newRef: revision,
+        }),
+    );
+
+    for (const revision of [
+      "HEAD\0suffix",
+      "HEAD\nsuffix",
+      "HEAD\u007fsuffix",
+    ]) {
+      await expect(
+        readGitCommitPage({
+          workspace,
+          cwd: ".",
+          requestId: "history-control-character",
+          projectId: "project-1",
+          context,
+          ref: revision,
+          limit: 20,
+        }),
+      ).rejects.toThrow("Invalid git revision");
+    }
+  });
+
+  it("treats user-supplied mutation paths as literal git paths", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-literal-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "tracked.txt"), "original\n", "utf8");
+    await git(workspace, ["add", "tracked.txt"]);
+    await git(workspace, ["commit", "-m", "init"]);
+
+    await writeFile(join(workspace, "tracked.txt"), "modified\n", "utf8");
+    await writeFile(join(workspace, ":(glob)**"), "target\n", "utf8");
+    await writeFile(join(workspace, "keep.txt"), "keep\n", "utf8");
+
+    await expect(
+      discardGitPaths({
+        workspace,
+        cwd: ".",
+        requestId: "discard-literal",
+        projectId: "project-1",
+        context,
+        operation: "discard",
+        paths: [":(glob)**"],
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    await expect(stat(join(workspace, ":(glob)**"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      readFile(join(workspace, "tracked.txt"), "utf8"),
+    ).resolves.toBe("modified\n");
+    await expect(readFile(join(workspace, "keep.txt"), "utf8")).resolves.toBe(
+      "keep\n",
+    );
+  });
+
+  it("preserves leading and trailing spaces when diffing, staging, and discarding paths", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-space-"));
+    const spacedPath = " target ";
+    const trimmedNeighbor = "target";
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, spacedPath), "spaced-old\n", "utf8");
+    await writeFile(join(workspace, trimmedNeighbor), "neighbor-old\n", "utf8");
+    await git(workspace, ["add", "--", spacedPath, trimmedNeighbor]);
+    await git(workspace, ["commit", "-m", "space paths"]);
+
+    await writeFile(join(workspace, spacedPath), "spaced-new\n", "utf8");
+    await writeFile(join(workspace, trimmedNeighbor), "neighbor-new\n", "utf8");
+    await expect(
+      readGitFileDiff({
+        workspace,
+        cwd: ".",
+        requestId: "space-diff",
+        projectId: "project-1",
+        context,
+        path: spacedPath,
+        mode: "working_tree",
+      }),
+    ).resolves.toMatchObject({
+      path: spacedPath,
+      oldContent: "spaced-old\n",
+      newContent: "spaced-new\n",
+    });
+
+    await expect(
+      stageGitPaths({
+        workspace,
+        cwd: ".",
+        requestId: "space-stage",
+        projectId: "project-1",
+        context,
+        operation: "stage",
+        paths: [spacedPath],
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    await expect(
+      readGitFileDiff({
+        workspace,
+        cwd: ".",
+        requestId: "space-staged-diff",
+        projectId: "project-1",
+        context,
+        path: spacedPath,
+        mode: "staged",
+      }),
+    ).resolves.toMatchObject({ newContent: "spaced-new\n" });
+    await expect(
+      readGitFileDiff({
+        workspace,
+        cwd: ".",
+        requestId: "neighbor-staged-diff",
+        projectId: "project-1",
+        context,
+        path: trimmedNeighbor,
+        mode: "staged",
+      }),
+    ).resolves.toMatchObject({
+      oldContent: "neighbor-old\n",
+      newContent: "neighbor-old\n",
+    });
+
+    await writeFile(join(workspace, spacedPath), "discard-this\n", "utf8");
+    await expect(
+      discardGitPaths({
+        workspace,
+        cwd: ".",
+        requestId: "space-discard",
+        projectId: "project-1",
+        context,
+        operation: "discard",
+        paths: [spacedPath],
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    await expect(readFile(join(workspace, spacedPath), "utf8")).resolves.toBe(
+      "spaced-new\n",
+    );
+    await expect(
+      readFile(join(workspace, trimmedNeighbor), "utf8"),
+    ).resolves.toBe("neighbor-new\n");
+  });
+
+  it("rejects working-tree diff symlinks that escape the repository", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "roam-runner-git-outside-"));
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "README.md"), "root\n", "utf8");
+    await git(workspace, ["add", "README.md"]);
+    await git(workspace, ["commit", "-m", "init"]);
+    await writeFile(join(outside, "secret.txt"), "secret\n", "utf8");
+    await symlink(join(outside, "secret.txt"), join(workspace, "secret.txt"));
+
+    await expect(
+      readGitFileDiff({
+        workspace,
+        cwd: ".",
+        requestId: "diff-link",
+        projectId: "project-1",
+        context,
+        path: "secret.txt",
+        mode: "working_tree",
+      }),
+    ).rejects.toThrow("escapes git cwd");
+  });
+
   it("reads status and diff, stages tracked paths, and discards untracked paths", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-"));
     await git(workspace, ["init"]);
@@ -293,6 +573,7 @@ describe("runner git workspace operations", () => {
       requestId: "history-1",
       projectId: "project-1",
       context,
+      ref: "HEAD",
       limit: 20,
     });
 
@@ -320,6 +601,22 @@ describe("runner git workspace operations", () => {
         { path: "README.md", status: "modified", staged: false },
         { path: "src.ts", status: "added", staged: false },
       ]),
+    });
+
+    await expect(
+      readGitBlame({
+        workspace,
+        cwd: ".",
+        requestId: "blame-1",
+        projectId: "project-1",
+        context,
+        path: "README.md",
+        ref: "HEAD",
+      }),
+    ).resolves.toMatchObject({
+      path: "README.md",
+      ref: "HEAD",
+      ranges: [{ startLine: 1, endLine: 1, commitSha: head }],
     });
   });
 
@@ -356,6 +653,37 @@ describe("runner git workspace operations", () => {
     expect(diff.newContent).toBe("new\n");
   });
 
+  it("preserves whitespace and control characters in renamed commit paths", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-rename-paths-"),
+    );
+    const oldPath = " old\tname\n.txt ";
+    const newPath = " new\tname\n.ts ";
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, oldPath), "unchanged\n", "utf8");
+    await git(workspace, ["add", "--", oldPath]);
+    await git(workspace, ["commit", "-m", "initial"]);
+    await git(workspace, ["mv", "--", oldPath, newPath]);
+    await git(workspace, ["commit", "-m", "rename unusual path"]);
+    const head = await gitOutput(workspace, ["rev-parse", "HEAD"]);
+
+    await expect(
+      readGitCommitFiles({
+        workspace,
+        cwd: ".",
+        requestId: "commit-files-unusual-rename",
+        projectId: "project-1",
+        context,
+        sha: head,
+      }),
+    ).resolves.toMatchObject({
+      sha: head,
+      files: [{ path: newPath, oldPath, status: "renamed", staged: false }],
+    });
+  });
+
   it("truncates oversized committed file diffs without failing", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-large-diff-"));
     await git(workspace, ["init"]);
@@ -385,6 +713,37 @@ describe("runner git workspace operations", () => {
     expect(diff.tooLarge).toBe(true);
     expect(diff.binary).toBe(false);
     expect(diff.oldContent).toBe("");
+    expect(diff.newContent).toHaveLength(1024 * 1024);
+  });
+
+  it("bounds oversized working-tree file diff reads", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "roam-runner-large-worktree-diff-"),
+    );
+    await git(workspace, ["init"]);
+    await git(workspace, ["config", "user.email", "test@example.com"]);
+    await git(workspace, ["config", "user.name", "Test User"]);
+    await writeFile(join(workspace, "large.txt"), "small\n", "utf8");
+    await git(workspace, ["add", "large.txt"]);
+    await git(workspace, ["commit", "-m", "small"]);
+    await writeFile(
+      join(workspace, "large.txt"),
+      "b".repeat(1024 * 1024 + 4096),
+      "utf8",
+    );
+
+    const diff = await readGitFileDiff({
+      workspace,
+      cwd: ".",
+      requestId: "large-worktree-diff",
+      projectId: "project-1",
+      context,
+      path: "large.txt",
+      mode: "working_tree",
+    });
+
+    expect(diff.tooLarge).toBe(true);
+    expect(diff.binary).toBe(false);
     expect(diff.newContent).toHaveLength(1024 * 1024);
   });
 
@@ -470,4 +829,22 @@ async function git(cwd: string, args: string[]): Promise<void> {
 async function gitOutput(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
   return String(stdout).trim();
+}
+
+async function expectRejectedRevisionOutput(
+  injectedOutputPath: string,
+  observedOutputPath: string | undefined,
+  run: (revision: string) => Promise<unknown>,
+): Promise<void> {
+  const target = observedOutputPath ?? injectedOutputPath;
+  await expect(run(`--output=${injectedOutputPath}`)).rejects.toThrow(
+    "Invalid git revision",
+  );
+  await expect(stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+
+  await writeFile(target, "sentinel\n", "utf8");
+  await expect(run(`--output=${injectedOutputPath}`)).rejects.toThrow(
+    "Invalid git revision",
+  );
+  await expect(readFile(target, "utf8")).resolves.toBe("sentinel\n");
 }

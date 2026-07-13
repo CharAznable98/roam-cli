@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import type {
-  AgentRuntimeEvent,
-  AgentSessionContext,
+import {
+  AgentInputUnavailableError,
+  type AgentRuntimeEvent,
+  type AgentSessionContext,
 } from "@roamcli/agent-plugin-sdk";
 import type { Session } from "@roamcli/shared/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +37,68 @@ describe("CodexAppServerSession", () => {
     });
   });
 
+  it("does not accept start until the initial turn/start succeeds", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const session = new CodexAppServerSession({
+      command: "codex",
+      args: ["app-server"],
+      context: makeContext(events),
+    });
+
+    const start = session.start();
+    const child = childProcess.children[0] as FakeChild;
+    const initialize = await waitForRequest(child, "initialize");
+    child.respond(initialize.id, {});
+    const threadStart = await waitForRequest(child, "thread/start");
+    child.respond(threadStart.id, { thread: { id: "thread-1" } });
+    const turnStart = await waitForRequest(child, "turn/start");
+    let settled = false;
+    void start.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await settle();
+    expect(settled).toBe(false);
+    child.respond(turnStart.id, { turn: { id: "turn-1" } });
+    await expect(start).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it("rejects start when the initial turn/start fails", async () => {
+    const events: AgentRuntimeEvent[] = [];
+    const session = new CodexAppServerSession({
+      command: "codex",
+      args: ["app-server"],
+      context: makeContext(events),
+    });
+
+    const start = session.start();
+    const child = childProcess.children[0] as FakeChild;
+    const initialize = await waitForRequest(child, "initialize");
+    child.respond(initialize.id, {});
+    const threadStart = await waitForRequest(child, "thread/start");
+    child.respond(threadStart.id, { thread: { id: "thread-1" } });
+    const turnStart = await waitForRequest(child, "turn/start");
+    child.respondError(turnStart.id, "initial turn rejected");
+
+    await expect(start).rejects.toThrow("initial turn rejected");
+  });
+
+  it("rejects follow-up input after the app-server session closes", async () => {
+    const { session } = await launchSession();
+
+    session.close();
+
+    expect(() => session.deliverInput({ content: "too late" })).toThrow(
+      AgentInputUnavailableError,
+    );
+  });
+
   it("keeps running after a completed turn until the root thread is idle", async () => {
     const { child, events } = await launchSession();
 
@@ -56,6 +119,71 @@ describe("CodexAppServerSession", () => {
     await waitFor(() => statusEvents(events).includes("completed"));
     expect(statusEvents(events)).toEqual(["completed"]);
     expect(child.killedSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("never streams approval directives into assistant output", async () => {
+    const approvals: unknown[] = [];
+    const { child, events } = await launchSession({
+      context: (runtimeEvents) => ({
+        ...makeContext(runtimeEvents),
+        requestApproval: async (draft) => {
+          approvals.push(draft);
+          return {
+            approvalId: "approval-stream-1",
+            approved: true,
+            signedAt: "2026-07-10T00:00:00.000Z",
+          };
+        },
+      }),
+    });
+    const directive =
+      'ROAMCLI_APPROVAL: {"kind":"execCommand","summary":"Run checks","payload":{"command":"pnpm test"}}';
+
+    child.notify("item/agentMessage/delta", {
+      itemId: "message-1",
+      delta: "Visible answer\nROAMCLI_AP",
+    });
+    await settle();
+    child.notify("item/agentMessage/delta", {
+      itemId: "message-1",
+      delta: directive.slice("ROAMCLI_AP".length),
+    });
+    await settle();
+
+    const streamed = events.filter((event) => event.type === "assistantOutput");
+    expect(streamed).toEqual([
+      expect.objectContaining({ content: "Visible answer\n", done: false }),
+    ]);
+    expect(streamed.map((event) => event.content).join("")).not.toContain(
+      "ROAMCLI",
+    );
+
+    child.notify("item/completed", {
+      item: {
+        id: "message-1",
+        type: "agentMessage",
+        text: `Visible answer\n${directive}`,
+      },
+    });
+    await waitFor(() => approvals.length === 1);
+
+    const completed = events.filter(
+      (event) => event.type === "assistantOutput",
+    );
+    expect(completed.at(-1)).toMatchObject({
+      content: "Visible answer",
+      mode: "replace",
+      done: true,
+    });
+    expect(completed.map((event) => event.content).join("")).not.toContain(
+      "ROAMCLI",
+    );
+    expect(approvals).toEqual([
+      expect.objectContaining({
+        kind: "execCommand",
+        summary: "Run checks",
+      }),
+    ]);
   });
 
   it("waits for turn completion when root idle arrives first", async () => {
@@ -87,7 +215,14 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    session.deliverInput({ content: "next prompt" });
+    const delivery = session.deliverInput({
+      content: "next prompt",
+      deliveryId: "queued-delivery-1",
+    });
+    let deliverySettled = false;
+    void delivery.then(() => {
+      deliverySettled = true;
+    });
     await settle();
 
     expect(child.requests("turn/steer")).toHaveLength(0);
@@ -100,7 +235,10 @@ describe("CodexAppServerSession", () => {
 
     const secondTurn = await waitForRequest(child, "turn/start", 2);
     expect(statusEvents(events)).toEqual([]);
+    expect(deliverySettled).toBe(false);
     child.respond(secondTurn.id, { turn: { id: "turn-2" } });
+    await delivery;
+    expect(deliverySettled).toBe(true);
     child.notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-2", status: "completed" },
@@ -303,7 +441,7 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    session.deliverInput({ content: "next prompt" });
+    const delivery = session.deliverInput({ content: "next prompt" });
     await settle();
 
     expect(child.requests("turn/start")).toHaveLength(1);
@@ -318,6 +456,7 @@ describe("CodexAppServerSession", () => {
     const secondTurn = await waitForRequest(child, "turn/start", 2);
     expect(statusEvents(events)).toEqual([]);
     child.respond(secondTurn.id, { turn: { id: "turn-2" } });
+    await delivery;
     child.notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-2", status: "completed" },
@@ -340,10 +479,11 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    session.deliverInput({ content: "next prompt" });
+    const delivery = session.deliverInput({ content: "next prompt" });
     await settle();
 
     await session.control("stop");
+    await expect(delivery).rejects.toBeInstanceOf(AgentInputUnavailableError);
     await settle();
 
     expect(statusEvents(events)).toEqual(["stopped"]);
@@ -551,20 +691,21 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([
-        { kind: "tool", label: "Command pnpm test -- --runInBand" },
-        { kind: "tool", label: "Running pnpm build" },
-        { kind: "tool", label: "Proposed edits to 2 files" },
-        { kind: "tool", label: "Using GitHub search" },
-        { kind: "tool", label: "Using images generate" },
-        { kind: "tool", label: "Searching web" },
-        { kind: "tool", label: "Generating image" },
-        { kind: "tool", label: "Viewing image" },
-        { kind: "status", label: "Compacting context" },
-        { kind: "status", label: "Waiting for agent" },
-        { kind: "status", label: "Starting agent" },
-      ]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([
+      { kind: "tool", label: "Command pnpm test -- --runInBand" },
+      { kind: "tool", label: "Running pnpm build" },
+      { kind: "tool", label: "Proposed edits to 2 files" },
+      { kind: "tool", label: "Using GitHub search" },
+      { kind: "tool", label: "Using images generate" },
+      { kind: "tool", label: "Searching web" },
+      { kind: "tool", label: "Generating image" },
+      { kind: "tool", label: "Viewing image" },
+      { kind: "status", label: "Compacting context" },
+      { kind: "status", label: "Waiting for agent" },
+      { kind: "status", label: "Starting agent" },
+    ]);
   });
 
   it("accepts unscoped item activity during the active root turn", async () => {
@@ -587,11 +728,12 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([
-        { kind: "tool", label: "Command pnpm root" },
-        { kind: "tool", label: "Command failed: pnpm root" },
-      ]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([
+      { kind: "tool", label: "Command pnpm root" },
+      { kind: "tool", label: "Command failed: pnpm root" },
+    ]);
   });
 
   it("awaits item start activity before processing later item events", async () => {
@@ -694,8 +836,9 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([{ kind: "tool", label: "Command pnpm root" }]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([{ kind: "tool", label: "Command pnpm root" }]);
   });
 
   it("keeps the completed root turn id for scoped activity filtering until idle", async () => {
@@ -733,8 +876,9 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([{ kind: "tool", label: "Command pnpm root-turn" }]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([{ kind: "tool", label: "Command pnpm root-turn" }]);
   });
 
   it("emits completed item activity only for attention states", async () => {
@@ -793,13 +937,14 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([
-        { kind: "tool", label: "Command failed: pnpm test" },
-        { kind: "tool", label: "File edit declined 1 file" },
-        { kind: "tool", label: "Tool failed: images generate" },
-        { kind: "status", label: "Agent coordination failed" },
-      ]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([
+      { kind: "tool", label: "Command failed: pnpm test" },
+      { kind: "tool", label: "File edit declined 1 file" },
+      { kind: "tool", label: "Tool failed: images generate" },
+      { kind: "status", label: "Agent coordination failed" },
+    ]);
   });
 
   it("keeps low-frequency Codex warning and retry activity", async () => {
@@ -836,13 +981,14 @@ describe("CodexAppServerSession", () => {
     });
     await settle();
 
-    expect(activityEvents(events).map(({ kind, label }) => ({ kind, label })))
-      .toEqual([
-        { kind: "system", label: "temporary upstream issue" },
-        { kind: "system", label: "Codex warning: model quota nearly exhausted" },
-        { kind: "system", label: "Codex warning: global config summary" },
-        { kind: "system", label: "Model rerouted to gpt-5.4-mini" },
-      ]);
+    expect(
+      activityEvents(events).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([
+      { kind: "system", label: "temporary upstream issue" },
+      { kind: "system", label: "Codex warning: model quota nearly exhausted" },
+      { kind: "system", label: "Codex warning: global config summary" },
+      { kind: "system", label: "Model rerouted to gpt-5.4-mini" },
+    ]);
   });
 });
 
@@ -873,13 +1019,12 @@ async function launchSession(
   child.respond(initialize.id, {});
   const threadStart = await waitForRequest(child, "thread/start");
   child.respond(threadStart.id, { thread: { id: "thread-1" } });
-  await start;
-
   const turnStart = await waitForRequest(child, "turn/start");
   child.respond(
     turnStart.id,
     options.turnStartResult ?? { turn: { id: "turn-1" } },
   );
+  await start;
 
   return { child, events, session };
 }
@@ -952,6 +1097,7 @@ interface FakeChild extends ChildProcessWithoutNullStreams {
   notify(method: string, params?: unknown): void;
   requests(method: string): JsonRpcRequest[];
   respond(id: number | string, result: unknown): void;
+  respondError(id: number | string, message: string): void;
 }
 
 function fakeChild(): FakeChild {
@@ -988,6 +1134,11 @@ function fakeChild(): FakeChild {
     writes.filter((request) => request.method === method);
   child.respond = (id, result) => {
     (child.stdout as PassThrough).write(`${JSON.stringify({ id, result })}\n`);
+  };
+  child.respondError = (id, message) => {
+    (child.stdout as PassThrough).write(
+      `${JSON.stringify({ id, error: { code: -32_000, message } })}\n`,
+    );
   };
   return child;
 }

@@ -232,12 +232,115 @@ describe("createRoamApiClient", () => {
     });
 
     await client.createSession({
+      requestId: "session-request-headers",
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",
     });
 
     expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("retries a lost session creation response with the same request id and payload", async () => {
+    const bodies: string[] = [];
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (_url, init) => {
+        bodies.push(String(init?.body));
+        if (bodies.length === 1) {
+          throw new TypeError("network response was lost");
+        }
+        return Response.json({
+          session: {
+            id: "session-1",
+            title: "Test",
+            projectId: "project-1",
+            runnerId: "runner-1",
+            agent: "codex",
+            status: "pending",
+            executionMode: "direct",
+            executionFolder: ".",
+            cwd: ".",
+            createdAt: "2026-07-13T00:00:00.000Z",
+            updatedAt: "2026-07-13T00:00:00.000Z",
+          },
+        });
+      },
+    });
+
+    await client.createSession({
+      requestId: "session-request-1",
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "start",
+    });
+
+    expect(bodies).toEqual([
+      JSON.stringify({
+        requestId: "session-request-1",
+        projectId: "project-1",
+        agent: "codex",
+        executionMode: "direct",
+        prompt: "start",
+        attachments: [],
+      }),
+      JSON.stringify({
+        requestId: "session-request-1",
+        projectId: "project-1",
+        agent: "codex",
+        executionMode: "direct",
+        prompt: "start",
+        attachments: [],
+      }),
+    ]);
+  });
+
+  it("retries a lost message response with the same request id and payload", async () => {
+    const attempts: Array<{ url: string; body: string }> = [];
+    const client = createRoamApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: async (url, init) => {
+        attempts.push({ url: String(url), body: String(init?.body) });
+        if (attempts.length === 1) {
+          throw new TypeError("network response was lost");
+        }
+        return Response.json({
+          message: {
+            id: "message-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "continue",
+            encrypted: false,
+            createdAt: "2026-07-13T00:00:00.000Z",
+          },
+          attachments: [],
+        });
+      },
+    });
+
+    await client.createUserMessage("session-1", {
+      requestId: "message-request-1",
+      content: "continue",
+    });
+
+    expect(attempts).toEqual([
+      {
+        url: "http://127.0.0.1:8787/v1/sessions/session-1/messages",
+        body: JSON.stringify({
+          requestId: "message-request-1",
+          content: "continue",
+          attachments: [],
+        }),
+      },
+      {
+        url: "http://127.0.0.1:8787/v1/sessions/session-1/messages",
+        body: JSON.stringify({
+          requestId: "message-request-1",
+          content: "continue",
+          attachments: [],
+        }),
+      },
+    ]);
   });
 
   it("sends explicit empty agent runtime config when creating a session", async () => {
@@ -265,6 +368,7 @@ describe("createRoamApiClient", () => {
     });
 
     await client.createSession({
+      requestId: "session-request-runtime-config",
       projectId: "project-1",
       agent: "codex",
       prompt: "hello",

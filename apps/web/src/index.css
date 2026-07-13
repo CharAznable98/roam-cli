@@ -399,8 +399,9 @@
 
   .notification-stack {
     position: fixed;
+    top: calc(108px + env(safe-area-inset-top));
     right: 14px;
-    bottom: calc(var(--bottom-tabs-space) + 12px + env(safe-area-inset-bottom));
+    bottom: auto;
     z-index: 40;
     display: grid;
     width: min(360px, calc(100vw - 28px));
@@ -1851,6 +1852,42 @@
 
   .chat-api-error-banner .small-button {
     flex-shrink: 0;
+  }
+
+  .chat-queued-message-banner {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: 9px;
+    border-bottom: 1px solid rgba(217, 119, 6, 0.2);
+    background: #fff9eb;
+    color: #9a5b00;
+    padding: 9px 11px;
+  }
+
+  .chat-queued-message-banner > svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .chat-queued-message-banner > div {
+    min-width: 0;
+  }
+
+  .chat-queued-message-banner span {
+    display: block;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+
+  .chat-queued-message-banner p {
+    margin: 2px 0 0;
+    color: #7a5a24;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
   }
 
   .session-title-button {
@@ -4661,7 +4698,7 @@
   }
 
   .notification-card {
-    grid-template-columns: minmax(0, 1fr) 28px;
+    grid-template-columns: minmax(0, 1fr) 44px;
   }
 
   .notification-close,
@@ -5025,7 +5062,7 @@
   }
 }
 
-@media (min-width: 768px) and (max-width: 1439px) {
+@media (min-width: 1180px) and (max-width: 1439px) {
   .git-grid {
     grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
     grid-template-rows: none;
@@ -5044,8 +5081,9 @@
 
 @media (min-width: 768px) {
   .notification-stack {
+    top: 210px;
     right: 18px;
-    bottom: 18px;
+    bottom: auto;
     max-height: min(32vh, 260px);
   }
 
@@ -5169,7 +5207,34 @@
   }
 }
 
+@media (max-width: 1179px) {
+  .git-panel-header .icon-button,
+  .git-diff-header .icon-button {
+    height: 44px;
+    width: 44px;
+  }
+
+  .git-action-menu > summary {
+    height: 44px;
+    min-height: 44px;
+    width: 44px;
+  }
+
+  .git-action-menu-content button {
+    min-height: 44px;
+  }
+
+  .git-tabs button,
+  .git-segmented button {
+    min-height: 44px;
+  }
+}
+
 @media (min-width: 1440px) {
+  .notification-stack {
+    top: 148px;
+  }
+
   .topbar {
     padding-left: 20px;
     padding-right: 20px;
@@ -5195,12 +5260,6 @@
   .active-git .app-grid,
   .active-settings .app-grid {
     grid-template-columns: 18rem minmax(34rem, 1fr) clamp(20rem, 24vw, 26rem);
-  }
-
-  .active-git .notification-stack,
-  .active-settings .notification-stack {
-    top: auto;
-    bottom: 24px;
   }
 
   .chat-column,

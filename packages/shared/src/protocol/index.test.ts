@@ -13,17 +13,109 @@ import {
   ApiUpdateProjectPromptPresetSchema,
   ClientCommandSchema,
   DEFAULT_MAX_IMAGE_BYTES,
+  MAX_ATTACHMENT_BASE64_LENGTH,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_REQUEST,
   PROJECT_PROMPT_PRESET_CONTENT_MAX_LENGTH,
   PROJECT_PROMPT_PRESET_TITLE_MAX_LENGTH,
   RunnerAuthenticateSchema,
   RunnerCommandSchema,
+  RunnerEventAckSchema,
+  RunnerEventEnvelopeSchema,
+  RunnerEventNackSchema,
+  RunnerEventResumeSchema,
   RunnerRegistrationSchema,
   RunnerEventSchema,
   ServerEventSchema,
+  SessionStatusCheckResultSchema,
   nowIso,
 } from "./index.js";
 
 describe("protocol schemas", () => {
+  it("validates optional ACK v1 negotiation and transport control frames", () => {
+    const streamId = "123e4567-e89b-42d3-a456-426614174000";
+    expect(
+      RunnerAuthenticateSchema.parse({
+        type: "runnerAuthenticate",
+        token: "runner-token",
+        runner: runnerRegistration(),
+        eventDelivery: {
+          protocol: "ack_v1",
+          streamId,
+          acknowledgedThrough: 3,
+        },
+      }).eventDelivery,
+    ).toEqual({ protocol: "ack_v1", streamId, acknowledgedThrough: 3 });
+    expect(
+      RunnerEventResumeSchema.parse({
+        type: "runnerEventResume",
+        protocol: "ack_v1",
+        streamId,
+        ackThrough: 3,
+      }),
+    ).toMatchObject({ ackThrough: 3 });
+    expect(
+      RunnerEventEnvelopeSchema.parse({
+        type: "runnerEvent",
+        protocol: "ack_v1",
+        streamId,
+        sequence: 4,
+        event: {
+          type: "sessionStatus",
+          sessionId: "session-1",
+          status: "running",
+        },
+      }),
+    ).toMatchObject({ sequence: 4 });
+    expect(
+      RunnerEventAckSchema.parse({
+        type: "runnerEventAck",
+        protocol: "ack_v1",
+        streamId,
+        ackThrough: 4,
+      }),
+    ).toMatchObject({ ackThrough: 4 });
+    expect(
+      RunnerEventNackSchema.parse({
+        type: "runnerEventNack",
+        protocol: "ack_v1",
+        streamId,
+        ackThrough: 3,
+        expectedSequence: 4,
+      }),
+    ).toMatchObject({ expectedSequence: 4 });
+    expect(
+      RunnerEventEnvelopeSchema.safeParse({
+        type: "runnerEvent",
+        protocol: "ack_v1",
+        streamId,
+        sequence: 0,
+        event: { type: "registered", runner: runnerRegistration() },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("represents unsupported approval signatures without a fake public key", () => {
+    expect(
+      RunnerRegistrationSchema.parse({
+        runnerId: "runner-1",
+        displayName: "Runner 1",
+        hostname: "host",
+        workspaceRoot: "/workspace",
+        profile: "standard",
+        approvalSignatureMode: "unsupported",
+        capabilities: [
+          {
+            kind: "codex",
+            label: "Codex",
+            command: "codex",
+            parser: "codex-app-server",
+          },
+        ],
+        version: "1.1.0",
+      }),
+    ).toMatchObject({ approvalSignatureMode: "unsupported" });
+  });
   it("validates runner registration", () => {
     const runner = RunnerRegistrationSchema.parse({
       runnerId: "runner-local",
@@ -68,6 +160,25 @@ describe("protocol schemas", () => {
         contentBase64: "not base64!",
       }),
     ).toThrow();
+    expect(() =>
+      ImageAttachmentUploadSchema.parse({
+        ...uploaded,
+        size: MAX_ATTACHMENT_BYTES + 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      ImageAttachmentUploadSchema.parse({
+        ...uploaded,
+        size: MAX_ATTACHMENT_BYTES,
+        contentBase64: "A".repeat(MAX_ATTACHMENT_BASE64_LENGTH + 4),
+      }),
+    ).toThrow();
+    expect(() =>
+      ImageAttachmentUploadSchema.parse({
+        ...uploaded,
+        size: uploaded.size + 1,
+      }),
+    ).toThrow("Declared attachment size does not match the payload");
 
     const writeCommand = RunnerCommandSchema.parse({
       type: "writeSessionAttachments",
@@ -76,6 +187,17 @@ describe("protocol schemas", () => {
       attachments: [uploaded],
     });
     expect(writeCommand.type).toBe("writeSessionAttachments");
+    expect(() =>
+      RunnerCommandSchema.parse({
+        type: "writeSessionAttachments",
+        requestId: "attachment-write-too-many",
+        sessionId: "session-1",
+        attachments: Array.from(
+          { length: MAX_ATTACHMENTS_PER_REQUEST + 1 },
+          () => uploaded,
+        ),
+      }),
+    ).toThrow();
 
     const runnerRef = {
       id: "attachment-1",
@@ -186,6 +308,7 @@ describe("protocol schemas", () => {
   it("accepts dynamic non-empty agent ids and rejects empty agent ids", () => {
     expect(
       ApiCreateSessionSchema.parse({
+        requestId: "create-session-dynamic-agent",
         projectId: "project-1",
         agent: "vendor.custom-agent",
         prompt: "run",
@@ -194,6 +317,7 @@ describe("protocol schemas", () => {
 
     expect(() =>
       ApiCreateSessionSchema.parse({
+        requestId: "create-session-empty-agent",
         projectId: "project-1",
         agent: "",
         prompt: "run",
@@ -254,6 +378,36 @@ describe("protocol schemas", () => {
         },
       }).type,
     ).toBe("session:updated");
+  });
+
+  it("accepts only finished terminal Git jobs as runner results", () => {
+    const now = nowIso();
+    const job = {
+      id: "git-job-1",
+      projectId: "project-1",
+      contextKind: "project" as const,
+      operation: "stage",
+      createdAt: now,
+    };
+
+    expect(
+      RunnerEventSchema.safeParse({
+        type: "gitJobResult",
+        job: { ...job, status: "running", startedAt: now },
+      }).success,
+    ).toBe(false);
+    expect(
+      RunnerEventSchema.safeParse({
+        type: "gitJobResult",
+        job: { ...job, status: "succeeded" },
+      }).success,
+    ).toBe(false);
+    expect(
+      RunnerEventSchema.parse({
+        type: "gitJobResult",
+        job: { ...job, status: "succeeded", finishedAt: now },
+      }),
+    ).toMatchObject({ job: { status: "succeeded", finishedAt: now } });
   });
 
   it("accepts legacy git status runner events without a result kind", () => {
@@ -427,12 +581,33 @@ describe("protocol schemas", () => {
       type: "applyPatch",
       requestId: "patch-1",
       sessionId: "s1",
+      cwd: "/workspace/project",
       patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
     });
     expect(command.type).toBe("applyPatch");
     if (command.type === "applyPatch") {
       expect(command.strip).toBe(1);
+      expect(command.cwd).toBe("/workspace/project");
     }
+
+    expect(
+      RunnerCommandSchema.parse({
+        type: "resolveUserInput",
+        sessionId: "s1",
+        inputRequestId: "input-1",
+        content: "continue",
+      }),
+    ).toMatchObject({ inputRequestId: "input-1" });
+    expect(
+      RunnerEventSchema.parse({
+        type: "agentActivity",
+        sessionId: "s1",
+        agent: "codex",
+        kind: "status",
+        label: "Need input",
+        inputRequestId: "input-1",
+      }),
+    ).toMatchObject({ inputRequestId: "input-1" });
 
     expect(
       RunnerAuthenticateSchema.parse({
@@ -457,11 +632,21 @@ describe("protocol schemas", () => {
         type: "checkSessionStatus",
         requestId: "check-1",
         sessionId: "s1",
+        deliverInput: {
+          deliveryId: "delivery-1",
+          inputRequestId: "input-1",
+          content: "continue",
+        },
       }),
     ).toMatchObject({
       type: "checkSessionStatus",
       requestId: "check-1",
       sessionId: "s1",
+      deliverInput: {
+        deliveryId: "delivery-1",
+        inputRequestId: "input-1",
+        content: "continue",
+      },
     });
 
     expect(
@@ -471,12 +656,39 @@ describe("protocol schemas", () => {
           requestId: "check-1",
           sessionId: "s1",
           active: false,
+          inputReceipt: {
+            deliveryId: "delivery-1",
+            ownership: "not_owned",
+          },
         },
       }),
     ).toMatchObject({
       type: "sessionStatusCheckResult",
-      result: { requestId: "check-1", sessionId: "s1", active: false },
+      result: {
+        requestId: "check-1",
+        sessionId: "s1",
+        active: false,
+        inputReceipt: {
+          deliveryId: "delivery-1",
+          ownership: "not_owned",
+        },
+      },
     });
+
+    expect(
+      RunnerCommandSchema.parse({
+        type: "checkSessionStatus",
+        requestId: "legacy-check",
+        sessionId: "s1",
+      }),
+    ).not.toHaveProperty("deliverInput");
+    expect(
+      SessionStatusCheckResultSchema.parse({
+        requestId: "legacy-check",
+        sessionId: "s1",
+        active: true,
+      }),
+    ).not.toHaveProperty("inputDelivered");
   });
 });
 

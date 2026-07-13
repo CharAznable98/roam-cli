@@ -72,7 +72,12 @@ export function getConversationDisplayItems(
   sessionStatus: SessionStatus,
 ): ConversationDisplayItem[] {
   const outputItems = buildTimelineOutputItems(
-    messages,
+    messages.filter(
+      (message) =>
+        message.role !== "assistant" ||
+        message.content.length > 0 ||
+        (message.attachments?.length ?? 0) > 0,
+    ),
     activities,
     isActiveSessionStatus(sessionStatus),
   );

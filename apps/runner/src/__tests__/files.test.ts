@@ -477,6 +477,19 @@ describe("runner file reads", () => {
         path: "outside-link.txt",
       }),
     ).rejects.toThrow("escapes session cwd");
+    await expect(
+      writeFileContent({
+        workspace,
+        sessionCwd,
+        requestId: "w1",
+        sessionId: "s1",
+        path: "outside-link.txt",
+        content: "overwritten",
+      }),
+    ).rejects.toThrow("escapes session cwd");
+    await expect(
+      readFile(join(workspace, "outside.txt"), "utf8"),
+    ).resolves.toBe("outside");
   });
 
   it("returns top-level path suggestions for an empty query", async () => {

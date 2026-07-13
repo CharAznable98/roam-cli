@@ -1,4 +1,8 @@
-import type { GitJob, RunnerCommand } from "@roamcli/shared/protocol";
+import type {
+  GitJob,
+  RunnerCommand,
+  TerminalGitJob,
+} from "@roamcli/shared/protocol";
 import { applyUnifiedDiff } from "../workspace/patch.js";
 import {
   createDirectory,
@@ -41,21 +45,21 @@ type GitMutationCommand = Extract<
 export interface WorkspaceCommandHandlerOptions {
   workspace: string;
   emit: RunnerEventSink;
-  getSessionCwd(sessionId: string, cwd: string | undefined): string | undefined;
-  getStartedSessionCwd(sessionId: string): string | undefined;
+  getSessionCwd(
+    sessionId: string,
+    cwd: string | undefined,
+  ): Promise<string | undefined>;
 }
 
 export class WorkspaceCommandHandler {
   readonly #workspace: string;
   readonly #emit: RunnerEventSink;
   readonly #getSessionCwd: WorkspaceCommandHandlerOptions["getSessionCwd"];
-  readonly #getStartedSessionCwd: WorkspaceCommandHandlerOptions["getStartedSessionCwd"];
 
   public constructor(options: WorkspaceCommandHandlerOptions) {
     this.#workspace = options.workspace;
     this.#emit = options.emit;
     this.#getSessionCwd = options.getSessionCwd;
-    this.#getStartedSessionCwd = options.getStartedSessionCwd;
   }
 
   public async readFileTree(
@@ -216,7 +220,16 @@ export class WorkspaceCommandHandler {
   public async applyPatch(
     command: Extract<RunnerCommand, { type: "applyPatch" }>,
   ): Promise<void> {
-    const sessionCwd = this.#getStartedSessionCwd(command.sessionId);
+    let sessionCwd: string | undefined;
+    try {
+      sessionCwd = await this.#getSessionCwd(command.sessionId, command.cwd);
+    } catch (error: unknown) {
+      await this.#emitPatchResult(
+        command,
+        error instanceof Error ? error.message : String(error),
+      );
+      return;
+    }
     if (sessionCwd === undefined) {
       await this.#emitPatchResult(command, "Session cwd is unavailable");
       return;
@@ -451,7 +464,7 @@ export class WorkspaceCommandHandler {
     cwd: string | undefined,
   ): Promise<string | undefined> {
     try {
-      const sessionCwd = this.#getSessionCwd(sessionId, cwd);
+      const sessionCwd = await this.#getSessionCwd(sessionId, cwd);
       if (sessionCwd === undefined) {
         await this.#emitSessionCwdUnavailable(requestId, sessionId);
       }
@@ -507,6 +520,7 @@ export class WorkspaceCommandHandler {
   ): Promise<void> {
     try {
       const job = await run();
+      assertTerminalGitJob(job);
       await this.#emit({ type: "gitJobResult", job });
     } catch (error: unknown) {
       await this.#emit({
@@ -538,7 +552,7 @@ function failedGitJob(
   command: GitMutationCommand,
   operation: string,
   error: unknown,
-): GitJob {
+): TerminalGitJob {
   const timestamp = new Date().toISOString();
   const message = error instanceof Error ? error.message : String(error);
   return {
@@ -556,4 +570,15 @@ function failedGitJob(
     errorCode: "GIT_OPERATION_ERROR",
     errorSummary: message,
   };
+}
+
+function assertTerminalGitJob(job: GitJob): asserts job is TerminalGitJob {
+  if (
+    (job.status !== "succeeded" &&
+      job.status !== "failed" &&
+      job.status !== "cancelled") ||
+    job.finishedAt === undefined
+  ) {
+    throw new Error("Git mutation returned a non-terminal job");
+  }
 }

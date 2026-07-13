@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import net from "node:net";
 
@@ -14,6 +15,7 @@ const workspace = resolve(process.env.ROAMCLI_SMOKE_WORKSPACE ?? repoRoot);
 const suppliedBaseUrl = process.env.ROAMCLI_SMOKE_BASE_URL;
 const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? 30_000);
 const runnerId = process.env.ROAMCLI_SMOKE_RUNNER_ID ?? `smoke-${process.pid}`;
+const runnerDataDir = `.roam-runner-smoke-${process.pid}-${Date.now().toString(36)}`;
 const smokeMaxImageBytes = 5 * 1024 * 1024;
 const smokeImageSizes = [1024, 512 * 1024, smokeMaxImageBytes];
 const crc32Table = Array.from({ length: 256 }, (_, index) => {
@@ -127,6 +129,8 @@ async function runSmoke() {
 
   await waitForPersistedAssistantMessage(session.id, prompt);
   pass("assistant message persisted");
+  await waitForSessionStatus(session.id, "completed");
+  pass("session reached completed state");
 
   await imageAttachmentAssertionEntry(project.id, runner);
 
@@ -225,6 +229,7 @@ async function ensureRunnerOnline() {
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const fakeCodex = await createFakeCodexCommand("smoke");
+  tempDirs.push(resolve(workspace, runnerDataDir));
   startChild(
     "runner",
     "pnpm",
@@ -234,12 +239,12 @@ async function ensureRunnerOnline() {
       "dev",
       "--server",
       wsUrl.toString(),
-      "--token",
-      runnerToken,
       "--runner-id",
       runnerId,
       "--workspace",
       workspace,
+      "--data-dir",
+      runnerDataDir,
       "--profile",
       "trusted",
       "--agent-plugin",
@@ -250,6 +255,7 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_TOKEN: runnerToken,
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
+      ROAM_RUNNER_DATA_DIR: runnerDataDir,
       ROAM_RUNNER_PROFILE: "trusted",
       ROAMCLI_AGENT_CODEX_MODE: "exec-json",
       ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
@@ -283,6 +289,7 @@ async function createSession(projectId, prompt, attachments = []) {
   const payload = await requestJson("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
+      requestId: `smoke-session-${randomUUID()}`,
       projectId,
       agent: "codex",
       prompt,
@@ -350,6 +357,13 @@ async function waitForPersistedAssistantMessage(sessionId, expected) {
   );
 }
 
+async function waitForSessionStatus(sessionId, expected) {
+  return waitFor(async () => {
+    const payload = await requestJson(`/v1/sessions/${sessionId}`);
+    return payload.session?.status === expected;
+  }, `session ${sessionId} to reach ${expected}`);
+}
+
 async function imageAttachmentAssertionEntry(projectId, runner) {
   const imageCapability = runner.capabilities?.find(
     (capability) => capability.kind === "codex" && capability.supportsImages,
@@ -384,6 +398,7 @@ async function imageAttachmentAssertionEntry(projectId, runner) {
   const oversized = await requestRaw("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
+      requestId: `smoke-session-${randomUUID()}`,
       projectId,
       agent: "codex",
       prompt: "reject oversized image",

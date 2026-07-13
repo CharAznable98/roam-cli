@@ -1,6 +1,10 @@
-import type { AgentDefinition, AgentPlugin, AgentPluginContext } from "@roamcli/agent-plugin-sdk";
+import type {
+  AgentDefinition,
+  AgentPlugin,
+  AgentPluginContext,
+} from "@roamcli/agent-plugin-sdk";
 import type { RunnerCapability, RunnerProfile } from "@roamcli/shared/protocol";
-import { getPermissionTemplate } from "./permissions.js";
+import { sanitizeAgentEnvironment } from "./permissions.js";
 
 export interface LoadedAgent {
   definition: AgentDefinition;
@@ -17,17 +21,24 @@ export async function loadAgentRegistry(
   pluginNames: readonly string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentRegistry> {
-  getPermissionTemplate(profile);
   if (pluginNames.length === 0) {
-    throw new Error("Missing --agent-plugin or ROAMCLI_AGENT_PLUGINS or local config agentPlugins");
+    throw new Error(
+      "Missing --agent-plugin or ROAMCLI_AGENT_PLUGINS or local config agentPlugins",
+    );
   }
-  const context: AgentPluginContext = { profile, env };
-  const plugins = await Promise.all(pluginNames.map((name) => loadAgentPlugin(name)));
+  const context: AgentPluginContext = {
+    profile,
+    env: sanitizeAgentEnvironment(profile, env),
+  };
+  const plugins = await Promise.all(
+    pluginNames.map((name) => loadAgentPlugin(name)),
+  );
   const agents: LoadedAgent[] = [];
   const seen = new Set<string>();
 
   for (const plugin of plugins) {
-    for (const definition of plugin.agents(context)) {
+    for (const rawDefinition of plugin.agents(context)) {
+      const definition = permissionScopedDefinition(rawDefinition, profile);
       if (seen.has(definition.kind)) {
         throw new Error(`Duplicate agent plugin kind: ${definition.kind}`);
       }
@@ -45,12 +56,48 @@ export async function loadAgentRegistry(
   }
 
   if (agents.length === 0) {
-    throw new Error("No agent capabilities were registered by configured plugins");
+    throw new Error(
+      "No agent capabilities were registered by configured plugins",
+    );
   }
 
   return {
     agents,
     capabilities: agents.map((agent) => agent.capability),
+  };
+}
+
+function permissionScopedDefinition(
+  definition: AgentDefinition,
+  profile: RunnerProfile,
+): AgentDefinition {
+  const scope = <T extends AgentPluginContext>(context: T): T => ({
+    ...context,
+    profile,
+    env: sanitizeAgentEnvironment(profile, context.env),
+  });
+
+  return {
+    ...definition,
+    buildCapability: (context) =>
+      definition.buildCapability.call(definition, scope(context)),
+    createSession: (context) =>
+      definition.createSession.call(definition, scope(context)),
+    ...(definition.listSkills === undefined
+      ? {}
+      : {
+          listSkills: (context) =>
+            definition.listSkills!.call(definition, scope(context)),
+        }),
+    ...(definition.listRuntimeConfigOptions === undefined
+      ? {}
+      : {
+          listRuntimeConfigOptions: (context) =>
+            definition.listRuntimeConfigOptions!.call(
+              definition,
+              scope(context),
+            ),
+        }),
   };
 }
 
@@ -65,7 +112,9 @@ async function loadAgentPlugin(name: string): Promise<AgentPlugin> {
 
   const candidate = normalizePluginExport(loaded);
   if (!isAgentPlugin(candidate)) {
-    throw new Error(`Agent plugin ${name} must export an AgentPlugin as default or agentPlugin`);
+    throw new Error(
+      `Agent plugin ${name} must export an AgentPlugin as default or agentPlugin`,
+    );
   }
   return candidate;
 }

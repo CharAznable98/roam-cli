@@ -4,6 +4,8 @@ import { access, chmod } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { IPty } from "node-pty";
+import type { RunnerProfile } from "@roamcli/shared/protocol";
+import { sanitizeAgentEnvironment } from "./permissions.js";
 
 export interface AgentProcess {
   write(data: string): void;
@@ -17,6 +19,7 @@ export interface AgentProcess {
 
 export interface SpawnAgentProcessOptions {
   cwd: string;
+  profile: RunnerProfile;
   env?: NodeJS.ProcessEnv;
   preferPty?: boolean;
   requirePty?: boolean;
@@ -29,17 +32,21 @@ export async function spawnAgentProcess(
   args: readonly string[],
   options: SpawnAgentProcessOptions
 ): Promise<AgentProcess> {
-  if (options.preferPty ?? true) {
+  const scopedOptions = {
+    ...options,
+    env: sanitizeAgentEnvironment(options.profile, options.env ?? process.env),
+  };
+  if (scopedOptions.preferPty ?? true) {
     try {
-      return await spawnPtyProcess(command, args, options);
+      return await spawnPtyProcess(command, args, scopedOptions);
     } catch (error: unknown) {
-      if (options.requirePty) {
+      if (scopedOptions.requirePty) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`PTY spawn failed for ${command}: ${message}`);
       }
     }
   }
-  return spawnChildProcess(command, args, options);
+  return spawnChildProcess(command, args, scopedOptions);
 }
 
 async function spawnPtyProcess(
