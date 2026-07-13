@@ -114,7 +114,7 @@ describe("server", () => {
     expect(authorized.json()).toEqual({ sessions: [] });
   });
 
-  it("requires request ids and rehydrates a queued running-session message from session detail", async () => {
+  it("accepts legacy requestless messages while validating and deduplicating supplied request ids", async () => {
     createTestProject(app);
     const now = new Date().toISOString();
     app.roam.store.createSession({
@@ -131,25 +131,25 @@ describe("server", () => {
       updatedAt: now,
     });
 
-    const missingSessionRequestId = await app.inject({
-      method: "POST",
-      url: "/v1/sessions",
-      headers: { "x-test-auth": "1" },
-      payload: {
-        projectId: "project-1",
-        agent: "codex",
-        prompt: "missing request id",
-      },
-    });
-    expect(missingSessionRequestId.statusCode).toBe(400);
-
-    const missingMessageRequestId = await app.inject({
+    const requestlessMessage = await app.inject({
       method: "POST",
       url: "/v1/sessions/session-queued-message/messages",
       headers: { "x-test-auth": "1" },
       payload: { content: "missing request id" },
     });
-    expect(missingMessageRequestId.statusCode).toBe(400);
+    expect(requestlessMessage.statusCode).toBe(202);
+    expect(requestlessMessage.json()).toMatchObject({
+      queued: true,
+      message: { content: "missing request id" },
+    });
+
+    const invalidMessageRequestId = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/session-queued-message/messages",
+      headers: { "x-test-auth": "1" },
+      payload: { requestId: "", content: "invalid request id" },
+    });
+    expect(invalidMessageRequestId.statusCode).toBe(400);
 
     const queued = await app.inject({
       method: "POST",
@@ -164,6 +164,18 @@ describe("server", () => {
     expect(queued.json()).toMatchObject({ queued: true });
     const messageId = queued.json().message.id as string;
 
+    const queuedRetry = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/session-queued-message/messages",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        requestId: "queued-message-request",
+        content: "deliver after reconnect",
+      },
+    });
+    expect(queuedRetry.statusCode).toBe(202);
+    expect(queuedRetry.json().message.id).toBe(messageId);
+
     const detail = await app.inject({
       method: "GET",
       url: "/v1/sessions/session-queued-message",
@@ -173,6 +185,12 @@ describe("server", () => {
     expect(detail.json().messages).toEqual([]);
     expect(detail.json().attachments).toEqual([]);
     expect(detail.json().pendingMessageDeliveries).toEqual([
+      {
+        messageId: requestlessMessage.json().message.id,
+        content: "missing request id",
+        createdAt: expect.any(String),
+        attachments: [],
+      },
       {
         messageId,
         content: "deliver after reconnect",
@@ -208,6 +226,12 @@ describe("server", () => {
     expect(promotedDetail.json().messages).toEqual([]);
     expect(promotedDetail.json().pendingMessageDeliveries).toEqual([
       {
+        messageId: requestlessMessage.json().message.id,
+        content: "missing request id",
+        createdAt: expect.any(String),
+        attachments: [],
+      },
+      {
         messageId,
         content: "deliver after reconnect",
         createdAt: expect.any(String),
@@ -229,7 +253,14 @@ describe("server", () => {
         content: "deliver after reconnect",
       }),
     ]);
-    expect(finalizedDetail.json().pendingMessageDeliveries).toEqual([]);
+    expect(finalizedDetail.json().pendingMessageDeliveries).toEqual([
+      {
+        messageId: requestlessMessage.json().message.id,
+        content: "missing request id",
+        createdAt: expect.any(String),
+        attachments: [],
+      },
+    ]);
   });
 
   it("keeps login rate limits scoped to the failing source", async () => {
@@ -1667,6 +1698,36 @@ describe("server", () => {
 
     createTestProject(app);
 
+    const invalidRequestId = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        requestId: "",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "invalid request id",
+      },
+    });
+    expect(invalidRequestId.statusCode).toBe(400);
+
+    const requestless = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "legacy client request",
+      },
+    });
+    expect(requestless.statusCode).toBe(201);
+    expect(requestless.json().session.id).toEqual(expect.any(String));
+    await expect(nextJson(runner)).resolves.toMatchObject({
+      type: "startSession",
+      prompt: "legacy client request",
+    });
+
     const created = await app.inject({
       method: "POST",
       url: "/v1/sessions",
@@ -1688,6 +1749,21 @@ describe("server", () => {
       prompt: "implement server",
     });
     expect(startCommand.session.id).toBe(sessionId);
+
+    const createdRetry = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        requestId: "create-server-work",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "implement server",
+        title: "Server work",
+      },
+    });
+    expect(createdRetry.statusCode).toBe(201);
+    expect(createdRetry.json().session.id).toBe(sessionId);
 
     runner.send(
       JSON.stringify({

@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseCliArgs,
   persistRunnerConfig,
+  resolveRunnerDataDir,
   resolveRunnerConfig,
 } from "../bootstrap/cli.js";
 import { createRunner } from "../bootstrap/create-runner.js";
@@ -157,6 +158,86 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("honors a discoverable local config workspace that points elsewhere", async () => {
+    const invocationWorkspace = await createCanonicalWorkspace();
+    const configuredWorkspace = await createCanonicalWorkspace();
+    await writeConfig(invocationWorkspace, {
+      server: "wss://roam.example.test/runners",
+      token: "legacy-token",
+      profile: "trusted",
+      runnerId: "stable-runner",
+      workspace: configuredWorkspace,
+      dataDir: ".roam-runner",
+      agentPlugins: ["@vendor/foo-agent"],
+    });
+
+    const { options, configPath } = await resolveRunnerConfig([], {
+      INIT_CWD: invocationWorkspace,
+    });
+
+    expect(options.workspace).toBe(configuredWorkspace);
+    expect(configPath).toBe(
+      join(configuredWorkspace, ".roam-runner", "config.json"),
+    );
+
+    await persistRunnerConfig(configPath, options);
+    expect(
+      JSON.parse(await readFile(configPath, "utf8")),
+    ).toMatchObject({ workspace: configuredWorkspace });
+  });
+
+  it("lets cli and env workspaces override a config workspace", async () => {
+    const configWorkspace = await createCanonicalWorkspace();
+    const cliWorkspace = await createCanonicalWorkspace();
+    const envWorkspace = await createCanonicalWorkspace();
+    for (const workspace of [cliWorkspace, envWorkspace]) {
+      await writeConfig(workspace, {
+        server: "wss://roam.example.test/runners",
+        token: "legacy-token",
+        workspace: configWorkspace,
+        agentPlugins: ["@vendor/foo-agent"],
+      });
+    }
+
+    const cliResult = await resolveRunnerConfig(
+      ["--workspace", cliWorkspace],
+      {},
+    );
+    expect(cliResult.options.workspace).toBe(cliWorkspace);
+    expect(cliResult.configPath).toBe(
+      join(cliWorkspace, ".roam-runner", "config.json"),
+    );
+
+    const envResult = await resolveRunnerConfig([], {
+      INIT_CWD: configWorkspace,
+      ROAM_RUNNER_WORKSPACE: envWorkspace,
+    });
+    expect(envResult.options.workspace).toBe(envWorkspace);
+    expect(envResult.configPath).toBe(
+      join(envWorkspace, ".roam-runner", "config.json"),
+    );
+  });
+
+  it("uses the canonical invocation workspace when no workspace is configured", async () => {
+    const invocationWorkspace = await createCanonicalWorkspace();
+    const { options, configPath } = await resolveRunnerConfig(
+      [
+        "--server",
+        "wss://roam.example.test/runners",
+        "--token",
+        "secret",
+        "--agent-plugin",
+        "@roamcli/agent-codex",
+      ],
+      { INIT_CWD: invocationWorkspace },
+    );
+
+    expect(options.workspace).toBe(invocationWorkspace);
+    expect(configPath).toBe(
+      join(invocationWorkspace, ".roam-runner", "config.json"),
+    );
+  });
+
   it("repairs permissive permissions before reading an existing config", async () => {
     const workspace = await createCanonicalWorkspace();
     await writeConfig(workspace, {
@@ -255,6 +336,36 @@ describe("parseCliArgs", () => {
         ],
         {},
       ),
+    ).rejects.toThrow("Runner data path cannot contain symlinks");
+  });
+
+  it("hardens only the runner data directory under existing project directories", async () => {
+    const workspace = await createCanonicalWorkspace();
+    const toolsDirectory = join(workspace, "tools");
+    const dataDirectory = join(toolsDirectory, ".roam-runner");
+    await mkdir(toolsDirectory, { mode: 0o755 });
+    await chmod(toolsDirectory, 0o755);
+    await mkdir(dataDirectory, { mode: 0o777 });
+    await chmod(dataDirectory, 0o777);
+
+    await expect(
+      resolveRunnerDataDir(workspace, "tools/.roam-runner", true),
+    ).resolves.toBe(dataDirectory);
+
+    expect((await stat(toolsDirectory)).mode & 0o777).toBe(0o755);
+    expect((await stat(dataDirectory)).mode & 0o777).toBe(0o700);
+  });
+
+  it("still rejects symlinks in an existing parent of a nested data directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "roam-runner-config-"));
+    const workspace = join(root, "workspace");
+    const outside = join(root, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await symlink(outside, join(workspace, "tools"), "dir");
+
+    await expect(
+      resolveRunnerDataDir(workspace, "tools/.roam-runner", true),
     ).rejects.toThrow("Runner data path cannot contain symlinks");
   });
 

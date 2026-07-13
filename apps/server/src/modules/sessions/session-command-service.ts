@@ -1676,6 +1676,11 @@ export class SessionCommandService {
       session.id,
       stoppedAt,
     );
+    for (const runnerId of cancellation.cleanupRunnerIds) {
+      void this.reconcileAttachmentCleanupJobs(runnerId).catch(
+        () => undefined,
+      );
+    }
     let stopped =
       cancellation.session?.status === "stopped"
         ? cancellation.session

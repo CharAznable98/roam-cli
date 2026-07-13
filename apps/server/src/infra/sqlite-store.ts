@@ -22,8 +22,10 @@ import type {
   ProjectPromptPreset,
   RunnerCommand,
   RunnerRegistration,
+  SessionStartResult,
   Session,
   SessionStatus,
+  SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import { AgentRuntimeConfigSchema } from "@roamcli/shared/protocol";
 
@@ -175,6 +177,13 @@ interface RunnerEventStreamRow {
   committed_through: number;
 }
 
+interface CommittedDeliveryReceiptRow {
+  effect_id: string;
+  runner_id: string;
+  result_json: string;
+  created_at: string;
+}
+
 interface RunnerAgentRuntimeConfigSettingRow {
   runner_id: string;
   agent: AgentKind;
@@ -289,6 +298,13 @@ export type RunnerEventProcessingResult =
       expectedSequence: number;
     }
   | { status: "stream_mismatch"; ackThrough: number };
+
+export interface CommittedDeliveryReceipt {
+  effectId: string;
+  runnerId: string;
+  result: SessionStartResult | SessionStatusCheckResult;
+  createdAt: string;
+}
 
 export class ServerStore {
   readonly dbPath: string;
@@ -1201,9 +1217,48 @@ export class ServerStore {
   cancelPendingInputDeliveriesForSession(
     sessionId: string,
     cancelledAt: string,
-  ): { deleted: number; session: Session | undefined } {
+  ): {
+    deleted: number;
+    cleanupRunnerIds: string[];
+    session: Session | undefined;
+  } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const session = this.db
+        .prepare("SELECT project_id FROM sessions WHERE id = ?")
+        .get(sessionId) as { project_id: string } | undefined;
+      const pendingRows = this.db
+        .prepare("SELECT * FROM pending_input_deliveries WHERE session_id = ?")
+        .all(sessionId) as unknown as PendingInputDeliveryRow[];
+      const cleanupRunnerIds = new Set<string>();
+      if (session) {
+        const isFinalized = this.db.prepare(
+          `SELECT 1 FROM message_attachments
+           WHERE session_id = ? AND id = ?`,
+        );
+        const insertCleanup = this.db.prepare(
+          `INSERT OR IGNORE INTO attachment_cleanup_jobs
+             (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of pendingRows) {
+          const pending = toPendingInputDelivery(row);
+          for (const attachment of pending.attachments) {
+            if (isFinalized.get(sessionId, attachment.id)) {
+              continue;
+            }
+            insertCleanup.run(
+              session.project_id,
+              sessionId,
+              pending.runnerId,
+              attachment.id,
+              attachment.runnerStoragePath,
+              cancelledAt,
+            );
+            cleanupRunnerIds.add(pending.runnerId);
+          }
+        }
+      }
       const deleted = Number(
         this.db
           .prepare("DELETE FROM pending_input_deliveries WHERE session_id = ?")
@@ -1218,7 +1273,11 @@ export class ServerStore {
           .run(cancelledAt, sessionId);
       }
       this.db.exec("COMMIT");
-      return { deleted, session: this.getSession(sessionId) };
+      return {
+        deleted,
+        cleanupRunnerIds: [...cleanupRunnerIds],
+        session: this.getSession(sessionId),
+      };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -1760,6 +1819,50 @@ export class ServerStore {
     }
   }
 
+  putCommittedDeliveryReceipt(
+    runnerId: string,
+    kind: "sessionStartResult" | "sessionStatusCheckResult",
+    result: SessionStartResult | SessionStatusCheckResult,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO committed_delivery_receipts
+           (effect_id, runner_id, result_json, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        `${runnerId}:${kind}:${result.requestId}`,
+        runnerId,
+        JSON.stringify(result),
+        new Date().toISOString(),
+      );
+  }
+
+  listCommittedDeliveryReceipts(): CommittedDeliveryReceipt[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM committed_delivery_receipts
+         ORDER BY created_at ASC, effect_id ASC`,
+      )
+      .all() as unknown as CommittedDeliveryReceiptRow[];
+    return rows.map((row) => ({
+      effectId: row.effect_id,
+      runnerId: row.runner_id,
+      result: JSON.parse(row.result_json) as
+        | SessionStartResult
+        | SessionStatusCheckResult,
+      createdAt: row.created_at,
+    }));
+  }
+
+  deleteCommittedDeliveryReceipt(effectId: string): boolean {
+    return (
+      this.db
+        .prepare("DELETE FROM committed_delivery_receipts WHERE effect_id = ?")
+        .run(effectId).changes === 1
+    );
+  }
+
   listRunnerAgentRuntimeConfigSettings(): RunnerAgentRuntimeConfigSetting[] {
     const rows = this.db
       .prepare(
@@ -2059,6 +2162,13 @@ export class ServerStore {
         stream_id TEXT NOT NULL,
         committed_through INTEGER NOT NULL DEFAULT 0 CHECK (committed_through >= 0),
         PRIMARY KEY (runner_id, stream_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS committed_delivery_receipts (
+        effect_id TEXT PRIMARY KEY,
+        runner_id TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS runner_agent_runtime_config_settings (

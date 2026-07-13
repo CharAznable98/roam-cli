@@ -74,9 +74,8 @@ export class RunnerEventService {
   }
 
   reconcileCommittedEffects(): void {
-    if (!this.onArchiveRemoveWorktreeJobSucceeded) {
-      return;
-    }
+    this.reconcileCommittedDeliveryReceipts();
+    if (!this.onArchiveRemoveWorktreeJobSucceeded) return;
     let jobs: GitJob[];
     try {
       jobs = this.store.listSucceededArchiveRemovalJobsPendingSessionArchive();
@@ -89,6 +88,28 @@ export class RunnerEventService {
       } catch {
         // The terminal job remains persisted and will be retried on the next
         // committed event, duplicate replay, or server restart.
+      }
+    }
+  }
+
+  private reconcileCommittedDeliveryReceipts(): void {
+    let receipts: ReturnType<ServerStore["listCommittedDeliveryReceipts"]>;
+    try {
+      receipts = this.store.listCommittedDeliveryReceipts();
+    } catch {
+      return;
+    }
+    for (const receipt of receipts) {
+      try {
+        this.rpc.resolveRunnerResponse(receipt.runnerId, receipt.result);
+        this.onCommittedSessionDeliveryReceipt?.(
+          receipt.runnerId,
+          receipt.result,
+        );
+        this.store.deleteCommittedDeliveryReceipt(receipt.effectId);
+      } catch {
+        // Keep the durable effect until a duplicate event, another committed
+        // event, or a server restart can finish settlement.
       }
     }
   }
@@ -145,32 +166,24 @@ export class RunnerEventService {
     }
 
     if (event.type === "sessionStatusCheckResult") {
-      defer(() => {
-        const matchedLiveRequest = sourceRunnerId
-          ? this.rpc.resolveRunnerResponse(sourceRunnerId, event.result)
-          : false;
-        if (!matchedLiveRequest && sourceRunnerId) {
-          this.onCommittedSessionDeliveryReceipt?.(
-            sourceRunnerId,
-            event.result,
-          );
-        }
-      });
+      if (sourceRunnerId) {
+        this.store.putCommittedDeliveryReceipt(
+          sourceRunnerId,
+          event.type,
+          event.result,
+        );
+      }
       return;
     }
 
     if (event.type === "sessionStartResult") {
-      defer(() => {
-        const matchedLiveRequest = sourceRunnerId
-          ? this.rpc.resolveRunnerResponse(sourceRunnerId, event.result)
-          : false;
-        if (!matchedLiveRequest && sourceRunnerId) {
-          this.onCommittedSessionDeliveryReceipt?.(
-            sourceRunnerId,
-            event.result,
-          );
-        }
-      });
+      if (sourceRunnerId) {
+        this.store.putCommittedDeliveryReceipt(
+          sourceRunnerId,
+          event.type,
+          event.result,
+        );
+      }
       return;
     }
 

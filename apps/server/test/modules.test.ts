@@ -1619,6 +1619,182 @@ describe("SessionCommandService", () => {
     ]);
   });
 
+  it("recovers a committed delivery receipt after a crash before after-commit settlement", async () => {
+    let hub = new ConnectionHub(store);
+    let rpc = new RunnerRpcClient(hub);
+    let sessions = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    let events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (runnerId, result) =>
+        sessions.settleCommittedDeliveryReceipt(runnerId, result),
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "running" });
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(
+      sessions.createUserMessage("session-1", {
+        requestId: "receipt-crash-recovery",
+        content: "survive committed event crash",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    const statusCheck = runnerMessages.at(-1);
+    if (
+      statusCheck?.type !== "checkSessionStatus" ||
+      !statusCheck.deliverInput?.deliveryId
+    ) {
+      throw new Error("durable input status check was not sent");
+    }
+    const deliveryId = statusCheck.deliverInput.deliveryId;
+    expect(
+      store.negotiateRunnerEventStream("runner-1", "receipt-stream", 0),
+    ).toEqual({ ok: true, ackThrough: 0 });
+    let afterCommit: (() => void) | undefined;
+    expect(
+      store.processRunnerEvent("runner-1", "receipt-stream", 1, () => {
+        afterCommit = events.handle(
+          {
+            type: "sessionStatusCheckResult",
+            result: {
+              requestId: statusCheck.requestId,
+              sessionId: "session-1",
+              active: true,
+              inputReceipt: { deliveryId, ownership: "owned" },
+            },
+          },
+          true,
+          "runner-1",
+        );
+      }),
+    ).toEqual({ status: "committed", ackThrough: 1 });
+    expect(afterCommit).toBeTypeOf("function");
+    expect(store.getPendingInputDelivery(deliveryId)).toBeDefined();
+    expect(store.listCommittedDeliveryReceipts()).toHaveLength(1);
+
+    // Simulate process death after the durable high-water commit but before
+    // the socket can run afterCommit or send the ACK.
+    store.close();
+    store = new ServerStore(dataDir);
+    hub = new ConnectionHub(store);
+    rpc = new RunnerRpcClient(hub);
+    sessions = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (runnerId, result) =>
+        sessions.settleCommittedDeliveryReceipt(runnerId, result),
+    );
+
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listCommittedDeliveryReceipts()).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "survive committed event crash" }),
+    ]);
+    expect(events).toBeDefined();
+  });
+
+  it("retries a failed receipt effect when the runner reconnects with a duplicate", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const sessions = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      5,
+    );
+    let failSettlement = true;
+    const events = new RunnerEventService(
+      store,
+      hub,
+      rpc,
+      undefined,
+      undefined,
+      (runnerId, result) => {
+        if (failSettlement) {
+          failSettlement = false;
+          throw new Error("injected after-commit failure");
+        }
+        sessions.settleCommittedDeliveryReceipt(runnerId, result);
+      },
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "running" });
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(
+      sessions.createUserMessage("session-1", {
+        requestId: "receipt-duplicate-retry",
+        content: "settle on duplicate reconnect",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    const statusCheck = runnerMessages.at(-1);
+    if (
+      statusCheck?.type !== "checkSessionStatus" ||
+      !statusCheck.deliverInput?.deliveryId
+    ) {
+      throw new Error("durable input status check was not sent");
+    }
+    const deliveryId = statusCheck.deliverInput.deliveryId;
+    store.negotiateRunnerEventStream("runner-1", "duplicate-stream", 0);
+    let afterCommit: (() => void) | undefined;
+    const event = {
+      type: "sessionStatusCheckResult" as const,
+      result: {
+        requestId: statusCheck.requestId,
+        sessionId: "session-1",
+        active: true,
+        inputReceipt: { deliveryId, ownership: "owned" as const },
+      },
+    };
+    expect(
+      store.processRunnerEvent("runner-1", "duplicate-stream", 1, () => {
+        afterCommit = events.handle(event, true, "runner-1");
+      }),
+    ).toEqual({ status: "committed", ackThrough: 1 });
+    afterCommit?.();
+    expect(store.getPendingInputDelivery(deliveryId)).toBeDefined();
+    expect(store.listCommittedDeliveryReceipts()).toHaveLength(1);
+
+    const duplicate = store.processRunnerEvent(
+      "runner-1",
+      "duplicate-stream",
+      1,
+      () => {
+        throw new Error("duplicate event must not be replayed");
+      },
+    );
+    expect(duplicate).toEqual({ status: "duplicate", ackThrough: 1 });
+    events.reconcileCommittedEffects();
+
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listCommittedDeliveryReceipts()).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "settle on duplicate reconnect" }),
+    ]);
+  });
+
   it("cancels an offline pending start before archiving and never reconciles it", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -2504,6 +2680,122 @@ describe("SessionCommandService", () => {
     expect(reconnectedMessages).toEqual([]);
     expect(store.getSession("session-1")?.status).toBe("stopped");
   });
+
+  it.each([
+    { name: "initial start", initialSessionCreate: true, resume: false },
+    { name: "resumable start", initialSessionCreate: false, resume: true },
+  ])(
+    "durably cleans pending attachments when stop cancels an offline $name",
+    async ({ initialSessionCreate, resume }) => {
+      const hub = new ConnectionHub(store);
+      const rpc = new RunnerRpcClient(hub);
+      const service = new SessionCommandService(
+        store,
+        hub,
+        new ApprovalService(store, hub),
+        rpc,
+        100,
+      );
+      const createdAt = "2026-06-05T00:00:00.000Z";
+      const deliveryId = resume ? "cancel-resume" : "cancel-initial";
+      const pendingAttachment = storedAttachment(deliveryId, createdAt);
+      store.createProject(projectRecord());
+      const historical = store.createSession({
+        ...sessionRecord(),
+        status: "completed",
+        ...(resume ? { agentThreadId: "thread-existing" } : {}),
+      });
+      addStoredAttachments(store, 1);
+      store.preparePendingSessionStart(
+        {
+          deliveryId,
+          kind: "start",
+          runnerId: historical.runnerId,
+          sessionId: historical.id,
+          message: pendingUserMessage(
+            deliveryId,
+            resume ? "resume with image" : "start with image",
+            createdAt,
+          ),
+          attachments: [pendingAttachment],
+          startCommand: {
+            type: "startSession",
+            requestId: `request-${deliveryId}`,
+            deliveryId,
+            session: { ...historical, status: "pending" },
+            prompt: resume ? "resume with image" : "start with image",
+            attachments: [toRunnerAttachment(pendingAttachment)],
+            ...(resume ? { resumeThreadId: "thread-existing" } : {}),
+          },
+          initialSessionCreate,
+          createdAt,
+        },
+        createdAt,
+      );
+
+      await service.handleClientCommand({
+        type: "controlSignal",
+        sessionId: historical.id,
+        signal: "stop",
+      });
+
+      expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+      expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+        expect.objectContaining({
+          sessionId: historical.id,
+          attachmentId: pendingAttachment.id,
+          runnerStoragePath: pendingAttachment.runnerStoragePath,
+        }),
+      ]);
+      expect(
+        store.getStoredMessageAttachment(historical.id, "attachment-1"),
+      ).toMatchObject({ status: "available" });
+
+      const replayedCommands: RunnerCommand[] = [];
+      hub.registerRunner(
+        runnerRegistration(),
+        fakeSocket(replayedCommands),
+      );
+      const replay = service.reconcileAttachmentCleanupJobs("runner-1");
+      await vi.waitFor(() => {
+        expect(
+          replayedCommands.filter(
+            (command) => command.type === "deleteSessionAttachments",
+          ),
+        ).toHaveLength(1);
+      });
+      const deletion = replayedCommands.find(
+        (
+          command,
+        ): command is Extract<
+          RunnerCommand,
+          { type: "deleteSessionAttachments" }
+        > => command.type === "deleteSessionAttachments",
+      );
+      if (!deletion) {
+        throw new Error("cancelled pending attachment cleanup was not replayed");
+      }
+      expect(deletion.attachments).toEqual([
+        {
+          id: pendingAttachment.id,
+          runnerStoragePath: pendingAttachment.runnerStoragePath,
+        },
+      ]);
+      rpc.resolveRunnerResponse("runner-1", {
+        requestId: deletion.requestId,
+        sessionId: historical.id,
+        deleted: [pendingAttachment.id],
+        failed: [],
+      });
+      await replay;
+
+      expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+      expect(
+        store.getStoredMessageAttachment(historical.id, "attachment-1"),
+      ).toMatchObject({ status: "available" });
+      expect(store.getSession(historical.id)?.status).toBe("stopped");
+    },
+  );
 
   it("finalizes a terminal pending start without sending a ghost restart", async () => {
     const hub = new ConnectionHub(store);

@@ -92,12 +92,13 @@ export async function resolveRunnerConfig(
   const cli = parseRawCliArgs(argv);
   const locator = await resolveConfigLocator(cli, env);
   const fileConfig = await readRunnerConfigFile(locator.configPath);
+  const workspace = await resolveEffectiveWorkspace(cli, env, fileConfig);
   const options = resolveOptions(
     cli,
     env,
     fileConfig,
     locator.configPath,
-    locator.workspace,
+    workspace,
   );
   await resolveRunnerDataDir(options.workspace, options.dataDir, false);
   if (options.token === undefined || options.token.length === 0) {
@@ -112,7 +113,7 @@ export async function resolveRunnerConfig(
   }
   return {
     options,
-    configPath: locator.configPath,
+    configPath: await resolveConfigPath(workspace, locator.dataDir),
   };
 }
 
@@ -123,6 +124,7 @@ export async function resolveRunnerConfigDraft(
   const cli = parseRawCliArgs(argv);
   const locator = await resolveConfigLocator(cli, env);
   const fileConfig = await readRunnerConfigFile(locator.configPath);
+  const workspace = await resolveEffectiveWorkspace(cli, env, fileConfig);
   const server = cli.server ?? env.ROAM_RUNNER_SERVER ?? fileConfig?.server;
   const profileValue =
     cli.profile ?? env.ROAM_RUNNER_PROFILE ?? fileConfig?.profile ?? "standard";
@@ -137,7 +139,7 @@ export async function resolveRunnerConfigDraft(
       locator.configPath,
       () => RunnerProfileSchema.parse(profileValue),
     ),
-    workspace: locator.workspace,
+    workspace,
     dataDir: withConfigErrorContext(
       valueSource(cli.dataDir, env.ROAM_RUNNER_DATA_DIR, fileConfig?.dataDir),
       locator.configPath,
@@ -165,7 +167,10 @@ export async function resolveRunnerConfigDraft(
     draft.runnerId = runnerId;
   }
   await resolveRunnerDataDir(draft.workspace, draft.dataDir, false);
-  return { options: draft, configPath: locator.configPath };
+  return {
+    options: draft,
+    configPath: await resolveConfigPath(workspace, locator.dataDir),
+  };
 }
 
 export async function persistRunnerConfig(
@@ -272,7 +277,6 @@ export async function resolveRunnerDataDir(
         `Runner data path component is not a directory: ${current}`,
       );
     }
-    await hardenRunnerDataDirectory(current);
     const canonicalCurrent = await realpath(current);
     if (
       canonicalCurrent !== current ||
@@ -281,6 +285,7 @@ export async function resolveRunnerDataDir(
       throw new Error(`Runner data path escapes workspace: ${current}`);
     }
   }
+  await hardenRunnerDataDirectory(candidate);
   return candidate;
 }
 
@@ -362,7 +367,10 @@ function resolveOptions(
   const workspace =
     canonicalWorkspace ??
     resolve(
-      cli.workspace ?? env.ROAM_RUNNER_WORKSPACE ?? defaultWorkspace(env),
+      cli.workspace ??
+        env.ROAM_RUNNER_WORKSPACE ??
+        fileConfig?.workspace ??
+        defaultWorkspace(env),
     );
   const dataDirValue =
     cli.dataDir ??
@@ -497,6 +505,31 @@ async function resolveConfigLocator(
     dataDir,
     configPath: join(directory, "config.json"),
   };
+}
+
+async function resolveEffectiveWorkspace(
+  cli: RawRunnerCliOptions,
+  env: NodeJS.ProcessEnv,
+  fileConfig: RunnerConfigFile | undefined,
+): Promise<string> {
+  return resolveCanonicalWorkspace(
+    cli.workspace ??
+      env.ROAM_RUNNER_WORKSPACE ??
+      fileConfig?.workspace ??
+      defaultWorkspace(env),
+  );
+}
+
+async function resolveConfigPath(
+  workspace: string,
+  locatorDataDir: string,
+): Promise<string> {
+  const directory = await resolveRunnerDataDir(
+    workspace,
+    locatorDataDir,
+    false,
+  );
+  return join(directory, "config.json");
 }
 
 async function resolveCanonicalWorkspace(path: string): Promise<string> {

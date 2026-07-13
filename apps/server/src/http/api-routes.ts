@@ -55,6 +55,16 @@ import {
 const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
   Math.ceil(MAX_TOTAL_IMAGE_BYTES_PER_TURN * (4 / 3)) + 1024 * 1024;
 
+// requestId was added to make browser retries durable, but older HTTP clients
+// do not send it. Keep the public protocol strict for current clients while
+// accepting the legacy shape at the HTTP compatibility boundary.
+const HttpCreateSessionSchema = ApiCreateSessionSchema.extend({
+  requestId: ApiCreateSessionSchema.shape.requestId.optional(),
+});
+const HttpCreateMessageSchema = ApiCreateMessageSchema.extend({
+  requestId: ApiCreateMessageSchema.shape.requestId.optional(),
+});
+
 function toFileTreeQuery(parsed: {
   path: string;
   depth: number;
@@ -321,14 +331,17 @@ function registerSessionRoutes(
     "/v1/sessions",
     { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const parsed = ApiCreateSessionSchema.safeParse(request.body);
+      const parsed = HttpCreateSessionSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply
           .code(400)
           .send({ error: "invalid_request", issues: parsed.error.issues });
       }
 
-      const result = await context.services.sessions.createSession(parsed.data);
+      const { requestId, ...legacyInput } = parsed.data;
+      const result = await context.services.sessions.createSession(
+        requestId === undefined ? legacyInput : { ...legacyInput, requestId },
+      );
       if (!result.ok) {
         if (result.error === "runner_offline") {
           return reply.code(409).send({ error: "runner_offline" });
@@ -422,16 +435,17 @@ function registerSessionRoutes(
     { bodyLimit: IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES },
     async (request, reply) => {
       const params = SessionParamsSchema.parse(request.params);
-      const parsed = ApiCreateMessageSchema.safeParse(request.body);
+      const parsed = HttpCreateMessageSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply
           .code(400)
           .send({ error: "invalid_request", issues: parsed.error.issues });
       }
 
+      const { requestId, ...legacyInput } = parsed.data;
       const result = await context.services.sessions.createUserMessage(
         params.id,
-        parsed.data,
+        requestId === undefined ? legacyInput : { ...legacyInput, requestId },
       );
       if (!result.ok) {
         if (result.error === "session_not_found") {
