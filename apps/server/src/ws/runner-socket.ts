@@ -97,6 +97,9 @@ export function registerRunnerSocketRoute(
           void context.services.sessions.reconcilePendingInputDeliveries(
             registeredRunner.runnerId,
           );
+          void context.services.sessions.reconcileAttachmentCleanupJobs(
+            registeredRunner.runnerId,
+          );
           return;
         }
 

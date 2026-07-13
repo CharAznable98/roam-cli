@@ -46,7 +46,9 @@ describe("SessionAttachmentStore", () => {
   it.each(["state", "root", "session", "attachment"] as const)(
     "rejects %s directory symlinks for read, delete, and local paths",
     async (layer) => {
-      const stateDir = await mkdtemp(join(tmpdir(), "roam-runner-attachments-"));
+      const stateDir = await mkdtemp(
+        join(tmpdir(), "roam-runner-attachments-"),
+      );
       const outsideDir = await mkdtemp(join(tmpdir(), "roam-runner-outside-"));
       try {
         const store = new SessionAttachmentStore(stateDir);
@@ -96,16 +98,12 @@ describe("SessionAttachmentStore", () => {
           ),
         ).rejects.toThrow("Invalid attachment storage path");
         await expect(
-          store.deleteSessionAttachments(
-            `delete-${layer}-link`,
-            "session-1",
-            [
-              {
-                id: attachment?.id ?? "missing",
-                runnerStoragePath: attachment?.runnerStoragePath ?? "",
-              },
-            ],
-          ),
+          store.deleteSessionAttachments(`delete-${layer}-link`, "session-1", [
+            {
+              id: attachment?.id ?? "missing",
+              runnerStoragePath: attachment?.runnerStoragePath ?? "",
+            },
+          ]),
         ).resolves.toMatchObject({
           deleted: [],
           failed: [attachment?.id],
@@ -406,6 +404,37 @@ describe("SessionAttachmentStore", () => {
         failed: [],
       });
       await expect(stat(localPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      await expect(
+        store.deleteSessionAttachments("delete-retry", "s/1", [
+          {
+            id: attachment?.id ?? "missing",
+            runnerStoragePath: attachment?.runnerStoragePath ?? "",
+          },
+        ]),
+      ).resolves.toMatchObject({
+        deleted: [attachment?.id],
+        failed: [],
+      });
+      await expect(
+        store.deleteSessionAttachments("delete-wrong-id", "s/1", [
+          {
+            id: "different-attachment",
+            runnerStoragePath: attachment?.runnerStoragePath ?? "",
+          },
+        ]),
+      ).resolves.toMatchObject({
+        deleted: [],
+        failed: ["different-attachment"],
+      });
+      await expect(
+        store.deleteSessionAttachments("delete-missing-escape", "s/1", [
+          { id: "missing", runnerStoragePath: "../missing.png" },
+        ]),
+      ).resolves.toMatchObject({
+        deleted: [],
+        failed: ["missing"],
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -441,10 +470,7 @@ describe("SessionAttachmentStore", () => {
         store.writeSessionAttachments(
           "write-too-many",
           "session-1",
-          Array.from(
-            { length: MAX_ATTACHMENTS_PER_REQUEST + 1 },
-            imageUpload,
-          ),
+          Array.from({ length: MAX_ATTACHMENTS_PER_REQUEST + 1 }, imageUpload),
         ),
       ).rejects.toThrow("Too many attachments");
       await expect(

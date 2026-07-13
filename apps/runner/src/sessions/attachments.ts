@@ -32,6 +32,10 @@ interface ResolvedAttachmentPath {
   readonly identity: FileIdentity;
 }
 
+type ResolvedAttachmentDeletePath =
+  | { readonly exists: false }
+  | ({ readonly exists: true } & ResolvedAttachmentPath);
+
 interface CreatedAttachmentPath {
   readonly id: string;
   readonly runnerStoragePath: string;
@@ -82,10 +86,7 @@ export class SessionAttachmentStore {
         const absolutePath = join(attachmentDir, fileName);
         const handle = await open(
           absolutePath,
-          constants.O_WRONLY |
-            constants.O_CREAT |
-            constants.O_EXCL |
-            NO_FOLLOW,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW,
           0o600,
         );
         createdPath.ownsFile = true;
@@ -208,20 +209,34 @@ export class SessionAttachmentStore {
     const failed: string[] = [];
     for (const attachment of attachments) {
       try {
-        const first = await this.resolveExistingAttachmentPath(
+        const first = await this.resolveAttachmentDeletePath(
           sessionId,
           attachment.id,
           attachment.runnerStoragePath,
         );
-        const current = await this.resolveExistingAttachmentPath(
+        if (!first.exists) {
+          deleted.push(attachment.id);
+          continue;
+        }
+        const current = await this.resolveAttachmentDeletePath(
           sessionId,
           attachment.id,
           attachment.runnerStoragePath,
         );
+        if (!current.exists) {
+          deleted.push(attachment.id);
+          continue;
+        }
         if (!sameFile(first.identity, current.identity)) {
           throw new Error("Invalid attachment storage path");
         }
-        await rm(current.absolutePath);
+        try {
+          await rm(current.absolutePath);
+        } catch (error: unknown) {
+          if (!isMissingPathError(error)) {
+            throw error;
+          }
+        }
         await rmdir(dirname(current.absolutePath)).catch((error: unknown) => {
           if (!isDirectoryNotEmptyOrMissing(error)) {
             throw error;
@@ -233,6 +248,70 @@ export class SessionAttachmentStore {
       }
     }
     return { requestId, sessionId, deleted, failed };
+  }
+
+  private async resolveAttachmentDeletePath(
+    sessionId: string,
+    attachmentId: string,
+    runnerStoragePath: string,
+  ): Promise<ResolvedAttachmentDeletePath> {
+    try {
+      const stateRealPath = await validateStateDirectory(this.stateDir);
+      const attachmentsRoot = await validateDirectDirectory(
+        stateRealPath,
+        join(stateRealPath, "attachments"),
+      );
+      const sessionDir = await validateDirectDirectory(
+        attachmentsRoot,
+        join(attachmentsRoot, encodeStorageSegment(sessionId)),
+      );
+      const expectedAttachmentDir = join(
+        sessionDir,
+        encodeStorageSegment(attachmentId),
+      );
+      const absolutePath = this.resolveAttachmentPath(
+        stateRealPath,
+        expectedAttachmentDir,
+        runnerStoragePath,
+      );
+      let attachmentDir: string;
+      try {
+        attachmentDir = await validateDirectDirectory(
+          sessionDir,
+          expectedAttachmentDir,
+        );
+      } catch (error: unknown) {
+        if (isMissingPathError(error)) {
+          return { exists: false };
+        }
+        throw error;
+      }
+      let fileStat;
+      try {
+        fileStat = await lstat(absolutePath);
+      } catch (error: unknown) {
+        if (isMissingPathError(error)) {
+          return { exists: false };
+        }
+        throw error;
+      }
+      const fileRealPath = await realpath(absolutePath);
+      if (
+        fileStat.isSymbolicLink() ||
+        !fileStat.isFile() ||
+        fileStat.nlink !== 1 ||
+        dirname(fileRealPath) !== attachmentDir
+      ) {
+        throw new Error("Invalid attachment storage path");
+      }
+      return {
+        exists: true,
+        absolutePath,
+        identity: { dev: fileStat.dev, ino: fileStat.ino },
+      };
+    } catch {
+      throw new Error("Invalid attachment storage path");
+    }
   }
 
   async localPathFor(
@@ -403,6 +482,15 @@ function isDirectoryNotEmptyOrMissing(error: unknown): boolean {
     error !== null &&
     "code" in error &&
     (error.code === "ENOTEMPTY" || error.code === "ENOENT")
+  );
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
   );
 }
 

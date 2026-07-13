@@ -24,7 +24,10 @@ import {
 } from "@roamcli/shared/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRegistry, type LoadedAgent } from "../agents/registry.js";
-import { StartDeliveryStore } from "../persistence/start-deliveries.js";
+import {
+  type StartDeliveryRecord,
+  StartDeliveryStore,
+} from "../persistence/start-deliveries.js";
 import { SessionManager } from "../sessions/manager.js";
 
 const execFileAsync = promisify(execFile);
@@ -126,11 +129,15 @@ describe("SessionManager", () => {
   );
 
   it.each([
-    { state: "launching" as const, ownership: "not_owned" as const },
-    { state: "launched" as const, ownership: "owned" as const },
+    {
+      state: "launching" as const,
+      ownership: "not_owned" as const,
+      created: 0,
+    },
+    { state: "launched" as const, ownership: "owned" as const, created: 1 },
   ])(
-    "returns $ownership without replaying an explicitly retried prior-boot $state intent",
-    async ({ state, ownership }) => {
+    "returns $ownership and creates $created session(s) for an explicitly retried prior-boot $state intent",
+    async ({ state, ownership, created }) => {
       const workspace = await mkdtemp(
         join(tmpdir(), "roam-runner-start-indeterminate-"),
       );
@@ -152,18 +159,19 @@ describe("SessionManager", () => {
         attachments: [],
       };
       await firstManager.handle(command);
-      await new Promise((resolve) => setTimeout(resolve, 25));
       const receiptPath = join(stateDir, "start-delivery-receipts.json");
-      const document = JSON.parse(await readFile(receiptPath, "utf8")) as {
-        receipts: Array<Record<string, unknown>>;
-      };
-      document.receipts[0] = {
-        ...document.receipts[0],
+      let completedReceipt: StartDeliveryRecord | undefined;
+      await vi.waitFor(async () => {
+        const document = JSON.parse(await readFile(receiptPath, "utf8")) as {
+          receipts: StartDeliveryRecord[];
+        };
+        expect(document.receipts[0]?.state).toBe("completed");
+        completedReceipt = document.receipts[0];
+      });
+      await new StartDeliveryStore(stateDir).put({
+        ...completedReceipt!,
         state,
         bootId: "crashed-boot",
-      };
-      await writeFile(receiptPath, `${JSON.stringify(document)}\n`, {
-        mode: 0o600,
       });
 
       const events: RunnerEvent[] = [];
@@ -182,7 +190,7 @@ describe("SessionManager", () => {
         requestId: "request-indeterminate-retry",
       });
 
-      expect(restarted.created()).toBe(0);
+      expect(restarted.created()).toBe(created);
       expect(events).toContainEqual({
         type: "sessionStartResult",
         result: {
@@ -216,18 +224,19 @@ describe("SessionManager", () => {
       agents: [seed.agent],
       emit: () => undefined,
     }).handle(command);
-    await new Promise((resolve) => setTimeout(resolve, 25));
     const receiptPath = join(stateDir, "start-delivery-receipts.json");
-    const document = JSON.parse(await readFile(receiptPath, "utf8")) as {
-      receipts: Array<Record<string, unknown>>;
-    };
-    document.receipts[0] = {
-      ...document.receipts[0],
+    let completedReceipt: StartDeliveryRecord | undefined;
+    await vi.waitFor(async () => {
+      const document = JSON.parse(await readFile(receiptPath, "utf8")) as {
+        receipts: StartDeliveryRecord[];
+      };
+      expect(document.receipts[0]?.state).toBe("completed");
+      completedReceipt = document.receipts[0];
+    });
+    const { bootId: _completedBootId, ...acceptedReceipt } = completedReceipt!;
+    await new StartDeliveryStore(stateDir).put({
+      ...acceptedReceipt,
       state: "accepted",
-    };
-    delete document.receipts[0]!.bootId;
-    await writeFile(receiptPath, `${JSON.stringify(document)}\n`, {
-      mode: 0o600,
     });
 
     const tracked = startCountingCodexAgent();
@@ -652,6 +661,11 @@ describe("SessionManager", () => {
       message: `Managed worktree path is not registered for the project: ${await realpath(executionFolder)}`,
       code: "INVALID_CWD",
     });
+    expect(events).toContainEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "failed",
+    });
   });
 
   it("rejects a direct session cwd symlink that escapes the workspace", async () => {
@@ -687,6 +701,11 @@ describe("SessionManager", () => {
       sessionId: "s1",
       message: `Path escapes workspace: ${linkedCwd}`,
       code: "INVALID_CWD",
+    });
+    expect(events).toContainEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "failed",
     });
     expect(events).not.toContainEqual(
       expect.objectContaining({ type: "sessionStatus", status: "running" }),

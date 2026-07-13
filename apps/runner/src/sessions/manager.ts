@@ -415,6 +415,17 @@ export class SessionManager {
             ? "AGENT_ACCEPTANCE_TIMEOUT"
             : failureCode,
       });
+      if (token === undefined) {
+        // Folder preparation happens before a wait generation exists, but the
+        // server still needs a terminal event for legacy/non-durable starts.
+        // Without it, an INVALID_CWD or managed-worktree setup failure leaves
+        // the server-side session permanently pending.
+        await this.#emitSafely({
+          type: "sessionStatus",
+          sessionId: session.id,
+          status: "failed",
+        });
+      }
       if (failureCode === "SPAWN_ERROR") {
         if (terminalPublication?.owner) {
           await this.#completeTerminalPublication(
@@ -475,7 +486,15 @@ export class SessionManager {
         return;
       }
       if (existing.state === "launched") {
-        await this.#emitStartReceipt(command.requestId, existing, "owned");
+        if (existing.bootId === this.#bootId) {
+          await this.#emitStartReceipt(command.requestId, existing, "owned");
+          return;
+        }
+        // A launched receipt only proves that the agent accepted the prompt in
+        // the boot that wrote it. After a runner restart that process is gone,
+        // so claiming ownership would let the server finalize a ghost start.
+        // An explicit retry authorizes this boot to safely launch it again.
+        await this.#launchAcceptedStart(existing, command.requestId);
         return;
       }
       if (existing.state === "completed") {

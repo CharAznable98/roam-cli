@@ -544,6 +544,101 @@ describe("server", () => {
     expect(response.json()).toEqual({ runners: [] });
   });
 
+  it("automatically replays persisted attachment cleanup jobs when a runner reconnects after restart", async () => {
+    createTestProject(app);
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    app.roam.store.createSession({
+      id: "cleanup-replay-session",
+      title: "Cleanup replay",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "running",
+      executionMode: "direct",
+      executionFolder: "/workspace",
+      cwd: "/workspace",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    app.roam.store.putPendingInputDelivery({
+      deliveryId: "cleanup-replay-message",
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "cleanup-replay-session",
+      message: {
+        id: "cleanup-replay-message",
+        sessionId: "cleanup-replay-session",
+        role: "user",
+        content: "never materialize",
+        encrypted: false,
+        createdAt,
+      },
+      attachments: [
+        {
+          id: "cleanup-replay-attachment",
+          sessionId: "cleanup-replay-session",
+          messageId: "cleanup-replay-message",
+          runnerId: "runner-1",
+          kind: "image",
+          name: "screen.png",
+          mimeType: "image/png",
+          size: 5,
+          sha256:
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+          runnerStoragePath:
+            "attachments/cleanup-replay-session/cleanup-replay-attachment/screen.png",
+          status: "available",
+          createdAt,
+        },
+      ],
+      createdAt,
+    });
+    app.roam.store.archiveProject("project-1", new Date().toISOString());
+    expect(app.roam.store.listAttachmentCleanupJobs("project-1")).toHaveLength(
+      1,
+    );
+
+    await app.close();
+    app = await createServer({
+      dataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`);
+    const cleanupCommand = nextJson(runner);
+    runner.send(JSON.stringify(runnerRegistration()));
+    await expect(cleanupCommand).resolves.toMatchObject({
+      type: "deleteSessionAttachments",
+      sessionId: "cleanup-replay-session",
+      attachments: [
+        {
+          id: "cleanup-replay-attachment",
+          runnerStoragePath:
+            "attachments/cleanup-replay-session/cleanup-replay-attachment/screen.png",
+        },
+      ],
+    });
+    const command = await cleanupCommand;
+    runner.send(
+      JSON.stringify({
+        type: "attachmentDeleteResult",
+        result: {
+          requestId: command.requestId,
+          sessionId: "cleanup-replay-session",
+          deleted: ["cleanup-replay-attachment"],
+          failed: [],
+        },
+      }),
+    );
+    await waitUntil(
+      () => app.roam.store.listAttachmentCleanupJobs("project-1").length === 0,
+    );
+    expect(app.roam.store.listMessages("cleanup-replay-session")).toEqual([]);
+    runner.close();
+  });
+
   it("ignores invalid runner events without sending incompatible commands", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);

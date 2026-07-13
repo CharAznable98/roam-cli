@@ -605,12 +605,14 @@ function registerProjectRoutes(
   app.post("/v1/projects/:id/archive", async (request, reply) => {
     const params = ProjectParamsSchema.parse(request.params);
     const archivedAt = nowIso();
-    context.services.sessions.handleProjectArchived(params.id, archivedAt);
     const project = context.store.archiveProject(params.id, archivedAt);
     if (!project) {
       return reply.code(404).send({ error: "project_not_found" });
     }
     context.hub.broadcast({ type: "project:updated", project });
+    void context.services.sessions
+      .handleProjectArchived(params.id, archivedAt)
+      .catch(() => undefined);
     return { project };
   });
 

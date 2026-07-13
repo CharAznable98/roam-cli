@@ -109,6 +109,15 @@ interface MessageAttachmentRow {
   deleted_at: string | null;
 }
 
+interface AttachmentCleanupJobRow {
+  project_id: string;
+  session_id: string;
+  runner_id: string;
+  attachment_id: string;
+  runner_storage_path: string;
+  created_at: string;
+}
+
 interface PendingInputDeliveryRow {
   delivery_id: string;
   kind: "input" | "start";
@@ -119,6 +128,7 @@ interface PendingInputDeliveryRow {
   attachments_json: string;
   start_command_json: string | null;
   persist_message: number;
+  initial_session_create: number;
   attempt_count: number;
   last_attempt_at: string | null;
   last_error: string | null;
@@ -213,6 +223,15 @@ export type StoredMessageAttachment = MessageAttachment & {
   runnerStoragePath: string;
 };
 
+export interface AttachmentCleanupJob {
+  projectId: string;
+  sessionId: string;
+  runnerId: string;
+  attachmentId: string;
+  runnerStoragePath: string;
+  createdAt: string;
+}
+
 export interface PendingInputDelivery {
   deliveryId: string;
   kind: "input" | "start";
@@ -223,6 +242,7 @@ export interface PendingInputDelivery {
   attachments: StoredMessageAttachment[];
   startCommand?: Extract<RunnerCommand, { type: "startSession" }>;
   persistMessage?: boolean;
+  initialSessionCreate?: boolean;
   attemptCount: number;
   lastAttemptAt?: string;
   lastError?: string;
@@ -470,6 +490,41 @@ export class ServerStore {
   archiveProject(id: string, archivedAt: string): Project | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const pendingRows = this.db
+        .prepare(
+          `SELECT pending_input_deliveries.* FROM pending_input_deliveries
+           INNER JOIN sessions ON sessions.id = pending_input_deliveries.session_id
+           WHERE sessions.project_id = ?`,
+        )
+        .all(id) as unknown as PendingInputDeliveryRow[];
+      const insertCleanup = this.db.prepare(
+        `INSERT OR IGNORE INTO attachment_cleanup_jobs
+           (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (const row of pendingRows) {
+        const pending = toPendingInputDelivery(row);
+        for (const attachment of pending.attachments) {
+          insertCleanup.run(
+            id,
+            pending.sessionId,
+            pending.runnerId,
+            attachment.id,
+            attachment.runnerStoragePath,
+            archivedAt,
+          );
+        }
+      }
+      this.db
+        .prepare(
+          `DELETE FROM sessions
+           WHERE project_id = ? AND status = 'pending'
+             AND id IN (
+               SELECT session_id FROM pending_input_deliveries
+               WHERE kind = 'start' AND initial_session_create = 1
+             )`,
+        )
+        .run(id);
       this.db
         .prepare(
           `DELETE FROM pending_input_deliveries
@@ -664,12 +719,34 @@ export class ServerStore {
       "attemptCount" | "lastAttemptAt" | "lastError" | "updatedAt"
     >,
     creationRequestFingerprint?: string,
-  ): { session: Session; delivery: PendingInputDelivery } {
+  ): { session: Session; delivery: PendingInputDelivery } | undefined {
     if (delivery.kind !== "start" || !delivery.startCommand) {
       throw new Error("pending session start requires a start command");
     }
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const activeProject = this.db
+        .prepare("SELECT 1 FROM projects WHERE id = ? AND archived_at IS NULL")
+        .get(session.projectId);
+      if (!activeProject) {
+        const insertCleanup = this.db.prepare(
+          `INSERT OR IGNORE INTO attachment_cleanup_jobs
+             (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const attachment of delivery.attachments) {
+          insertCleanup.run(
+            session.projectId,
+            session.id,
+            session.runnerId,
+            attachment.id,
+            attachment.runnerStoragePath,
+            session.updatedAt,
+          );
+        }
+        this.db.exec("COMMIT");
+        return undefined;
+      }
       const created = this.createSession(session);
       if (creationRequestFingerprint) {
         this.db
@@ -929,9 +1006,9 @@ export class ServerStore {
       .prepare(
         `INSERT INTO pending_input_deliveries
            (delivery_id, kind, runner_id, session_id, input_request_id, message_json,
-            attachments_json, start_command_json, persist_message, attempt_count,
+            attachments_json, start_command_json, persist_message, initial_session_create, attempt_count,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
          ON CONFLICT(delivery_id) DO NOTHING`,
       )
       .run(
@@ -944,6 +1021,7 @@ export class ServerStore {
         JSON.stringify(delivery.attachments),
         delivery.startCommand ? JSON.stringify(delivery.startCommand) : null,
         delivery.persistMessage === false ? 0 : 1,
+        delivery.initialSessionCreate ? 1 : 0,
         delivery.createdAt,
         delivery.createdAt,
       );
@@ -1343,6 +1421,42 @@ export class ServerStore {
     return rows.map(toStoredMessageAttachment);
   }
 
+  listAttachmentCleanupJobs(projectId: string): AttachmentCleanupJob[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM attachment_cleanup_jobs
+         WHERE project_id = ? ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(projectId) as unknown as AttachmentCleanupJobRow[];
+    return rows.map(toAttachmentCleanupJob);
+  }
+
+  listAttachmentCleanupJobsByRunner(runnerId: string): AttachmentCleanupJob[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM attachment_cleanup_jobs
+         WHERE runner_id = ? ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(runnerId) as unknown as AttachmentCleanupJobRow[];
+    return rows.map(toAttachmentCleanupJob);
+  }
+
+  deleteAttachmentCleanupJobs(
+    sessionId: string,
+    attachmentIds: readonly string[],
+  ): void {
+    if (attachmentIds.length === 0) {
+      return;
+    }
+    const placeholders = attachmentIds.map(() => "?").join(", ");
+    this.db
+      .prepare(
+        `DELETE FROM attachment_cleanup_jobs
+         WHERE session_id = ? AND attachment_id IN (${placeholders})`,
+      )
+      .run(sessionId, ...attachmentIds);
+  }
+
   getStoredMessageAttachment(
     sessionId: string,
     attachmentId: string,
@@ -1357,14 +1471,24 @@ export class ServerStore {
 
   markSessionAttachmentsDeleted(
     sessionId: string,
+    attachmentIds: readonly string[],
     deletedAt: string,
   ): StoredMessageAttachment[] {
+    if (attachmentIds.length === 0) {
+      return [];
+    }
+    const placeholders = attachmentIds.map(() => "?").join(", ");
     this.db
       .prepare(
-        "UPDATE message_attachments SET status = 'deleted', deleted_at = ? WHERE session_id = ? AND status <> 'deleted'",
+        `UPDATE message_attachments SET status = 'deleted', deleted_at = ?
+         WHERE session_id = ? AND status <> 'deleted' AND id IN (${placeholders})`,
       )
-      .run(deletedAt, sessionId);
-    return this.listStoredMessageAttachments(sessionId);
+      .run(deletedAt, sessionId, ...attachmentIds);
+    const deletedIds = new Set(attachmentIds);
+    return this.listStoredMessageAttachments(sessionId).filter(
+      (attachment) =>
+        attachment.status === "deleted" && deletedIds.has(attachment.id),
+    );
   }
 
   upsertApproval(approval: Approval): Approval {
@@ -1811,6 +1935,19 @@ export class ServerStore {
         FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS attachment_cleanup_jobs (
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        runner_id TEXT NOT NULL,
+        attachment_id TEXT NOT NULL,
+        runner_storage_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(project_id, session_id, attachment_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS attachment_cleanup_jobs_project_idx
+        ON attachment_cleanup_jobs(project_id, created_at);
+
       CREATE TABLE IF NOT EXISTS pending_input_deliveries (
         delivery_id TEXT PRIMARY KEY,
         kind TEXT NOT NULL DEFAULT 'input',
@@ -1821,6 +1958,7 @@ export class ServerStore {
         attachments_json TEXT NOT NULL,
         start_command_json TEXT,
         persist_message INTEGER NOT NULL DEFAULT 1,
+        initial_session_create INTEGER NOT NULL DEFAULT 0,
         attempt_count INTEGER NOT NULL DEFAULT 0,
         last_attempt_at TEXT,
         last_error TEXT,
@@ -1920,6 +2058,11 @@ export class ServerStore {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        key TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
     `);
     this.addColumnIfMissing("sessions", "project_id", "TEXT");
     this.addColumnIfMissing(
@@ -1954,6 +2097,7 @@ export class ServerStore {
       "persist_message",
       "INTEGER NOT NULL DEFAULT 1",
     );
+    this.migrateInitialSessionCreateMarker();
     this.addColumnIfMissing("projects", "pinned_at", "TEXT");
     this.addColumnIfMissing(
       "messages",
@@ -1972,8 +2116,104 @@ export class ServerStore {
     const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
       name: string;
     }>;
-    if (!rows.some((row) => row.name === column)) {
-      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    if (rows.some((row) => row.name === column)) {
+      return;
+    }
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  private backfillLegacyInitialSessionCreates(): void {
+    const rows = this.db
+      .prepare(
+        `SELECT pending.delivery_id, pending.session_id,
+                pending.start_command_json, sessions.created_at,
+                sessions.updated_at, sessions.status,
+                sessions.agent_thread_id,
+                EXISTS (
+                  SELECT 1 FROM messages WHERE messages.session_id = sessions.id
+                ) AS has_messages
+         FROM pending_input_deliveries AS pending
+         INNER JOIN sessions ON sessions.id = pending.session_id
+         WHERE pending.kind = 'start'
+           AND pending.persist_message = 1
+           AND pending.initial_session_create = 0`,
+      )
+      .all() as Array<{
+      delivery_id: string;
+      session_id: string;
+      start_command_json: string | null;
+      created_at: string;
+      updated_at: string;
+      status: string;
+      agent_thread_id: string | null;
+      has_messages: number;
+    }>;
+    const markInitial = this.db.prepare(
+      `UPDATE pending_input_deliveries
+       SET initial_session_create = 1
+       WHERE delivery_id = ?`,
+    );
+    for (const row of rows) {
+      if (
+        row.status !== "pending" ||
+        row.agent_thread_id !== null ||
+        row.has_messages !== 0 ||
+        row.updated_at !== row.created_at ||
+        !row.start_command_json
+      ) {
+        continue;
+      }
+      let command: unknown;
+      try {
+        command = JSON.parse(row.start_command_json);
+      } catch {
+        continue;
+      }
+      if (
+        !isLegacyInitialStartCommand(
+          command,
+          row.session_id,
+          row.delivery_id,
+          row.created_at,
+        )
+      ) {
+        continue;
+      }
+      markInitial.run(row.delivery_id);
+    }
+  }
+
+  private migrateInitialSessionCreateMarker(): void {
+    const migrationKey = "backfill_initial_session_create_v1";
+    if (
+      this.db
+        .prepare("SELECT 1 FROM schema_migrations WHERE key = ?")
+        .get(migrationKey)
+    ) {
+      return;
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const applied = this.db
+        .prepare("SELECT 1 FROM schema_migrations WHERE key = ?")
+        .get(migrationKey);
+      if (!applied) {
+        this.addColumnIfMissing(
+          "pending_input_deliveries",
+          "initial_session_create",
+          "INTEGER NOT NULL DEFAULT 0",
+        );
+        this.backfillLegacyInitialSessionCreates();
+        this.db
+          .prepare(
+            "INSERT INTO schema_migrations (key, applied_at) VALUES (?, ?)",
+          )
+          .run(migrationKey, new Date().toISOString());
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
     }
   }
 
@@ -1987,6 +2227,36 @@ export class ServerStore {
       )
       .get(runnerId, streamId) as RunnerEventStreamRow | undefined;
   }
+}
+
+function isLegacyInitialStartCommand(
+  value: unknown,
+  sessionId: string,
+  deliveryId: string,
+  sessionCreatedAt: string,
+): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const command = value as Record<string, unknown>;
+  if (
+    command.type !== "startSession" ||
+    command.deliveryId !== deliveryId ||
+    "resumeThreadId" in command
+  ) {
+    return false;
+  }
+  const session = command.session;
+  if (!session || typeof session !== "object") {
+    return false;
+  }
+  const record = session as Record<string, unknown>;
+  return (
+    record.id === sessionId &&
+    record.status === "pending" &&
+    record.createdAt === sessionCreatedAt &&
+    record.updatedAt === sessionCreatedAt
+  );
 }
 
 function toProject(row: ProjectRow): Project {
@@ -2023,6 +2293,7 @@ function toPendingInputDelivery(
         }
       : {}),
     ...(row.persist_message === 0 ? { persistMessage: false } : {}),
+    ...(row.initial_session_create ? { initialSessionCreate: true } : {}),
     attemptCount: row.attempt_count,
     ...(row.last_attempt_at ? { lastAttemptAt: row.last_attempt_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
@@ -2156,6 +2427,19 @@ function toStoredMessageAttachment(
     status: row.status,
     createdAt: row.created_at,
     ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
+  };
+}
+
+function toAttachmentCleanupJob(
+  row: AttachmentCleanupJobRow,
+): AttachmentCleanupJob {
+  return {
+    projectId: row.project_id,
+    sessionId: row.session_id,
+    runnerId: row.runner_id,
+    attachmentId: row.attachment_id,
+    runnerStoragePath: row.runner_storage_path,
+    createdAt: row.created_at,
   };
 }
 

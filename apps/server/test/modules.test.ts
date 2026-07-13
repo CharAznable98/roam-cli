@@ -597,6 +597,60 @@ describe("SessionCommandService", () => {
     });
   });
 
+  it("coalesces concurrent attachment session creates with the same requestId", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+    const input = {
+      requestId: "concurrent-create-with-image",
+      projectId: "project-1",
+      agent: "codex" as const,
+      prompt: "describe this image once",
+      attachments: [imageUpload()],
+    };
+
+    const first = service.createSession(input);
+    const second = service.createSession(input);
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write command was not sent");
+    }
+    const runnerAttachment = runnerAttachmentRef(writeCommand.sessionId);
+    rpc.resolveRunnerResponse({
+      requestId: writeCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      attachments: [runnerAttachment],
+    });
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toMatchObject({ ok: true });
+    expect(secondResult).toEqual(firstResult);
+    if (!firstResult.ok || !secondResult.ok) {
+      throw new Error("coalesced session creates did not succeed");
+    }
+    expect(secondResult.value.session.id).toBe(firstResult.value.session.id);
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.listMessages(firstResult.value.session.id)).toHaveLength(1);
+    expect(
+      store.listMessageAttachments(firstResult.value.session.id),
+    ).toHaveLength(1);
+    expect(runnerMessages).toHaveLength(2);
+    expect(runnerMessages.map((message) => message.type)).toEqual([
+      "writeSessionAttachments",
+      "startSession",
+    ]);
+  });
+
   it("does not persist sessions or messages when runner image writes fail", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -1406,6 +1460,640 @@ describe("SessionCommandService", () => {
     });
   });
 
+  it("deletes all 45 attachments in protocol-sized batches", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 45);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.deleteSession("session-1");
+    await vi.waitFor(() => {
+      expect(
+        runnerMessages.filter(
+          (command) => command.type === "deleteSessionAttachments",
+        ),
+      ).toHaveLength(3);
+    });
+    const deleteBatches = runnerMessages.filter(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    );
+    expect(deleteBatches.map((batch) => batch.attachments.length)).toEqual([
+      20, 20, 5,
+    ]);
+    for (const batch of deleteBatches) {
+      rpc.resolveRunnerResponse({
+        requestId: batch.requestId,
+        sessionId: "session-1",
+        deleted: batch.attachments.map((attachment) => attachment.id),
+        failed: [],
+      });
+    }
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    const stored = store.listStoredMessageAttachments("session-1");
+    expect(
+      stored.filter((attachment) => attachment.status === "deleted"),
+    ).toHaveLength(45);
+    expect(
+      stored.filter((attachment) => attachment.status === "available"),
+    ).toHaveLength(0);
+    expect(store.getSession("session-1")?.archivedAt).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it("converges attachment metadata after a delete response is lost and retried", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      20,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 1);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    await expect(service.deleteSession("session-1")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(
+      store.getStoredMessageAttachment("session-1", "attachment-1"),
+    ).toMatchObject({ status: "available" });
+
+    const retry = service.deleteSession("session-1");
+    await vi.waitFor(() => {
+      expect(
+        runnerMessages.filter(
+          (command) => command.type === "deleteSessionAttachments",
+        ),
+      ).toHaveLength(2);
+    });
+    const retryCommand = runnerMessages.filter(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    )[1];
+    if (!retryCommand) {
+      throw new Error("attachment delete retry was not delivered");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: retryCommand.requestId,
+      sessionId: "session-1",
+      deleted: ["attachment-1"],
+      failed: [],
+    });
+
+    await expect(retry).resolves.toMatchObject({ ok: true });
+    expect(
+      store.getStoredMessageAttachment("session-1", "attachment-1"),
+    ).toMatchObject({ status: "deleted" });
+  });
+
+  it("preserves attachments from partial results and undelivered batches", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 25);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const sendToRunner = hub.sendToRunner.bind(hub);
+    vi.spyOn(hub, "sendToRunner").mockImplementation((runnerId, command) =>
+      command.type === "deleteSessionAttachments" &&
+      command.attachments.length === 5
+        ? false
+        : sendToRunner(runnerId, command),
+    );
+
+    const pending = service.deleteSession("session-1");
+    await vi.waitFor(() => {
+      expect(
+        runnerMessages.filter(
+          (command) => command.type === "deleteSessionAttachments",
+        ),
+      ).toHaveLength(1);
+    });
+    const firstBatch = runnerMessages.find(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    );
+    if (!firstBatch) {
+      throw new Error("attachment delete batch was not delivered");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: firstBatch.requestId,
+      sessionId: "session-1",
+      deleted: firstBatch.attachments
+        .slice(0, 10)
+        .map((attachment) => attachment.id),
+      failed: firstBatch.attachments
+        .slice(10)
+        .map((attachment) => attachment.id),
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    const stored = store.listStoredMessageAttachments("session-1");
+    expect(
+      stored.filter((attachment) => attachment.status === "deleted"),
+    ).toHaveLength(10);
+    expect(
+      stored.filter((attachment) => attachment.status === "available"),
+    ).toHaveLength(15);
+  });
+
+  it("rejects a delayed attachment-backed create after its project is archived", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const creation = service.createSession({
+      requestId: "archive-racing-create",
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "must not outlive project archive",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write was not delivered");
+    }
+    const archivedAt = new Date().toISOString();
+    expect(store.archiveProject("project-1", archivedAt)?.archivedAt).toBe(
+      archivedAt,
+    );
+    const attachment = runnerAttachmentRef(writeCommand.sessionId);
+    rpc.resolveRunnerResponse({
+      requestId: writeCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      attachments: [attachment],
+    });
+    await vi.waitFor(() => {
+      expect(
+        runnerMessages.filter(
+          (command) => command.type === "deleteSessionAttachments",
+        ),
+      ).toHaveLength(1);
+    });
+    const deleteCommand = runnerMessages.find(
+      (
+        command,
+      ): command is Extract<
+        RunnerCommand,
+        { type: "deleteSessionAttachments" }
+      > => command.type === "deleteSessionAttachments",
+    );
+    if (!deleteCommand) {
+      throw new Error("orphan attachment cleanup was not delivered");
+    }
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: writeCommand.sessionId,
+        attachmentId: attachment.id,
+      }),
+    ]);
+    expect(deleteCommand.attachments).toEqual([
+      {
+        id: attachment.id,
+        runnerStoragePath: attachment.runnerStoragePath,
+      },
+    ]);
+    rpc.resolveRunnerResponse({
+      requestId: deleteCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      deleted: [attachment.id],
+      failed: [],
+    });
+
+    await expect(creation).resolves.toMatchObject({
+      ok: false,
+      error: "project_not_found",
+    });
+    expect(store.getSession(writeCommand.sessionId)).toBeUndefined();
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+    expect(
+      runnerMessages.some((command) => command.type === "startSession"),
+    ).toBe(false);
+  });
+
+  it("compensates a concurrently archived pending create without leaving a retry ghost", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+    const createPending = store.createSessionWithPendingStart.bind(store);
+    const archivedAt = new Date().toISOString();
+    vi.spyOn(store, "createSessionWithPendingStart").mockImplementation(
+      (...args) => {
+        const prepared = createPending(...args);
+        store.archiveProject("project-1", archivedAt);
+        return prepared;
+      },
+    );
+
+    const creation = service.createSession({
+      requestId: "archive-after-pending-insert",
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "archive immediately after insert",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write was not delivered");
+    }
+    const attachment = runnerAttachmentRef(writeCommand.sessionId);
+    rpc.resolveRunnerResponse({
+      requestId: writeCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      attachments: [attachment],
+    });
+
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    const deleteCommand = runnerMessages[1];
+    if (deleteCommand?.type !== "deleteSessionAttachments") {
+      throw new Error("compensating attachment cleanup was not delivered");
+    }
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: writeCommand.sessionId,
+        attachmentId: attachment.id,
+      }),
+    ]);
+    rpc.resolveRunnerResponse({
+      requestId: deleteCommand.requestId,
+      sessionId: writeCommand.sessionId,
+      deleted: [attachment.id],
+      failed: [],
+    });
+    await expect(creation).resolves.toMatchObject({
+      ok: false,
+      error: "project_not_found",
+    });
+    expect(store.getSession(writeCommand.sessionId)).toBeUndefined();
+    expect(store.listMessages(writeCommand.sessionId)).toEqual([]);
+    expect(store.listStoredMessageAttachments(writeCommand.sessionId)).toEqual(
+      [],
+    );
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    expect(
+      runnerMessages.some((command) => command.type === "startSession"),
+    ).toBe(false);
+
+    await expect(
+      service.createSession({
+        requestId: "archive-after-pending-insert",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "archive immediately after insert",
+        attachments: [imageUpload()],
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "project_not_found" });
+    expect(runnerMessages).toHaveLength(2);
+
+    store.restoreProject("project-1", new Date().toISOString());
+    expect(store.listSessions()).toEqual([]);
+    expect(store.listMessages(writeCommand.sessionId)).toEqual([]);
+  });
+
+  it("moves archived pending input attachments to a retryable cleanup outbox without materializing messages", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "running" });
+    store.putPendingInputDelivery({
+      deliveryId: "archived-pending-input",
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      message: pendingUserMessage(
+        "archived-pending-input",
+        "must never materialize",
+        createdAt,
+      ),
+      attachments: [storedAttachment("archived-pending-input", createdAt)],
+      createdAt,
+    });
+    const archivedAt = new Date().toISOString();
+
+    store.archiveProject("project-1", archivedAt);
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.listMessageAttachments("session-1")).toEqual([]);
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        projectId: "project-1",
+        sessionId: "session-1",
+        runnerId: "runner-1",
+        attachmentId: "attachment-archived-pending-input",
+      }),
+    ]);
+
+    await service.handleProjectArchived("project-1", archivedAt);
+    expect(store.listAttachmentCleanupJobs("project-1")).toHaveLength(1);
+
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const retry = service.handleProjectArchived("project-1", archivedAt);
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const deleteCommand = runnerMessages[0];
+    if (deleteCommand?.type !== "deleteSessionAttachments") {
+      throw new Error("cleanup outbox retry was not delivered");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: deleteCommand.requestId,
+      sessionId: "session-1",
+      deleted: ["attachment-archived-pending-input"],
+      failed: [],
+    });
+    await retry;
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([]);
+
+    store.restoreProject("project-1", new Date().toISOString());
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.listMessageAttachments("session-1")).toEqual([]);
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+  });
+
+  it("drains newly added cleanup jobs after an in-flight cleanup makes no progress", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const enqueueArchivedCleanup = (suffix: string) => {
+      const projectId = `project-${suffix}`;
+      const sessionId = `session-${suffix}`;
+      const deliveryId = `delivery-${suffix}`;
+      const createdAt = `2026-06-05T00:00:0${suffix}.000Z`;
+      store.createProject({
+        ...projectRecord(),
+        id: projectId,
+      });
+      store.createSession({
+        ...sessionRecord(),
+        id: sessionId,
+        projectId,
+        status: "running",
+      });
+      store.putPendingInputDelivery({
+        deliveryId,
+        kind: "input",
+        runnerId: "runner-1",
+        sessionId,
+        message: {
+          ...pendingUserMessage(deliveryId, `cleanup ${suffix}`, createdAt),
+          sessionId,
+        },
+        attachments: [
+          {
+            ...storedAttachment(deliveryId, createdAt),
+            id: `attachment-${suffix}`,
+            sessionId,
+            messageId: deliveryId,
+            runnerStoragePath: `attachments/${sessionId}/attachment-${suffix}/screen.png`,
+          },
+        ],
+        createdAt,
+      });
+      store.archiveProject(projectId, createdAt);
+      return { projectId, sessionId, attachmentId: `attachment-${suffix}` };
+    };
+
+    const first = enqueueArchivedCleanup("1");
+    const firstReconciliation =
+      service.reconcileAttachmentCleanupJobs("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+
+    const second = enqueueArchivedCleanup("2");
+    const joinedReconciliation =
+      service.reconcileAttachmentCleanupJobs("runner-1");
+    const firstCommand = runnerMessages[0];
+    if (firstCommand?.type !== "deleteSessionAttachments") {
+      throw new Error("first cleanup command was not delivered");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: firstCommand.requestId,
+      sessionId: first.sessionId,
+      deleted: [],
+      failed: [first.attachmentId],
+    });
+
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(3));
+    const retryCommand = runnerMessages.find(
+      (command, index) =>
+        index > 0 &&
+        command.type === "deleteSessionAttachments" &&
+        command.sessionId === first.sessionId,
+    );
+    const secondCommand = runnerMessages.find(
+      (command, index) =>
+        index > 0 &&
+        command.type === "deleteSessionAttachments" &&
+        command.sessionId === second.sessionId,
+    );
+    if (
+      retryCommand?.type !== "deleteSessionAttachments" ||
+      secondCommand?.type !== "deleteSessionAttachments"
+    ) {
+      throw new Error("second cleanup command was not delivered");
+    }
+    expect(secondCommand).toMatchObject({
+      sessionId: second.sessionId,
+      attachments: [expect.objectContaining({ id: second.attachmentId })],
+    });
+    rpc.resolveRunnerResponse({
+      requestId: retryCommand.requestId,
+      sessionId: first.sessionId,
+      deleted: [],
+      failed: [first.attachmentId],
+    });
+    rpc.resolveRunnerResponse({
+      requestId: secondCommand.requestId,
+      sessionId: second.sessionId,
+      deleted: [second.attachmentId],
+      failed: [],
+    });
+
+    await Promise.all([firstReconciliation, joinedReconciliation]);
+    expect(store.listAttachmentCleanupJobs(first.projectId)).toHaveLength(1);
+    expect(store.listAttachmentCleanupJobs(second.projectId)).toEqual([]);
+  });
+
+  it("archives a historical session with a pending resumable start without deleting its history", () => {
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    store.createProject(projectRecord());
+    const completed = store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      agentThreadId: "thread-existing",
+    });
+    store.addMessage({
+      id: "historical-message",
+      sessionId: completed.id,
+      role: "assistant",
+      content: "historical answer",
+      encrypted: false,
+      createdAt,
+    });
+    const pendingMessage = pendingUserMessage(
+      "resumable-follow-up",
+      "pending follow-up",
+      createdAt,
+    );
+    const pendingAttachment = storedAttachment(pendingMessage.id, createdAt);
+    store.preparePendingSessionStart(
+      {
+        deliveryId: pendingMessage.id,
+        kind: "start",
+        runnerId: completed.runnerId,
+        sessionId: completed.id,
+        message: pendingMessage,
+        attachments: [pendingAttachment],
+        startCommand: {
+          type: "startSession",
+          requestId: "resume-start",
+          deliveryId: pendingMessage.id,
+          session: { ...completed, status: "pending" },
+          prompt: pendingMessage.content,
+          attachments: [toRunnerAttachment(pendingAttachment)],
+          resumeThreadId: "thread-existing",
+        },
+        createdAt,
+      },
+      createdAt,
+    );
+
+    const archivedAt = new Date().toISOString();
+    store.archiveProject("project-1", archivedAt);
+
+    expect(store.getSession(completed.id)).toMatchObject({
+      archivedAt,
+      status: "stopped",
+      agentThreadId: "thread-existing",
+    });
+    expect(store.listMessages(completed.id)).toEqual([
+      expect.objectContaining({
+        id: "historical-message",
+        content: "historical answer",
+      }),
+    ]);
+    expect(store.getMessage(completed.id, pendingMessage.id)).toBeUndefined();
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: completed.id,
+        attachmentId: pendingAttachment.id,
+      }),
+    ]);
+  });
+
+  it("cleans attachments after project archiving has synchronously captured its sessions", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    addStoredAttachments(store, 1);
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const archivedAt = new Date().toISOString();
+
+    store.archiveProject("project-1", archivedAt);
+    const cleanup = service.handleProjectArchived("project-1", archivedAt);
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const deleteCommand = runnerMessages[0];
+    if (deleteCommand?.type !== "deleteSessionAttachments") {
+      throw new Error("archived project attachment cleanup was not delivered");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: deleteCommand.requestId,
+      sessionId: "session-1",
+      deleted: ["attachment-1"],
+      failed: [],
+    });
+    await cleanup;
+
+    expect(store.getProject("project-1")?.archivedAt).toBe(archivedAt);
+    expect(store.getSession("session-1")?.archivedAt).toBe(archivedAt);
+    expect(
+      store.getStoredMessageAttachment("session-1", "attachment-1"),
+    ).toMatchObject({ status: "deleted" });
+  });
+
   it("cancels an offline pending start before stop and never reconciles it", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -1653,6 +2341,176 @@ describe("SessionCommandService", () => {
     expect(store.listMessages("session-1")).toEqual([]);
     expect(store.getPendingUserInputRequest("session-1")).toBe(
       "input-before-restart",
+    );
+  });
+
+  it("terminally rejects an expired input request even after the session becomes inactive", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "waiting_input" });
+    store.setPendingUserInputRequest("session-1", "expired-input-request");
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      requestId: "expired-input-first-attempt",
+      content: "answer an expired prompt",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    expect(command.deliverInput?.inputRequestId).toBe("expired-input-request");
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "not_owned",
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "INPUT_NOT_OWNED",
+    });
+    expect(runnerMessages).toHaveLength(1);
+    expect(
+      store.getPendingInputDelivery(command.deliverInput!.deliveryId!),
+    ).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([]);
+  });
+
+  it("terminally rejects an expired input request on same-request retry", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const requestId = "expired-input-retry";
+    const deliveryId = stableTestInputDeliveryId("session-1", requestId);
+    const createdAt = new Date().toISOString();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    store.putPendingInputDelivery({
+      deliveryId,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      inputRequestId: "expired-input-request",
+      message: pendingUserMessage(
+        deliveryId,
+        "retry expired answer",
+        createdAt,
+      ),
+      attachments: [],
+      createdAt,
+    });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const retry = service.createUserMessage("session-1", {
+      requestId,
+      content: "retry expired answer",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: { deliveryId, ownership: "not_owned" },
+    });
+
+    await expect(retry).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "INPUT_NOT_OWNED",
+    });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([]);
+  });
+
+  it("terminally rejects an expired input request during reconnect reconciliation", async () => {
+    const hub = new ConnectionHub(store);
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const deliveryId = "expired-input-reconcile";
+    const createdAt = new Date().toISOString();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    store.putPendingInputDelivery({
+      deliveryId,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      inputRequestId: "expired-input-request",
+      message: pendingUserMessage(
+        deliveryId,
+        "reconcile expired answer",
+        createdAt,
+      ),
+      attachments: [],
+      createdAt,
+    });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: { deliveryId, ownership: "not_owned" },
+    });
+    await reconciliation;
+
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        sessionId: "session-1",
+        messageId: deliveryId,
+        code: "INPUT_NOT_OWNED",
+      }),
     );
   });
 
@@ -2414,6 +3272,203 @@ describe("SessionCommandService", () => {
     expect(store.deleteSession("session-1")).toBe(true);
     store.createSession({ ...sessionRecord(), status: "waiting_input" });
     expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
+  });
+
+  it("backfills legacy initial starts without misclassifying historical follow-ups", () => {
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    const addLegacyInitial = (
+      suffix: string,
+      creationRequestFingerprint?: string,
+    ) => {
+      const projectId = `project-initial-${suffix}`;
+      const sessionId = `session-initial-${suffix}`;
+      const deliveryId = `delivery-initial-${suffix}`;
+      store.createProject({ ...projectRecord(), id: projectId });
+      const session = {
+        ...sessionRecord(),
+        id: sessionId,
+        projectId,
+        status: "pending" as const,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      store.createSessionWithPendingStart(
+        session,
+        {
+          deliveryId,
+          kind: "start",
+          runnerId: "runner-1",
+          sessionId,
+          message: {
+            ...pendingUserMessage(deliveryId, "legacy initial", createdAt),
+            sessionId,
+          },
+          attachments: [],
+          startCommand: {
+            type: "startSession",
+            requestId: `start-${suffix}`,
+            deliveryId,
+            session,
+            prompt: "legacy initial",
+            attachments: [],
+          },
+          createdAt,
+        },
+        creationRequestFingerprint,
+      );
+      return { projectId, sessionId, deliveryId };
+    };
+    const fingerprinted = addLegacyInitial("fingerprinted", "fingerprint-1");
+    const requestIdless = addLegacyInitial("requestless");
+
+    const historicalProjectId = "project-historical";
+    const historicalSessionId = "session-historical";
+    const historicalDeliveryId = "delivery-historical";
+    store.createProject({ ...projectRecord(), id: historicalProjectId });
+    const historical = store.createSession({
+      ...sessionRecord(),
+      id: historicalSessionId,
+      projectId: historicalProjectId,
+      status: "completed",
+      agentThreadId: "thread-historical",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    store.addMessage({
+      id: "message-historical",
+      sessionId: historicalSessionId,
+      role: "assistant",
+      content: "keep this history",
+      encrypted: false,
+      createdAt,
+    });
+    const restartedAt = "2026-06-06T00:00:00.000Z";
+    store.preparePendingSessionStart(
+      {
+        deliveryId: historicalDeliveryId,
+        kind: "start",
+        runnerId: "runner-1",
+        sessionId: historicalSessionId,
+        message: {
+          ...pendingUserMessage(
+            historicalDeliveryId,
+            "legacy follow-up",
+            restartedAt,
+          ),
+          sessionId: historicalSessionId,
+        },
+        attachments: [],
+        startCommand: {
+          type: "startSession",
+          requestId: "start-historical",
+          deliveryId: historicalDeliveryId,
+          session: {
+            ...historical,
+            status: "pending",
+            updatedAt: restartedAt,
+          },
+          prompt: "legacy follow-up",
+          attachments: [],
+          resumeThreadId: "thread-historical",
+        },
+        createdAt: restartedAt,
+      },
+      restartedAt,
+    );
+
+    const dbPath = store.dbPath;
+    store.close();
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      DELETE FROM schema_migrations
+      WHERE key = 'backfill_initial_session_create_v1';
+      ALTER TABLE pending_input_deliveries DROP COLUMN initial_session_create;
+    `);
+    legacyDb.close();
+    store = new ServerStore(dataDir);
+
+    store.close();
+    const interruptedMigrationDb = new DatabaseSync(dbPath);
+    interruptedMigrationDb.exec(`
+      UPDATE pending_input_deliveries SET initial_session_create = 0;
+      DELETE FROM schema_migrations
+      WHERE key = 'backfill_initial_session_create_v1';
+    `);
+    interruptedMigrationDb.close();
+    store = new ServerStore(dataDir);
+
+    expect(
+      store.getPendingInputDelivery(fingerprinted.deliveryId)
+        ?.initialSessionCreate,
+    ).toBe(true);
+    expect(
+      store.getPendingInputDelivery(requestIdless.deliveryId)
+        ?.initialSessionCreate,
+    ).toBe(true);
+    expect(
+      store.getPendingInputDelivery(historicalDeliveryId)?.initialSessionCreate,
+    ).toBeUndefined();
+
+    const controlProjectId = "project-control-resume";
+    const controlSessionId = "session-control-resume";
+    const controlDeliveryId = "delivery-control-resume";
+    store.createProject({ ...projectRecord(), id: controlProjectId });
+    const controlSession = store.createSession({
+      ...sessionRecord(),
+      id: controlSessionId,
+      projectId: controlProjectId,
+      status: "pending",
+      createdAt: restartedAt,
+      updatedAt: restartedAt,
+    });
+    store.putPendingInputDelivery({
+      deliveryId: controlDeliveryId,
+      kind: "start",
+      runnerId: "runner-1",
+      sessionId: controlSessionId,
+      message: {
+        ...pendingUserMessage(
+          controlDeliveryId,
+          "future control resume",
+          restartedAt,
+        ),
+        sessionId: controlSessionId,
+      },
+      attachments: [],
+      startCommand: {
+        type: "startSession",
+        requestId: "start-control-resume",
+        deliveryId: controlDeliveryId,
+        session: controlSession,
+        prompt: "future control resume",
+        attachments: [],
+      },
+      persistMessage: false,
+      createdAt: restartedAt,
+    });
+    store.close();
+    store = new ServerStore(dataDir);
+    expect(
+      store.getPendingInputDelivery(controlDeliveryId)?.initialSessionCreate,
+    ).toBeUndefined();
+
+    for (const initial of [fingerprinted, requestIdless]) {
+      store.archiveProject(initial.projectId, restartedAt);
+      store.restoreProject(initial.projectId, restartedAt);
+      expect(store.getSession(initial.sessionId)).toBeUndefined();
+    }
+    store.archiveProject(historicalProjectId, restartedAt);
+    store.restoreProject(historicalProjectId, restartedAt);
+    expect(store.getSession(historicalSessionId)).toBeDefined();
+    expect(store.listMessages(historicalSessionId)).toEqual([
+      expect.objectContaining({
+        id: "message-historical",
+        content: "keep this history",
+      }),
+    ]);
+    store.archiveProject(controlProjectId, restartedAt);
+    store.restoreProject(controlProjectId, restartedAt);
+    expect(store.getSession(controlSessionId)).toBeDefined();
   });
 
   it("rolls back session creation when startSession cannot be delivered", async () => {
@@ -4425,6 +5480,38 @@ function storedAttachment(messageId: string, createdAt: string) {
     status: "available" as const,
     createdAt,
   };
+}
+
+function toRunnerAttachment(attachment: ReturnType<typeof storedAttachment>) {
+  return {
+    id: attachment.id,
+    kind: attachment.kind,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    sha256: attachment.sha256,
+    runnerStoragePath: attachment.runnerStoragePath,
+  };
+}
+
+function addStoredAttachments(store: ServerStore, count: number): void {
+  const createdAt = "2026-06-05T00:00:00.000Z";
+  const messageId = "attachment-message";
+  store.addMessage({
+    id: messageId,
+    sessionId: "session-1",
+    role: "user",
+    content: "attachments",
+    encrypted: false,
+    createdAt,
+  });
+  store.addMessageAttachments(
+    Array.from({ length: count }, (_, index) => ({
+      ...storedAttachment(messageId, createdAt),
+      id: `attachment-${index + 1}`,
+      runnerStoragePath: `attachments/session-1/attachment-${index + 1}/screen.png`,
+    })),
+  );
 }
 
 function stableTestInputDeliveryId(
