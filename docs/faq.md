@@ -30,9 +30,9 @@ The Runner loads agent capabilities through plugins, so additional agent integra
 No for the current source install path. Until the `@roamcli/*` packages are published, run the Runner from the source checkout:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
@@ -49,11 +49,11 @@ This starts only the Server. Start one or more Runners separately and point them
 
 ## Where does RoamCli store data?
 
-The Server stores SQLite data and artifacts under `ROAMCLI_DATA_DIR`. The Runner stores local runner state under `<workspace>/<data-dir>`, defaulting to `.roam-runner` under the exposed workspace.
+The Server stores SQLite data and artifacts under `ROAMCLI_DATA_DIR`. The Runner stores local runner state and non-secret config under `<workspace>/<data-dir>`, defaulting to `.roam-runner` under the exposed workspace. Runner tokens are never persisted there and must be supplied on every start.
 
 ## Can a Runner expose any directory?
 
-The Runner exposes the configured workspace root. Projects are created under that root. Runner data directories reject absolute paths and parent traversal to keep local state scoped.
+The Runner exposes the configured workspace root. Projects are created under that root. Runner data directories reject absolute paths, parent traversal, and symlink components to keep local state scoped to the canonical workspace.
 
 ## Is RoamCli a replacement for Codex or Claude Code?
 

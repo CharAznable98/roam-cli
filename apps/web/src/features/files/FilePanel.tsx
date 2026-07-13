@@ -130,10 +130,10 @@ export function FilePanel({
       </div>
       <div className="file-grid">
         <div className="file-tree" role="tree">
-          {treeState === "loading" ? (
+          {treeState === "loading" && files.length === 0 ? (
             <div className="empty-state compact">Loading file tree...</div>
           ) : null}
-          {treeState === "error" ? (
+          {treeState === "error" && files.length === 0 ? (
             <div className="empty-state compact">
               File tree could not be loaded.
             </div>

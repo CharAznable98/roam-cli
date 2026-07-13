@@ -54,9 +54,16 @@ declare module "@roamcli/shared/protocol" {
 
   export const RunnerProfileSchema: ParserSchema<RunnerProfile>;
   export const RunnerCommandSchema: ParserSchema<RunnerCommand>;
+  export const RunnerEventSchema: ParserSchema<RunnerEvent>;
   export const RunnerAuthenticateSchema: ParserSchema<RunnerAuthenticate>;
+  export const RunnerEventResumeSchema: ParserSchema<RunnerEventResume>;
+  export const RunnerEventAckSchema: ParserSchema<RunnerEventAck>;
+  export const RunnerEventNackSchema: ParserSchema<RunnerEventNack>;
   export const DEFAULT_MAX_IMAGES_PER_TURN: number;
   export const DEFAULT_MAX_IMAGE_BYTES: number;
+  export const MAX_ATTACHMENTS_PER_REQUEST: number;
+  export const MAX_ATTACHMENT_BYTES: number;
+  export const MAX_ATTACHMENT_BASE64_LENGTH: number;
 
   export interface AgentRuntimeConfig {
     model?: string;
@@ -108,6 +115,7 @@ declare module "@roamcli/shared/protocol" {
     parser: string;
     supportsResume: boolean;
     supportsImages: boolean;
+    supportsDurableSessionStart?: boolean;
     supportedImageMimeTypes: string[];
     maxImagesPerTurn: number;
     maxImageBytes: number;
@@ -122,7 +130,9 @@ declare module "@roamcli/shared/protocol" {
     workspaceRoot: string;
     dataDir?: string;
     profile: RunnerProfile;
-    publicKey: string;
+    /** @deprecated No signing contract was implemented for this key. */
+    publicKey?: string;
+    approvalSignatureMode?: "unsupported";
     capabilities: RunnerCapability[];
     version: string;
   }
@@ -131,6 +141,33 @@ declare module "@roamcli/shared/protocol" {
     type: "runnerAuthenticate";
     token: string;
     runner: RunnerRegistration;
+    eventDelivery?: {
+      protocol: "ack_v1";
+      streamId: string;
+      acknowledgedThrough: number;
+    };
+  }
+
+  export interface RunnerEventResume {
+    type: "runnerEventResume";
+    protocol: "ack_v1";
+    streamId: string;
+    ackThrough: number;
+  }
+
+  export interface RunnerEventAck {
+    type: "runnerEventAck";
+    protocol: "ack_v1";
+    streamId: string;
+    ackThrough: number;
+  }
+
+  export interface RunnerEventNack {
+    type: "runnerEventNack";
+    protocol: "ack_v1";
+    streamId: string;
+    ackThrough: number;
+    expectedSequence: number;
   }
 
   export interface Session {
@@ -177,6 +214,18 @@ declare module "@roamcli/shared/protocol" {
     requestId: string;
     sessionId: string;
     active: boolean;
+    inputDelivered?: boolean;
+    inputReceipt?: {
+      deliveryId: string;
+      ownership: "owned" | "not_owned";
+    };
+  }
+
+  export interface SessionStartResult {
+    requestId: string;
+    sessionId: string;
+    deliveryId: string;
+    ownership: "owned" | "not_owned";
   }
 
   export interface ImageAttachmentUpload {
@@ -507,6 +556,11 @@ declare module "@roamcli/shared/protocol" {
     errorSummary?: string;
   }
 
+  export type TerminalGitJob = GitJob & {
+    status: "succeeded" | "failed" | "cancelled";
+    finishedAt: string;
+  };
+
   export interface GitCommandBase {
     requestId: string;
     projectId: string;
@@ -517,6 +571,8 @@ declare module "@roamcli/shared/protocol" {
   export type RunnerCommand =
     | {
         type: "startSession";
+        requestId?: string;
+        deliveryId?: string;
         session: Session;
         prompt: string;
         resumeThreadId?: string;
@@ -527,6 +583,11 @@ declare module "@roamcli/shared/protocol" {
         type: "checkSessionStatus";
         requestId: string;
         sessionId: string;
+        deliverInput?: {
+          deliveryId?: string;
+          inputRequestId?: string;
+          content: string;
+        };
       }
     | {
         type: "listAgentSkills";
@@ -605,6 +666,7 @@ declare module "@roamcli/shared/protocol" {
         type: "applyPatch";
         requestId: string;
         sessionId: string;
+        cwd?: string;
         patch: string;
         strip?: number;
       }
@@ -645,6 +707,7 @@ declare module "@roamcli/shared/protocol" {
     | {
         type: "resolveUserInput";
         sessionId: string;
+        inputRequestId?: string;
         content: string;
       }
     | {
@@ -658,6 +721,7 @@ declare module "@roamcli/shared/protocol" {
     | { type: "sessionStatus"; sessionId: string; status: SessionStatus }
     | { type: "sessionThread"; sessionId: string; threadId: string }
     | { type: "sessionStatusCheckResult"; result: SessionStatusCheckResult }
+    | { type: "sessionStartResult"; result: SessionStartResult }
     | { type: "agentSkillListResult"; result: AgentSkillListResult }
     | {
         type: "agentRuntimeConfigOptionsResult";
@@ -679,6 +743,7 @@ declare module "@roamcli/shared/protocol" {
         agent: AgentKind;
         kind: AgentActivityKind;
         label: string;
+        inputRequestId?: string;
       }
     | { type: "fileTreeResult"; result: FileTreeResult }
     | { type: "fileContentResult"; result: FileContentResult }
@@ -694,7 +759,10 @@ declare module "@roamcli/shared/protocol" {
     | { type: "gitCommitPageResult"; result: GitCommitPage }
     | { type: "gitCommitFilesResult"; result: GitCommitFiles }
     | { type: "gitBranchListResult"; result: GitBranchList }
-    | { type: "gitJobResult"; job: GitJob }
+    | {
+        type: "gitJobResult";
+        job: TerminalGitJob;
+      }
     | { type: "approvalRequested"; approval: Approval }
     | { type: "artifactCreated"; artifact: Artifact }
     | {

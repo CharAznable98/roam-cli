@@ -202,6 +202,7 @@ export class WorkspaceService {
         type: "applyPatch",
         requestId: newId("patch_apply"),
         sessionId: session.id,
+        cwd: session.executionFolder,
         patch: body.patch,
         strip: body.strip,
       },

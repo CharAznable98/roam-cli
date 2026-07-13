@@ -53,6 +53,7 @@ import {
   BookOpen,
   BookmarkPlus,
   ChevronRight,
+  Clock3,
   Copy,
   FolderPlus,
   FolderOpen,
@@ -214,6 +215,7 @@ export function AppShell({ controller }: AppShellProps) {
     accountSecurity,
     installMetadata,
     streamReconnect,
+    pendingMessageDeliveries,
     reconnectStream,
     setupOwner,
     loginOwner,
@@ -504,6 +506,11 @@ export function AppShell({ controller }: AppShellProps) {
     !selectedSessionDetailState.hasLoaded &&
     (selectedSessionDetailState.status === "loading" ||
       selectedSessionDetailState.status === "error");
+  const selectedSessionPendingMessageCount = selectedSession
+    ? pendingMessageDeliveries.filter(
+        (delivery) => delivery.sessionId === selectedSession.id,
+      ).length
+    : 0;
 
   useEffect(() => {
     const openOnShortcut = (event: globalThis.KeyboardEvent) => {
@@ -809,7 +816,8 @@ export function AppShell({ controller }: AppShellProps) {
               </button>
             ) : (
               <span className="topbar-status success">
-                {state.runners.length} runners online
+                {state.runners.length} runner
+                {state.runners.length === 1 ? "" : "s"} online
               </span>
             )}
             <Tooltip>
@@ -976,10 +984,22 @@ export function AppShell({ controller }: AppShellProps) {
                   onSaveMessageAsPrompt={openSaveMessageAsPrompt}
                   onNotify={notify}
                   statusBanner={
-                    state.loadState === "error" ? (
-                      <ApiConnectionBanner
-                        onOpenConnection={() => setMobileStatusModalOpen(true)}
-                      />
+                    state.loadState === "error" ||
+                    selectedSessionPendingMessageCount > 0 ? (
+                      <>
+                        {state.loadState === "error" ? (
+                          <ApiConnectionBanner
+                            onOpenConnection={() =>
+                              setMobileStatusModalOpen(true)
+                            }
+                          />
+                        ) : null}
+                        {selectedSessionPendingMessageCount > 0 ? (
+                          <QueuedMessageBanner
+                            count={selectedSessionPendingMessageCount}
+                          />
+                        ) : null}
+                      </>
                     ) : undefined
                   }
                 />
@@ -1451,6 +1471,22 @@ function ApiConnectionBanner({
         <WifiOff size={16} />
         Connection settings
       </button>
+    </div>
+  );
+}
+
+function QueuedMessageBanner({ count }: { count: number }) {
+  return (
+    <div className="chat-queued-message-banner" role="status">
+      <Clock3 size={17} aria-hidden="true" />
+      <div>
+        <span>Message queued — waiting for runner</span>
+        <p>
+          {count === 1
+            ? "It will appear in the conversation after the runner accepts it."
+            : `${count} messages will appear after the runner accepts them.`}
+        </p>
+      </div>
     </div>
   );
 }
@@ -1983,38 +2019,33 @@ function SettingsPanel({
   return (
     <section className="tool-panel settings-panel" aria-label="Settings">
       {view === "home" ? (
-        <>
-          <div className="tool-panel-header">
-            <h2 className="panel-title">Settings</h2>
-          </div>
-          <div className="settings-list" role="list">
-            <SettingsListItem
-              icon={<ShieldCheck size={18} />}
-              title="Account & Security"
-              description="Owner password, runner token, and web sessions"
-              onClick={() => onViewChange("account")}
-            />
-            <SettingsListItem
-              icon={<BookOpen size={18} />}
-              title="Project Settings"
-              description="Project prompt presets and reusable instructions"
-              onClick={() => onViewChange("project")}
-            />
-            <SettingsListItem
-              icon={<SlidersHorizontal size={18} />}
-              title="Agent Defaults"
-              description="Runner-level model, thinking, and Fast Mode defaults"
-              onClick={() => onViewChange("agent-defaults")}
-            />
-            <SettingsListItem
-              icon={<Bell size={18} />}
-              title="Web Push"
-              description="Browser notification permission"
-              status={getNotificationSupport()}
-              onClick={() => onViewChange("web-push")}
-            />
-          </div>
-        </>
+        <div className="settings-list" role="list">
+          <SettingsListItem
+            icon={<ShieldCheck size={18} />}
+            title="Account & Security"
+            description="Owner password, runner token, and web sessions"
+            onClick={() => onViewChange("account")}
+          />
+          <SettingsListItem
+            icon={<BookOpen size={18} />}
+            title="Project Settings"
+            description="Project prompt presets and reusable instructions"
+            onClick={() => onViewChange("project")}
+          />
+          <SettingsListItem
+            icon={<SlidersHorizontal size={18} />}
+            title="Agent Defaults"
+            description="Runner-level model, thinking, and Fast Mode defaults"
+            onClick={() => onViewChange("agent-defaults")}
+          />
+          <SettingsListItem
+            icon={<Bell size={18} />}
+            title="Web Push"
+            description="Browser notification permission"
+            status={getNotificationSupport()}
+            onClick={() => onViewChange("web-push")}
+          />
+        </div>
       ) : null}
 
       {view === "account" ? (

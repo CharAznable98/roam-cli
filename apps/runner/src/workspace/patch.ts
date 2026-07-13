@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import type { PatchApplyResult } from "@roamcli/shared/protocol";
-import { type FileRequestScope, resolvePatchTargetPath } from "./scope.js";
+import {
+  type FileRequestScope,
+  resolvePatchTargetPath,
+  resolveWorkspaceDirectory,
+} from "./scope.js";
 
 export interface ApplyPatchOptions extends FileRequestScope {
   requestId: string;
@@ -9,7 +13,9 @@ export interface ApplyPatchOptions extends FileRequestScope {
   strip?: number;
 }
 
-export async function applyUnifiedDiff(options: ApplyPatchOptions): Promise<PatchApplyResult> {
+export async function applyUnifiedDiff(
+  options: ApplyPatchOptions,
+): Promise<PatchApplyResult> {
   try {
     if (options.patch.trim().length === 0) {
       throw new Error("Patch is empty");
@@ -20,17 +26,44 @@ export async function applyUnifiedDiff(options: ApplyPatchOptions): Promise<Patc
       throw new Error("Patch contains no file paths");
     }
 
-    await Promise.all(changedFiles.map((path) => resolvePatchTargetPath(options, path)));
+    await Promise.all(
+      changedFiles.map((path) => resolvePatchTargetPath(options, path)),
+    );
 
+    const canonicalCwd = await resolveWorkspaceDirectory(
+      options.workspace,
+      options.sessionCwd,
+    );
     const strip = clampStrip(options.strip);
-    const check = await runGitApply(options.sessionCwd, ["apply", `-p${strip}`, "--check", "--whitespace=nowarn", "-"], options.patch);
+    const check = await runGitApply(
+      canonicalCwd,
+      ["apply", `-p${strip}`, "--check", "--whitespace=nowarn", "-"],
+      options.patch,
+    );
     if (!check.ok) {
-      throw new Error(check.stderr || check.stdout || `git apply --check exited with ${check.code ?? "unknown status"}`);
+      throw new Error(
+        check.stderr ||
+          check.stdout ||
+          `git apply --check exited with ${check.code ?? "unknown status"}`,
+      );
     }
 
-    const applied = await runGitApply(options.sessionCwd, ["apply", `-p${strip}`, "--whitespace=nowarn", "-"], options.patch);
+    // Revalidate immediately before the mutating command so a path changed
+    // while `git apply --check` ran cannot reuse the earlier decision.
+    await Promise.all(
+      changedFiles.map((path) => resolvePatchTargetPath(options, path)),
+    );
+    const applied = await runGitApply(
+      canonicalCwd,
+      ["apply", `-p${strip}`, "--whitespace=nowarn", "-"],
+      options.patch,
+    );
     if (!applied.ok) {
-      throw new Error(applied.stderr || applied.stdout || `git apply exited with ${applied.code ?? "unknown status"}`);
+      throw new Error(
+        applied.stderr ||
+          applied.stdout ||
+          `git apply exited with ${applied.code ?? "unknown status"}`,
+      );
     }
 
     return {
@@ -39,7 +72,7 @@ export async function applyUnifiedDiff(options: ApplyPatchOptions): Promise<Patc
       applied: true,
       changedFiles,
       message: "applied",
-      rejected: []
+      rejected: [],
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -49,7 +82,7 @@ export async function applyUnifiedDiff(options: ApplyPatchOptions): Promise<Patc
       applied: false,
       changedFiles: [],
       message,
-      rejected: [message]
+      rejected: [message],
     };
   }
 }
@@ -64,7 +97,12 @@ export function extractUnifiedDiffPaths(patch: string): Set<string> {
       }
       continue;
     }
-    for (const prefix of ["rename from ", "rename to ", "copy from ", "copy to "]) {
+    for (const prefix of [
+      "rename from ",
+      "rename to ",
+      "copy from ",
+      "copy to ",
+    ]) {
       if (line.startsWith(prefix)) {
         const path = normalizeDiffPath(line.slice(prefix.length));
         if (path !== undefined) {
@@ -82,11 +120,20 @@ export function extractUnifiedDiffPaths(patch: string): Set<string> {
   return paths;
 }
 
-function runGitApply(cwd: string, args: readonly string[], input: string): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string }> {
+function runGitApply(
+  cwd: string,
+  args: readonly string[],
+  input: string,
+): Promise<{
+  ok: boolean;
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
   return new Promise((resolveRun) => {
     const child = spawn("git", [...args], {
       cwd,
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -100,7 +147,7 @@ function runGitApply(cwd: string, args: readonly string[], input: string): Promi
         ok: code === 0,
         code,
         stdout: Buffer.concat(stdout).toString("utf8").trim(),
-        stderr: Buffer.concat(stderr).toString("utf8").trim()
+        stderr: Buffer.concat(stderr).toString("utf8").trim(),
       });
     });
     child.stdin.end(input);
@@ -109,7 +156,9 @@ function runGitApply(cwd: string, args: readonly string[], input: string): Promi
 
 function normalizeDiffPath(value: string): string | undefined {
   const raw = value.trim();
-  const path = unquotePath(raw.includes("\t") ? raw.slice(0, raw.indexOf("\t")) : raw);
+  const path = unquotePath(
+    raw.includes("\t") ? raw.slice(0, raw.indexOf("\t")) : raw,
+  );
   if (path === "/dev/null") {
     return undefined;
   }
@@ -136,14 +185,14 @@ function tokenize(value: string): string[] {
     if (index >= value.length) {
       break;
     }
-    if (value[index] === "\"") {
-      let token = "\"";
+    if (value[index] === '"') {
+      let token = '"';
       index += 1;
       while (index < value.length) {
         const character = value[index] ?? "";
         token += character;
         index += 1;
-        if (character === "\"" && token[token.length - 2] !== "\\") {
+        if (character === '"' && token[token.length - 2] !== "\\") {
           break;
         }
       }
@@ -160,7 +209,7 @@ function tokenize(value: string): string[] {
 }
 
 function unquotePath(path: string): string {
-  if (path.startsWith("\"") && path.endsWith("\"")) {
+  if (path.startsWith('"') && path.endsWith('"')) {
     try {
       return JSON.parse(path) as string;
     } catch {

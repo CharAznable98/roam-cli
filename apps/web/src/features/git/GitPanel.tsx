@@ -1,4 +1,4 @@
-import { DiffEditor } from "@monaco-editor/react";
+import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import type {
   ApiGitCommit,
   ApiGitCommitFilesQuery,
@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -66,6 +67,7 @@ const RUNNING_GIT_JOB_STATUSES = new Set<GitJob["status"]>([
   "queued",
   "running",
 ]);
+let diffModelInstanceSequence = 0;
 
 type GitContextOption = {
   key: string;
@@ -894,6 +896,7 @@ export function GitPanel({
               </aside>
               <DiffPane
                 title={selectedChange?.path ?? "No file selected"}
+                modelRevision={diff?.requestId ?? "empty"}
                 eyebrow={
                   selectedChange?.staged ? "Staged diff" : "Unstaged diff"
                 }
@@ -1005,6 +1008,7 @@ export function GitPanel({
                 diffPane={
                   <DiffPane
                     title={selectedCommitFile?.path ?? "No file selected"}
+                    modelRevision={diff?.requestId ?? "empty"}
                     eyebrow="Commit diff"
                     canFullscreen={diffTarget !== undefined}
                     diffState={diffState}
@@ -1497,8 +1501,21 @@ function ChangeActionMenu({
   );
 }
 
+function disposeDiffModels(
+  monaco: Parameters<DiffOnMount>[1],
+  paths: readonly string[],
+): void {
+  for (const path of paths) {
+    const model = monaco.editor.getModel(monaco.Uri.parse(path));
+    if (model && !model.isDisposed()) {
+      model.dispose();
+    }
+  }
+}
+
 function DiffPane({
   title,
+  modelRevision,
   eyebrow,
   actions,
   canFullscreen,
@@ -1514,6 +1531,7 @@ function DiffPane({
   compactDiff,
 }: {
   title: string;
+  modelRevision: string;
   eyebrow: string;
   actions?: ReactNode;
   canFullscreen: boolean;
@@ -1529,6 +1547,218 @@ function DiffPane({
   compactDiff: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
+  const monacoRef = useRef<Parameters<DiffOnMount>[1] | undefined>(undefined);
+  const diffEditorRef = useRef<Parameters<DiffOnMount>[0] | undefined>(
+    undefined,
+  );
+  const modelInstanceIdRef = useRef("");
+  const modelSequenceRef = useRef(0);
+  const activeModelPathsRef = useRef<readonly string[]>([]);
+  const ownedModelPathsRef = useRef(new Set<string>());
+  const retiredModelPathsRef = useRef(new Set<string>());
+  const activeModelPairRef =
+    useRef<ReturnType<Parameters<DiffOnMount>[0]["getModel"]>>(null);
+  const diffUpdateSubscriptionRef = useRef<
+    ReturnType<Parameters<DiffOnMount>[0]["onDidUpdateDiff"]> | undefined
+  >(undefined);
+  const appliedModelRef = useRef<
+    | {
+        revision: string;
+        language: string;
+        oldContent: string;
+        newContent: string;
+      }
+    | undefined
+  >(undefined);
+  const latestModelPayloadRef = useRef({
+    diffState,
+    language,
+    modelRevision,
+    newContent,
+    oldContent,
+    showTextDiff,
+  });
+  latestModelPayloadRef.current = {
+    diffState,
+    language,
+    modelRevision,
+    newContent,
+    oldContent,
+    showTextDiff,
+  };
+  if (modelInstanceIdRef.current.length === 0) {
+    diffModelInstanceSequence += 1;
+    modelInstanceIdRef.current = `instance-${diffModelInstanceSequence}`;
+  }
+  const originalModelPath = `roam-git://diff/${modelInstanceIdRef.current}/bootstrap/original`;
+  const modifiedModelPath = `roam-git://diff/${modelInstanceIdRef.current}/bootstrap/modified`;
+  if (activeModelPathsRef.current.length === 0) {
+    activeModelPathsRef.current = [originalModelPath, modifiedModelPath];
+    ownedModelPathsRef.current.add(originalModelPath);
+    ownedModelPathsRef.current.add(modifiedModelPath);
+  }
+
+  const handleDiffEditorBeforeMount = useCallback(
+    (monaco: Parameters<DiffOnMount>[1]) => {
+      monacoRef.current = monaco;
+    },
+    [],
+  );
+
+  const disposeRetiredModelPairs = useCallback(() => {
+    const monaco = monacoRef.current;
+    const editor = diffEditorRef.current;
+    const activePair = activeModelPairRef.current;
+    const editorPair = editor?.getModel();
+    if (
+      !monaco ||
+      !editor ||
+      !activePair ||
+      !editorPair ||
+      editorPair.original !== activePair.original ||
+      editorPair.modified !== activePair.modified ||
+      editor.getLineChanges() === null
+    ) {
+      return;
+    }
+    const retiredPaths = [...retiredModelPathsRef.current];
+    retiredModelPathsRef.current.clear();
+    disposeDiffModels(monaco, retiredPaths);
+    for (const path of retiredPaths) {
+      ownedModelPathsRef.current.delete(path);
+    }
+  }, []);
+
+  const applyModelPair = useCallback(() => {
+    const monaco = monacoRef.current;
+    const editor = diffEditorRef.current;
+    const payload = latestModelPayloadRef.current;
+    const {
+      diffState: latestDiffState,
+      language: latestLanguage,
+      modelRevision: latestModelRevision,
+      newContent: latestNewContent,
+      oldContent: latestOldContent,
+      showTextDiff: latestShowTextDiff,
+    } = payload;
+    if (
+      !monaco ||
+      !editor ||
+      latestDiffState !== "ready" ||
+      !latestShowTextDiff
+    ) {
+      return;
+    }
+    const applied = appliedModelRef.current;
+    if (
+      applied?.revision === latestModelRevision &&
+      applied.language === latestLanguage &&
+      applied.oldContent === latestOldContent &&
+      applied.newContent === latestNewContent
+    ) {
+      return;
+    }
+
+    modelSequenceRef.current += 1;
+    const revision = `${modelSequenceRef.current}-${encodeURIComponent(latestModelRevision)}`;
+    const modelRoot = `roam-git://diff/${modelInstanceIdRef.current}/${revision}`;
+    const nextPaths = [
+      `${modelRoot}/original`,
+      `${modelRoot}/modified`,
+    ] as const;
+    let originalModel:
+      | ReturnType<Parameters<DiffOnMount>[1]["editor"]["createModel"]>
+      | undefined;
+    let modifiedModel:
+      | ReturnType<Parameters<DiffOnMount>[1]["editor"]["createModel"]>
+      | undefined;
+    try {
+      originalModel = monaco.editor.createModel(
+        latestOldContent,
+        latestLanguage,
+        monaco.Uri.parse(nextPaths[0]),
+      );
+      modifiedModel = monaco.editor.createModel(
+        latestNewContent,
+        latestLanguage,
+        monaco.Uri.parse(nextPaths[1]),
+      );
+      ownedModelPathsRef.current.add(nextPaths[0]);
+      ownedModelPathsRef.current.add(nextPaths[1]);
+      const previousPaths = activeModelPathsRef.current;
+      for (const path of previousPaths) {
+        retiredModelPathsRef.current.add(path);
+      }
+      editor.setModel({ original: originalModel, modified: modifiedModel });
+      activeModelPathsRef.current = nextPaths;
+      activeModelPairRef.current = {
+        original: originalModel,
+        modified: modifiedModel,
+      };
+      appliedModelRef.current = {
+        revision: latestModelRevision,
+        language: latestLanguage,
+        oldContent: latestOldContent,
+        newContent: latestNewContent,
+      };
+    } catch (error) {
+      originalModel?.dispose();
+      modifiedModel?.dispose();
+      ownedModelPathsRef.current.delete(nextPaths[0]);
+      ownedModelPathsRef.current.delete(nextPaths[1]);
+      for (const path of activeModelPathsRef.current) {
+        retiredModelPathsRef.current.delete(path);
+      }
+      throw error;
+    }
+  }, []);
+
+  const handleDiffEditorMount = useCallback<DiffOnMount>(
+    (editor, monaco) => {
+      diffEditorRef.current = editor;
+      monacoRef.current = monaco;
+      activeModelPairRef.current = editor.getModel();
+      diffUpdateSubscriptionRef.current?.dispose();
+      diffUpdateSubscriptionRef.current = editor.onDidUpdateDiff(() => {
+        queueMicrotask(disposeRetiredModelPairs);
+      });
+      applyModelPair();
+    },
+    [applyModelPair, disposeRetiredModelPairs],
+  );
+
+  useLayoutEffect(() => {
+    applyModelPair();
+  }, [
+    applyModelPair,
+    diffState,
+    language,
+    modelRevision,
+    newContent,
+    oldContent,
+    showTextDiff,
+  ]);
+
+  useLayoutEffect(
+    () => () => {
+      const monaco = monacoRef.current;
+      diffUpdateSubscriptionRef.current?.dispose();
+      diffUpdateSubscriptionRef.current = undefined;
+      diffEditorRef.current = undefined;
+      monacoRef.current = undefined;
+      activeModelPairRef.current = null;
+      if (!monaco) {
+        return;
+      }
+      const paths = [...ownedModelPathsRef.current];
+      ownedModelPathsRef.current.clear();
+      retiredModelPathsRef.current.clear();
+      queueMicrotask(() => {
+        disposeDiffModels(monaco, paths);
+      });
+    },
+    [modifiedModelPath, originalModelPath],
+  );
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -1596,14 +1826,16 @@ function DiffPane({
                 : "360px"
               : "0px"
           }
-          original={oldContent}
-          modified={newContent}
-          originalModelPath="roam-git://diff/original"
-          modifiedModelPath="roam-git://diff/modified"
-          originalLanguage={language}
-          modifiedLanguage={language}
-          keepCurrentOriginalModel
-          keepCurrentModifiedModel
+          original=""
+          modified=""
+          originalModelPath={originalModelPath}
+          modifiedModelPath={modifiedModelPath}
+          keepCurrentOriginalModel={true}
+          keepCurrentModifiedModel={true}
+          originalLanguage="plaintext"
+          modifiedLanguage="plaintext"
+          beforeMount={handleDiffEditorBeforeMount}
+          onMount={handleDiffEditorMount}
           options={{
             readOnly: true,
             renderSideBySide: !compactDiff,

@@ -7,7 +7,12 @@ export interface PermissionTemplate {
   requireApprovalForShell: boolean;
   requireApprovalForApplyPatch: boolean;
   allowedEnv: readonly string[];
-  blockedCommands: readonly string[];
+  /**
+   * Command execution is enforced by the selected agent runtime. These values
+   * are display/documentation hints, not a runner security boundary.
+   */
+  commandPolicyEnforcement: "agent";
+  advisoryBlockedCommands: readonly string[];
 }
 
 export const PERMISSION_TEMPLATES: Record<RunnerProfile, PermissionTemplate> = {
@@ -18,7 +23,13 @@ export const PERMISSION_TEMPLATES: Record<RunnerProfile, PermissionTemplate> = {
     requireApprovalForShell: true,
     requireApprovalForApplyPatch: true,
     allowedEnv: ["PATH", "HOME", "SHELL", "TERM"],
-    blockedCommands: ["rm -rf", "git reset --hard", "git checkout --", "sudo"]
+    commandPolicyEnforcement: "agent",
+    advisoryBlockedCommands: [
+      "rm -rf",
+      "git reset --hard",
+      "git checkout --",
+      "sudo",
+    ],
   },
   standard: {
     profile: "standard",
@@ -27,7 +38,8 @@ export const PERMISSION_TEMPLATES: Record<RunnerProfile, PermissionTemplate> = {
     requireApprovalForShell: true,
     requireApprovalForApplyPatch: false,
     allowedEnv: ["PATH", "HOME", "SHELL", "TERM", "TMPDIR", "USER"],
-    blockedCommands: ["rm -rf /", "git reset --hard", "sudo"]
+    commandPolicyEnforcement: "agent",
+    advisoryBlockedCommands: ["rm -rf /", "git reset --hard", "sudo"],
   },
   trusted: {
     profile: "trusted",
@@ -36,11 +48,16 @@ export const PERMISSION_TEMPLATES: Record<RunnerProfile, PermissionTemplate> = {
     requireApprovalForShell: false,
     requireApprovalForApplyPatch: false,
     allowedEnv: ["*"],
-    blockedCommands: []
-  }
+    commandPolicyEnforcement: "agent",
+    advisoryBlockedCommands: [],
+  },
 };
 
-export function getPermissionTemplate(profile: RunnerProfile): PermissionTemplate {
+const RUNNER_PRIVATE_ENV = new Set(["ROAM_RUNNER_TOKEN"]);
+
+export function getPermissionTemplate(
+  profile: RunnerProfile,
+): PermissionTemplate {
   switch (profile) {
     case "strict":
       return PERMISSION_TEMPLATES.strict;
@@ -49,4 +66,33 @@ export function getPermissionTemplate(profile: RunnerProfile): PermissionTemplat
     case "trusted":
       return PERMISSION_TEMPLATES.trusted;
   }
+}
+
+/**
+ * Builds the environment passed to plugin callbacks and their child processes.
+ * Restricted profiles receive only their explicit allowlist. Trusted agents
+ * inherit the host environment, except runner-owned credentials which are
+ * never required by an agent. Plugin modules execute in-process, so this is
+ * context hygiene rather than an isolation boundary for untrusted code.
+ */
+export function sanitizeAgentEnvironment(
+  profile: RunnerProfile,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const template = getPermissionTemplate(profile);
+  const allowAll = template.allowedEnv.includes("*");
+  const allowed = new Set(template.allowedEnv);
+  const result: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(env)) {
+    const normalizedKey = key.toUpperCase();
+    if (
+      value !== undefined &&
+      !RUNNER_PRIVATE_ENV.has(normalizedKey) &&
+      (allowAll || allowed.has(normalizedKey))
+    ) {
+      result[key] = value;
+    }
+  }
+  return result;
 }

@@ -59,6 +59,19 @@ function displayItemShape(item: ConversationDisplayItem): unknown {
 }
 
 describe("conversation model", () => {
+  it("omits empty assistant messages left after structured directives", () => {
+    const items = getConversationDisplayItems(
+      [
+        makeMessage({ id: "user", role: "user", content: "create artifact" }),
+        makeMessage({ id: "directive", role: "assistant", content: "" }),
+      ],
+      [],
+      "completed",
+    );
+
+    expect(displayShape(items)).toEqual(["user"]);
+  });
+
   it("marks tool messages for collapsible rendering", () => {
     expect(
       toUiMessage({

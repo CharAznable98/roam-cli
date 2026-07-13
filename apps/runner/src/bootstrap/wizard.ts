@@ -32,6 +32,7 @@ export async function maybeRunRunnerWizard(
   await reexecRunnerWithNpx({
     agentPlugins: result.agentPlugins,
     runnerArgs,
+    token: result.token,
   });
 }
 
@@ -164,8 +165,6 @@ function buildRunnerArgs(
   const args = [
     "--server",
     result.server,
-    "--token",
-    result.token,
     "--profile",
     options.profile,
     "--workspace",

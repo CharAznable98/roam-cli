@@ -79,9 +79,9 @@ http://127.0.0.1:8787
 In **Account & Security**, copy the Runner token. From the directory you want to expose as the Runner workspace, start a local workspace Runner with at least one agent plugin:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token-from-account-security> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
@@ -161,9 +161,9 @@ Windows users should run the installer from WSL2 with Docker Desktop integration
 Start a Runner from the directory you want to expose as the Runner workspace. Until the npm packages are published, use the local workspace command from the source checkout:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token-from-account-security> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
@@ -171,21 +171,22 @@ pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
 To enable both built-in agent plugins:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex \
   --agent-plugin @roamcli/agent-claude-code
 ```
 
-The Runner writes the effective startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. Later starts from the same workspace can omit persisted options:
+The Runner writes non-secret startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. The Runner token is never written there, so provide `ROAM_RUNNER_TOKEN` on every start while reusing the persisted non-secret options:
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
 ```
 
-If required values are missing in an interactive terminal, the Runner opens a React Ink TUI wizard and then re-execs the local command with the selected plugin packages. In non-interactive shells, pass `--server`, `--token`, and at least one `--agent-plugin` explicitly.
+If required values are missing in an interactive terminal, the Runner opens a React Ink TUI wizard and then re-execs the local command with the selected plugin packages. In non-interactive shells, provide `--server`, `ROAM_RUNNER_TOKEN`, and at least one `--agent-plugin`. Prefer the environment variable over `--token` so the credential does not appear in process arguments; neither form is persisted to local config.
 
 ## Use RoamCli
 
@@ -200,6 +201,8 @@ If required values are missing in an interactive terminal, the Runner opens a Re
 ## Agent Plugins
 
 The Runner core is intentionally minimal and does not load a default agent plugin. Choose at least one plugin with `--agent-plugin` or `ROAMCLI_AGENT_PLUGINS`.
+
+Agent plugins are trusted, in-process extensions. Install only plugin code you trust: module initialization can access the Runner process and `process.env`. Permission-profile filtering applies to the `context.env` passed to plugin callbacks and agent child processes; it is not a sandbox for the plugin module itself. `strict` and `standard` filter `ROAMCLI_AGENT_CODEX_*` command/mode overrides from that context, while `trusted` passes them through. `ROAM_RUNNER_TOKEN` is removed from `context.env` in every profile.
 
 Built-in workspace plugin packages:
 
@@ -238,17 +241,17 @@ ROAMCLI_AGENT_CODEX_ARGS
 
 ### Runner
 
-Runner reads local config from `<workspace>/<data-dir>/config.json`. CLI options and environment variables override local config and are written back before the Runner connects.
+Runner reads non-secret local config from `<workspace>/<data-dir>/config.json`. CLI options and environment variables override local config and are written back before the Runner connects, except that the Runner token is never persisted. Legacy configs containing a token are accepted once for migration and rewritten without it.
 
-| CLI option       | Environment variable    | Description                                                                                                                                                       |
-| ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL. `http` and `https` URLs are converted to `ws` and `wss`.                                                                                    |
-| `--token`        | `ROAM_RUNNER_TOKEN`     | Runner token shown in Account & Security.                                                                                                                         |
-| `--runner-id`    | `ROAM_RUNNER_ID`        | Stable Runner identifier. Defaults to hostname plus a generated UUID.                                                                                             |
-| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory.                                                                                    |
-| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | Relative runner data directory under the workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths and parent traversal are rejected. |
-| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`.                                                                                       |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Required agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                                |
+| CLI option       | Environment variable    | Description                                                                                                                                                                                      |
+| ---------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL. Remote hosts require `wss`; plaintext `ws` is limited to loopback hosts.                                                                                                   |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Runner token shown in Account & Security. Provide it on every start; prefer the environment variable so it is not exposed in process arguments. It is never persisted.                           |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | Stable Runner identifier. Defaults to hostname plus a generated UUID.                                                                                                                            |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | Workspace root exposed to RoamCli sessions. Defaults to the current directory.                                                                                                                   |
+| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | Relative runner data directory under the canonical workspace for state and session worktrees. Defaults to `.roam-runner`. Absolute paths, parent traversal, and symlink components are rejected. |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile: `strict`, `standard`, or `trusted`. Defaults to `standard`.                                                                                                                      |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | Required agent plugin package to load. Repeatable by CLI, comma-separated by environment variable.                                                                                               |
 
 ## Repository Layout
 

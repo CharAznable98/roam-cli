@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
-import { basename, extname, resolve } from "node:path";
+import { open, realpath } from "node:fs/promises";
+import { basename, extname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
   GitBlame,
@@ -25,7 +25,7 @@ import { nowIso } from "@roamcli/shared/protocol";
 import {
   isInside,
   resolveSessionChild,
-  resolveWorkspaceChild,
+  resolveWorkspaceDirectory,
 } from "./scope.js";
 
 const execFileAsync = promisify(execFile);
@@ -127,13 +127,12 @@ export async function readGitFileDiff(
   const path = normalizeGitPath(options.path);
   const oldPath =
     options.oldPath === undefined ? path : normalizeGitPath(options.oldPath);
-  const targetPath = resolveSessionChild(cwd, path);
   const oldRef = resolveOldRef(options.mode, options.oldRef);
   const newRef = resolveNewRef(options.mode, options.newRef);
   const oldContent = await readDiffSide(cwd, oldPath, oldRef, "old");
   const newContent =
     newRef === "WORKTREE"
-      ? await readWorktreeSide(targetPath)
+      ? await readWorktreeSide(cwd, path)
       : await readDiffSide(cwd, path, newRef, "new");
   const tooLarge = oldContent.tooLarge || newContent.tooLarge;
   const language = languageForPath(path);
@@ -170,8 +169,10 @@ export async function readGitBlame(
   resolveSessionChild(cwd, path);
   const args = ["blame", "--line-porcelain"];
   if (options.ref) {
-    args.push(options.ref);
+    args.push(await resolveGitRevision(cwd, options.ref, "commit"));
   }
+  // `git blame` accepts one literal pathname rather than a pathspec. The `--`
+  // separator prevents a leading dash from being parsed as an option.
   args.push("--", path);
   const { stdout } = await git(cwd, args);
   const parsed = parseBlame(stdout);
@@ -200,10 +201,10 @@ export async function readGitCommitPage(
     `--skip=${skip}`,
   ];
   if (options.ref) {
-    args.push(options.ref);
+    args.push(await resolveGitRevision(cwd, options.ref, "commit"));
   }
   if (options.path) {
-    args.push("--", normalizeGitPath(options.path));
+    args.push("--", literalGitPath(options.path));
   }
   const { stdout } = await git(cwd, args);
   const commits = parseLog(stdout);
@@ -221,12 +222,13 @@ export async function readGitCommitFiles(
 ): Promise<GitCommitFiles> {
   const cwd = await resolveGitCwd(options.workspace, options.cwd);
   await assertGitWorkTree(cwd);
+  const commitOid = await resolveGitRevision(cwd, options.sha, "commit");
   const { stdout } = await git(cwd, [
     "rev-list",
     "--parents",
     "-n",
     "1",
-    options.sha,
+    commitOid,
   ]);
   const [sha, ...parents] = stdout.trim().split(/\s+/).filter(Boolean);
   if (!sha) {
@@ -260,7 +262,7 @@ export async function readGitBranches(
 
 export async function stageGitPaths(options: GitPathsOptions): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
-    const paths = normalizeGitPaths(options.paths);
+    const paths = literalGitPaths(options.paths);
     await git(cwd, ["add", "--", ...paths]);
   });
 }
@@ -281,7 +283,7 @@ export async function unstageGitPaths(
       "restore",
       "--staged",
       "--",
-      ...normalizeGitPaths(options.paths),
+      ...literalGitPaths(options.paths),
     ]);
   });
 }
@@ -290,7 +292,7 @@ export async function discardGitPaths(
   options: GitPathsOptions,
 ): Promise<GitJob> {
   return runGitJob(options, async (cwd) => {
-    const paths = normalizeGitPaths(options.paths);
+    const paths = literalGitPaths(options.paths);
     let restoreError: unknown;
     await git(cwd, ["restore", "--worktree", "--", ...paths]).catch(
       (error: unknown) => {
@@ -412,36 +414,21 @@ async function pruneGitWorktrees(workspace: string): Promise<void> {
 }
 
 async function resolveGitCwd(workspace: string, cwd: string): Promise<string> {
-  const resolved = resolveWorkspaceChild(workspace, cwd);
-  const [realWorkspace, realCwd] = await Promise.all([
-    realpath(resolve(workspace)),
-    realpath(resolved),
-  ]);
-  if (!isInside(realWorkspace, realCwd)) {
-    throw new Error(`Git cwd escapes workspace: ${cwd}`);
-  }
-  return realCwd;
+  return resolveWorkspaceDirectory(workspace, cwd);
 }
 
 async function resolveGitCwdIfExists(
   workspace: string,
   cwd: string,
 ): Promise<string | undefined> {
-  const resolved = resolveWorkspaceChild(workspace, cwd);
-  const realWorkspace = await realpath(resolve(workspace));
-  let realCwd: string;
   try {
-    realCwd = await realpath(resolved);
+    return await resolveWorkspaceDirectory(workspace, cwd);
   } catch (error: unknown) {
     if (isNodeErrorCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
   }
-  if (!isInside(realWorkspace, realCwd)) {
-    throw new Error(`Git cwd escapes workspace: ${cwd}`);
-  }
-  return realCwd;
 }
 
 async function assertGitWorkTree(cwd: string): Promise<void> {
@@ -460,6 +447,33 @@ async function isGitWorkTree(cwd: string): Promise<boolean> {
 async function revParse(cwd: string, ref: string): Promise<string> {
   const { stdout } = await git(cwd, ["rev-parse", "--verify", ref]);
   return stdout.trim();
+}
+
+type GitRevisionObjectType = "commit" | "tree";
+
+async function resolveGitRevision(
+  cwd: string,
+  revision: string,
+  objectType: GitRevisionObjectType,
+): Promise<string> {
+  if (
+    revision.length === 0 ||
+    revision.startsWith("-") ||
+    /[\u0000-\u001f\u007f]/u.test(revision)
+  ) {
+    throw new Error("Invalid git revision");
+  }
+  const { stdout } = await git(cwd, [
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    `${revision}^{${objectType}}`,
+  ]);
+  const oid = stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/u.test(oid)) {
+    throw new Error("Git returned an invalid object ID");
+  }
+  return oid;
 }
 
 async function isUnborn(cwd: string): Promise<boolean> {
@@ -814,9 +828,12 @@ async function readDiffSide(
   label: "old" | "new",
 ): Promise<{ content: string; binary: boolean; tooLarge: boolean }> {
   if (ref === "WORKTREE") {
-    return readWorktreeSide(resolveSessionChild(cwd, path));
+    return readWorktreeSide(cwd, path);
   }
-  const objectRef = ref === "INDEX" ? `:${path}` : `${ref}:${path}`;
+  const objectRef =
+    ref === "INDEX"
+      ? `:${path}`
+      : `${await resolveGitRevision(cwd, ref, "tree")}:${path}`;
   try {
     return decodeContent(await gitBuffer(cwd, ["show", objectRef]));
   } catch (error: unknown) {
@@ -831,11 +848,28 @@ async function readDiffSide(
 }
 
 async function readWorktreeSide(
+  cwd: string,
   path: string,
 ): Promise<{ content: string; binary: boolean; tooLarge: boolean }> {
+  const targetPath = resolveSessionChild(cwd, path);
   try {
-    const content = await readFile(path);
-    return decodeContent(content);
+    const realTargetPath = await realpath(targetPath);
+    if (!isInside(cwd, realTargetPath)) {
+      throw new Error(`Path escapes git cwd: ${path}`);
+    }
+    const handle = await open(realTargetPath, "r");
+    try {
+      const content = Buffer.allocUnsafe(MAX_DIFF_CONTENT_BYTES + 1);
+      const { bytesRead } = await handle.read(
+        content,
+        0,
+        content.byteLength,
+        0,
+      );
+      return decodeContent(content.subarray(0, bytesRead));
+    } finally {
+      await handle.close();
+    }
   } catch (error: unknown) {
     if (isMissingPathError(error)) {
       return { content: "", binary: false, tooLarge: false };
@@ -978,6 +1012,7 @@ async function readCommitFiles(
         "diff-tree",
         "--no-commit-id",
         "--name-status",
+        "-z",
         "-r",
         "--find-renames",
         firstParent,
@@ -987,33 +1022,37 @@ async function readCommitFiles(
         "diff-tree",
         "--no-commit-id",
         "--name-status",
+        "-z",
         "-r",
         "--root",
         "--find-renames",
         commit.sha,
       ];
   const { stdout } = await git(cwd, args);
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line): GitChange[] => {
-      const parts = line.split("\t");
-      const code = parts[0] ?? "";
-      const status = commitStatusFromCode(code);
-      if (!status) {
-        return [];
+  const fields = stdout.split("\0");
+  const changes: GitChange[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const code = fields[index++];
+    if (!code) {
+      continue;
+    }
+    const status = commitStatusFromCode(code);
+    const hasTwoPaths = code[0] === "R" || code[0] === "C";
+    if (hasTwoPaths) {
+      const oldPath = fields[index++];
+      const path = fields[index++];
+      if (status && oldPath && path) {
+        changes.push({ path, oldPath, status, staged: false });
       }
-      if (status === "renamed" || status === "copied") {
-        const oldPath = parts[1];
-        const path = parts[2];
-        return oldPath && path
-          ? [{ path, oldPath, status, staged: false }]
-          : [];
-      }
-      const path = parts[1];
-      return path ? [{ path, status, staged: false }] : [];
-    });
+      continue;
+    }
+    const path = fields[index++];
+    if (status && path) {
+      changes.push({ path, status, staged: false });
+    }
+  }
+  return changes;
 }
 
 function commitStatusFromCode(code: string): GitChangeStatus | undefined {
@@ -1057,21 +1096,24 @@ function parseCursor(cursor: string | undefined): number {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
-function normalizeGitPaths(paths: string[]): string[] {
-  return paths.map(normalizeGitPath);
+function literalGitPaths(paths: string[]): string[] {
+  return paths.map(literalGitPath);
+}
+
+function literalGitPath(path: string): string {
+  return `:(literal)${normalizeGitPath(path)}`;
 }
 
 function normalizeGitPath(path: string): string {
-  const value = path.trim();
   if (
-    !value ||
-    value === "." ||
-    value.startsWith("/") ||
-    value.includes("\0")
+    path.length === 0 ||
+    path === "." ||
+    isAbsolute(path) ||
+    path.includes("\0")
   ) {
     throw new Error(`Invalid git path: ${path}`);
   }
-  const segments = value.split("/");
+  const segments = path.split("/");
   if (
     segments.some(
       (segment) => segment === "" || segment === "." || segment === "..",
@@ -1079,7 +1121,7 @@ function normalizeGitPath(path: string): string {
   ) {
     throw new Error(`Invalid git path: ${path}`);
   }
-  return segments.join("/");
+  return path;
 }
 
 function languageForPath(path: string): string | undefined {

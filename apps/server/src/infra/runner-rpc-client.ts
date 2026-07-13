@@ -18,6 +18,7 @@ import type {
   PatchApplyResult,
   PathSearchResult,
   RunnerCommand,
+  SessionStartResult,
   SessionStatusCheckResult,
 } from "@roamcli/shared/protocol";
 import type { ConnectionHub } from "./connection-hub.js";
@@ -35,6 +36,7 @@ type RunnerRpcResult =
   | PatchApplyResult
   | PathSearchResult
   | SessionStatusCheckResult
+  | SessionStartResult
   | GitStatusResult
   | GitFileDiff
   | GitBlame
@@ -55,6 +57,7 @@ export type RunnerRpcCommand = Extract<
       | "listAgentRuntimeConfigOptions"
       | "searchWorkspacePaths"
       | "checkSessionStatus"
+      | "startSession"
       | "writeSessionAttachments"
       | "readSessionAttachment"
       | "deleteSessionAttachments"
@@ -102,6 +105,12 @@ export class RunnerRpcClient {
     command: RunnerRpcCommand,
     timeoutMs: number,
   ): Promise<T> {
+    const requestId = command.requestId;
+    if (!requestId) {
+      return Promise.reject(
+        new RunnerRpcError("runner RPC requestId is required", "runner_error"),
+      );
+    }
     if (!this.hub.isRunnerOnline(runnerId)) {
       return Promise.reject(
         new RunnerRpcError("runner is offline", "runner_offline"),
@@ -110,13 +119,13 @@ export class RunnerRpcClient {
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingRunnerRpcs.delete(command.requestId);
+        this.pendingRunnerRpcs.delete(requestId);
         reject(
           new RunnerRpcError("runner request timed out", "runner_timeout"),
         );
       }, timeoutMs);
 
-      this.pendingRunnerRpcs.set(command.requestId, {
+      this.pendingRunnerRpcs.set(requestId, {
         runnerId,
         timer,
         resolve: resolve as (result: RunnerRpcResult) => void,
@@ -129,7 +138,7 @@ export class RunnerRpcClient {
         }
       } catch (error) {
         clearTimeout(timer);
-        this.pendingRunnerRpcs.delete(command.requestId);
+        this.pendingRunnerRpcs.delete(requestId);
         reject(
           error instanceof RunnerRpcError
             ? error

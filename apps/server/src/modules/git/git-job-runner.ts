@@ -11,6 +11,8 @@ import type { ServerStore } from "../../infra/sqlite-store.js";
 import { ok, type ServiceResult } from "../result.js";
 
 export const DEFAULT_GIT_JOB_TIMEOUT_MS = 30_000;
+const GIT_JOB_RESULT_UNKNOWN = "runner_result_unknown";
+const LATE_GIT_JOB_RESULT_RETENTION_MS = 5 * 60_000;
 
 export type GitResolvedContext = {
   projectId: string;
@@ -40,13 +42,13 @@ export class GitMutationQueue {
 }
 
 type PendingGitJob = {
-  runnerId: string;
   job: GitJob;
   resolve?: () => void;
 };
 
 export class GitJobRunner {
   private readonly pendingJobs = new Map<string, PendingGitJob>();
+  private readonly orphanExpiryTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly store: ServerStore,
@@ -54,7 +56,9 @@ export class GitJobRunner {
     private readonly rpc: RunnerRpcClient,
     private readonly gitJobTimeoutMs = DEFAULT_GIT_JOB_TIMEOUT_MS,
     private readonly queue = new GitMutationQueue(),
-  ) {}
+  ) {
+    this.rehydratePersistedJobs();
+  }
 
   async run<T extends RunnerRpcCommand>(
     resolved: GitResolvedContext,
@@ -73,7 +77,6 @@ export class GitJobRunner {
     }
 
     this.pendingJobs.set(queuedJob.id, {
-      runnerId: resolved.runnerId,
       job: queuedJob,
     });
     this.queue.enqueue(resolved.context, () =>
@@ -82,30 +85,55 @@ export class GitJobRunner {
     return ok({ job: queuedJob });
   }
 
-  handleRunnerJobResult(job: GitJob): boolean {
-    const pending = this.pendingJobs.get(job.id);
-    if (!pending) {
-      return false;
+  canAcceptRunnerJobResult(job: GitJob): boolean {
+    const stored = this.store.getGitJob(job.id);
+    return (
+      stored !== undefined &&
+      (isActiveGitJob(stored) || canAcceptLateRunnerJobResult(stored))
+    );
+  }
+
+  completeRunnerJobResult(job: GitJob): void {
+    const orphanTimer = this.orphanExpiryTimers.get(job.id);
+    if (orphanTimer) {
+      clearTimeout(orphanTimer);
+      this.orphanExpiryTimers.delete(job.id);
     }
+    const pending = this.pendingJobs.get(job.id);
     this.pendingJobs.delete(job.id);
-    pending.resolve?.();
-    return true;
+    pending?.resolve?.();
   }
 
   normalizeRunnerJobResult(job: GitJob): GitJob {
     const pending = this.pendingJobs.get(job.id);
-    if (!pending) {
+    const authoritative = pending?.job ?? this.store.getGitJob(job.id);
+    if (!authoritative) {
       return job;
     }
+    const startedAt = authoritative.startedAt ?? job.startedAt;
     return {
-      ...job,
-      operation: pending.job.operation,
-      contextKind: pending.job.contextKind,
-      ...(pending.job.sessionId ? { sessionId: pending.job.sessionId } : {}),
+      id: authoritative.id,
+      projectId: authoritative.projectId,
+      operation: authoritative.operation,
+      contextKind: authoritative.contextKind,
+      status: job.status,
+      createdAt: authoritative.createdAt,
+      ...(startedAt ? { startedAt } : {}),
+      ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+      ...(job.errorCode ? { errorCode: job.errorCode } : {}),
+      ...(job.errorSummary !== undefined
+        ? { errorSummary: job.errorSummary }
+        : {}),
+      ...(authoritative.sessionId
+        ? { sessionId: authoritative.sessionId }
+        : {}),
     };
   }
 
   hasActiveWorktreeRemovalJob(sessionId: string): boolean {
+    if (this.store.hasActiveWorktreeRemovalJob(sessionId)) {
+      return true;
+    }
     for (const pending of this.pendingJobs.values()) {
       if (
         pending.job.sessionId === sessionId &&
@@ -116,16 +144,6 @@ export class GitJobRunner {
       }
     }
     return false;
-  }
-
-  failPendingForRunner(runnerId: string, error: RunnerRpcError): void {
-    for (const [jobId, pending] of this.pendingJobs) {
-      if (pending.runnerId === runnerId) {
-        this.pendingJobs.delete(jobId);
-        this.failJob(pending.job, error);
-        pending.resolve?.();
-      }
-    }
   }
 
   private async dispatchQueuedJob<T extends RunnerRpcCommand>(
@@ -200,6 +218,45 @@ export class GitJobRunner {
     });
   }
 
+  private rehydratePersistedJobs(): void {
+    const now = Date.now();
+    for (const job of this.store.listActiveGitJobs()) {
+      const deadline = persistedJobDeadline(job, this.gitJobTimeoutMs);
+      if (deadline <= now) {
+        this.expireOrphanedJob(job.id);
+        continue;
+      }
+      const timer = setTimeout(
+        () => this.expireOrphanedJob(job.id),
+        deadline - now,
+      );
+      timer.unref();
+      this.orphanExpiryTimers.set(job.id, timer);
+    }
+  }
+
+  private expireOrphanedJob(jobId: string): void {
+    this.orphanExpiryTimers.delete(jobId);
+    try {
+      const job = this.store.getGitJob(jobId);
+      if (!job || !isActiveGitJob(job)) {
+        return;
+      }
+      const failed: GitJob = {
+        ...job,
+        status: "failed",
+        finishedAt: nowIso(),
+        errorCode: GIT_JOB_RESULT_UNKNOWN,
+        errorSummary:
+          "The server restarted before the runner result was confirmed; the Git operation outcome is unknown.",
+      };
+      this.store.upsertGitJob(failed);
+      this.hub.broadcast({ type: "git:job", job: failed });
+    } catch {
+      // The store may already be closed during server shutdown.
+    }
+  }
+
   private createQueuedJob(
     requestId: string,
     operation: string,
@@ -256,4 +313,29 @@ function isWorktreeRemovalOperation(operation: string): boolean {
   return (
     operation === "remove_worktree" || operation === "archive_remove_worktree"
   );
+}
+
+function isActiveGitJob(job: GitJob): boolean {
+  return job.status === "queued" || job.status === "running";
+}
+
+function canAcceptLateRunnerJobResult(job: GitJob): boolean {
+  if (
+    job.status !== "failed" ||
+    (job.errorCode !== GIT_JOB_RESULT_UNKNOWN &&
+      job.errorCode !== "runner_timeout") ||
+    !job.finishedAt
+  ) {
+    return false;
+  }
+  const finishedAt = Date.parse(job.finishedAt);
+  return (
+    Number.isFinite(finishedAt) &&
+    Date.now() - finishedAt <= LATE_GIT_JOB_RESULT_RETENTION_MS
+  );
+}
+
+function persistedJobDeadline(job: GitJob, timeoutMs: number): number {
+  const timestamp = Date.parse(job.startedAt ?? job.createdAt);
+  return (Number.isFinite(timestamp) ? timestamp : 0) + timeoutMs;
 }

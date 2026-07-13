@@ -1,12 +1,5 @@
-import {
-  mkdir,
-  open,
-  readdir,
-  readFile,
-  realpath,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { mkdir, open, readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   DirectoryCreateResult,
@@ -146,35 +139,38 @@ export async function readFileContent(
   options: ReadFileContentOptions,
 ): Promise<FileContentResult> {
   const target = await resolveExistingPath(options, options.path);
-  const targetStat = await stat(target.path);
-  if (!targetStat.isFile()) {
-    throw new Error(`Path is not a file: ${options.path}`);
-  }
-
-  const maxBytes = clampMaxBytes(options.maxBytes);
-  const imageMimeType = imageMimeTypeForPath(target.path);
-  if (imageMimeType) {
-    const truncated = targetStat.size > maxBytes;
-    return {
-      requestId: options.requestId,
-      sessionId: options.sessionId,
-      path: toNodePath(options.sessionCwd, target.path),
-      kind: "image",
-      ...(truncated || targetStat.size === 0
-        ? {}
-        : {
-            contentBase64: await readFileBase64(target.path, targetStat.size),
-          }),
-      mimeType: imageMimeType,
-      size: targetStat.size,
-      truncated,
-      encoding: "base64",
-    };
-  }
-
-  const buffer = Buffer.alloc(Math.min(maxBytes + 1, targetStat.size));
-  const handle = await open(target.path, "r");
+  const handle = await open(
+    target.realPath,
+    fsConstants.O_RDONLY | noFollowFlag(),
+  );
   try {
+    const targetStat = await handle.stat();
+    if (!targetStat.isFile()) {
+      throw new Error(`Path is not a file: ${options.path}`);
+    }
+
+    const maxBytes = clampMaxBytes(options.maxBytes);
+    const imageMimeType = imageMimeTypeForPath(target.path);
+    if (imageMimeType) {
+      const truncated = targetStat.size > maxBytes;
+      return {
+        requestId: options.requestId,
+        sessionId: options.sessionId,
+        path: toNodePath(options.sessionCwd, target.path),
+        kind: "image",
+        ...(truncated || targetStat.size === 0
+          ? {}
+          : {
+              contentBase64: await readHandleBase64(handle, targetStat.size),
+            }),
+        mimeType: imageMimeType,
+        size: targetStat.size,
+        truncated,
+        encoding: "base64",
+      };
+    }
+
+    const buffer = Buffer.alloc(Math.min(maxBytes + 1, targetStat.size));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const truncated = bytesRead > maxBytes || targetStat.size > maxBytes;
     const contentBytes = buffer.subarray(0, Math.min(bytesRead, maxBytes));
@@ -214,11 +210,23 @@ export async function writeFileContent(
   options: WriteFileContentOptions,
 ): Promise<FileWriteResult> {
   const target = await resolveWritableExistingFilePath(options, options.path);
-  await writeFile(target.path, options.content, "utf8");
+  const handle = await open(
+    target.path,
+    fsConstants.O_WRONLY | fsConstants.O_TRUNC | noFollowFlag(),
+  );
+  try {
+    const targetStat = await handle.stat();
+    if (!targetStat.isFile()) {
+      throw new Error(`Path is not a file: ${options.path}`);
+    }
+    await handle.writeFile(options.content, "utf8");
+  } finally {
+    await handle.close();
+  }
   return {
     requestId: options.requestId,
     sessionId: options.sessionId,
-    path: toNodePath(options.sessionCwd, target.path),
+    path: target.nodePath,
     bytesWritten: Buffer.byteLength(options.content, "utf8"),
     encoding: "utf8",
   };
@@ -235,12 +243,16 @@ export async function createDirectory(
   }
 
   const targetPath = resolve(parent.path, cleanName);
-  if (!isInside(parent.path, targetPath)) {
+  const realTargetPath = resolve(parent.realPath, cleanName);
+  if (
+    !isInside(parent.path, targetPath) ||
+    !isInside(parent.realPath, realTargetPath)
+  ) {
     throw new Error(`Path escapes parent directory: ${cleanName}`);
   }
 
-  await mkdir(targetPath);
-  const targetRealPath = await realpath(targetPath);
+  await mkdir(realTargetPath);
+  const targetRealPath = await realpath(realTargetPath);
   if (!isInside(parent.realPath, targetRealPath)) {
     throw new Error(`Path escapes parent directory: ${cleanName}`);
   }
@@ -248,14 +260,12 @@ export async function createDirectory(
   return {
     requestId: options.requestId,
     path: toNodePath(options.sessionCwd, targetPath),
-    node: await buildNode(targetPath, {
-      sessionCwd: options.sessionCwd,
-      realSessionCwd: parent.realSessionCwd,
-      depth: 1,
-      visited: new Set([parent.realPath, targetRealPath]),
-      includeFiles: true,
-      ignoreGeneratedDirectories: true,
-    }),
+    node: {
+      path: toNodePath(options.sessionCwd, targetPath),
+      name: cleanName,
+      type: "directory",
+      children: [],
+    },
   };
 }
 
@@ -626,9 +636,17 @@ function imageMimeTypeForPath(path: string): string | undefined {
   return mimeTypes[extension];
 }
 
-async function readFileBase64(path: string, size: number): Promise<string> {
-  const buffer = await readFile(path);
-  return buffer.subarray(0, size).toString("base64");
+async function readHandleBase64(
+  handle: Awaited<ReturnType<typeof open>>,
+  size: number,
+): Promise<string> {
+  const buffer = Buffer.alloc(size);
+  const { bytesRead } = await handle.read(buffer, 0, size, 0);
+  return buffer.subarray(0, bytesRead).toString("base64");
+}
+
+function noFollowFlag(): number {
+  return fsConstants.O_NOFOLLOW ?? 0;
 }
 
 function decodeLikelyTextBuffer(

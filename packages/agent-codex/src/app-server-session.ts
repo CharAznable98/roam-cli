@@ -3,16 +3,17 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type {
-  AgentInput,
-  AgentLaunchAttachment,
-  AgentRuntimeEvent,
-  AgentSession,
-  AgentSessionContext,
-  ApprovalRequestDraft,
-  UserInputQuestion,
-  UserInputQuestionOption,
-  UserInputRequestDraft,
+import {
+  AgentInputUnavailableError,
+  type AgentInput,
+  type AgentLaunchAttachment,
+  type AgentRuntimeEvent,
+  type AgentSession,
+  type AgentSessionContext,
+  type ApprovalRequestDraft,
+  type UserInputQuestion,
+  type UserInputQuestionOption,
+  type UserInputRequestDraft,
 } from "@roamcli/agent-plugin-sdk";
 import type {
   AgentActivityKind,
@@ -39,13 +40,13 @@ import type {
   UserInput,
 } from "./app-server-protocol.js";
 import { asString, isRecord } from "./app-server-protocol.js";
-import { parseTextDirectives } from "./directives.js";
+import { parseTextDirectives, streamingDisplayText } from "./directives.js";
 
 interface ApprovalDecision {
   approvalId: string;
   approved: boolean;
   signedAt: string;
-  signature: string;
+  signature?: string;
 }
 
 interface CodexAppServerSessionOptions {
@@ -57,6 +58,19 @@ interface CodexAppServerSessionOptions {
 interface QueuedInput {
   content: string;
   attachments?: readonly AgentLaunchAttachment[];
+  steeringSettled?: Promise<void>;
+  acceptance?: InputAcceptance;
+}
+
+interface InputAcceptance {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+interface AcceptedInputDelivery {
+  content: string;
+  promise: Promise<void>;
 }
 
 interface CodexActivitySummary {
@@ -73,6 +87,7 @@ export class CodexAppServerSession implements AgentSession {
   readonly #args: readonly string[];
   readonly #context: AgentSessionContext;
   readonly #queue: QueuedInput[] = [];
+  readonly #acceptedInputDeliveries = new Map<string, AcceptedInputDelivery>();
   readonly #outputPrefix = `codex-app-server-run-${randomUUID()}`;
   #child: ChildProcessWithoutNullStreams | undefined;
   #client: CodexAppServerClient | undefined;
@@ -99,6 +114,10 @@ export class CodexAppServerSession implements AgentSession {
       }
     | undefined;
   readonly #streamedOutputIds = new Set<string>();
+  readonly #streamedAssistantOutputs = new Map<
+    string,
+    { rawText: string; emittedText: string }
+  >();
   readonly #fileChangeItems = new Map<string, unknown>();
   readonly #commandExecutionItems = new Map<
     string,
@@ -116,7 +135,7 @@ export class CodexAppServerSession implements AgentSession {
 
   public async start(): Promise<void> {
     if (this.#closed || this.#stopRequested) {
-      return;
+      throw new AgentInputUnavailableError();
     }
     this.#child = spawnChild(this.#command, [...this.#args], {
       cwd: this.#context.cwd,
@@ -168,52 +187,98 @@ export class CodexAppServerSession implements AgentSession {
       await this.#openThread();
     } catch (error) {
       if (this.#closed || this.#stopRequested) {
-        return;
+        throw new AgentInputUnavailableError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
       this.#closeAppServer("SIGTERM");
       throw error;
     }
+    const acceptance = createInputAcceptance();
     this.#queue.unshift({
       content: this.#context.prompt,
+      acceptance,
       ...(this.#context.attachments
         ? { attachments: this.#context.attachments }
         : {}),
     });
     this.#startDrain();
+    await acceptance.promise;
   }
 
-  public deliverInput(input: AgentInput): void {
-    if (this.#closed || this.#pendingTerminalStatus === "stopped") {
-      return;
+  public deliverInput(input: AgentInput): Promise<void> {
+    if (
+      this.#closed ||
+      this.#stopRequested ||
+      this.#pendingTerminalStatus !== undefined
+    ) {
+      throw new AgentInputUnavailableError();
     }
+    if (input.deliveryId !== undefined) {
+      const existing = this.#acceptedInputDeliveries.get(input.deliveryId);
+      if (existing !== undefined) {
+        if (existing.content !== input.content) {
+          return Promise.reject(
+            new AgentInputUnavailableError(
+              "Input delivery ID was reused with different content",
+            ),
+          );
+        }
+        return existing.promise;
+      }
+      const promise = this.#acceptInput(input);
+      this.#acceptedInputDeliveries.set(input.deliveryId, {
+        content: input.content,
+        promise,
+      });
+      return promise;
+    }
+    return this.#acceptInput(input);
+  }
+
+  async #acceptInput(input: AgentInput): Promise<void> {
+    const acceptance = createInputAcceptance();
     if (
       this.#threadId &&
       this.#activeTurnId &&
       !this.#rootThreadIdle &&
       !this.#turnCompletedSuccessfully
     ) {
-      const queued = { content: input.content };
+      let settleSteering!: () => void;
+      const queued: QueuedInput = {
+        content: input.content,
+        acceptance,
+        steeringSettled: new Promise<void>((resolve) => {
+          settleSteering = resolve;
+        }),
+      };
       this.#queue.push(queued);
-      void this.#steerTurn(input).then(
-        () => {
-          const index = this.#queue.indexOf(queued);
-          if (index >= 0) {
-            this.#queue.splice(index, 1);
-          }
-        },
-        () => {
-          if (this.#closed) {
-            return;
-          }
-          this.#startDrain();
-        },
-      );
-      return;
+      try {
+        await this.#steerTurn(input);
+        const index = this.#queue.indexOf(queued);
+        if (index >= 0) {
+          this.#queue.splice(index, 1);
+        }
+        acceptance.resolve();
+      } catch (error: unknown) {
+        if (this.#closed || this.#stopRequested) {
+          const unavailable = new AgentInputUnavailableError(
+            error instanceof Error ? error.message : String(error),
+          );
+          acceptance.reject(unavailable);
+          throw unavailable;
+        }
+        this.#startDrain();
+      } finally {
+        settleSteering();
+      }
+      return acceptance.promise;
     }
-    this.#queue.push({ content: input.content });
+    this.#queue.push({ content: input.content, acceptance });
     if (this.#threadId) {
       this.#startDrain();
     }
+    return acceptance.promise;
   }
 
   public async control(signal: "interrupt" | "stop" | "resume"): Promise<void> {
@@ -228,7 +293,8 @@ export class CodexAppServerSession implements AgentSession {
     if (signal === "stop") {
       this.#stopRequested = true;
       this.#closed = true;
-      this.#queue.length = 0;
+      this.#rejectQueuedInputs(new AgentInputUnavailableError());
+      this.#streamedAssistantOutputs.clear();
       this.#resolveThreadIdleWaiters();
       if (this.#threadId && this.#activeTurnId) {
         void this.#client
@@ -246,7 +312,8 @@ export class CodexAppServerSession implements AgentSession {
 
   public close(): void {
     this.#closed = true;
-    this.#queue.length = 0;
+    this.#rejectQueuedInputs(new AgentInputUnavailableError());
+    this.#streamedAssistantOutputs.clear();
     this.#pendingTerminalStatus = undefined;
     this.#resolveThreadIdleWaiters();
     this.#client?.close();
@@ -312,6 +379,13 @@ export class CodexAppServerSession implements AgentSession {
         await this.#emitCompletedIfReady();
         return;
       }
+      await this.#queue[0]?.steeringSettled;
+      if (this.#closed) {
+        return;
+      }
+      if (this.#queue.length === 0) {
+        continue;
+      }
       await this.#awaitRootThreadIdleBeforeNextTurn();
       if (this.#closed) {
         return;
@@ -335,6 +409,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#rootThreadIdle = false;
     this.#filterTurnId = undefined;
     this.#streamedOutputIds.clear();
+    this.#streamedAssistantOutputs.clear();
     this.#activityStartedItems.clear();
     const turnDone = new Promise<void>((resolve, reject) => {
       this.#turnDone = {
@@ -355,11 +430,15 @@ export class CodexAppServerSession implements AgentSession {
         ...runtimeTurnParams(this.#context.session.agentRuntimeConfig),
       })) as TurnStartResponse;
     } catch (error) {
+      input.acceptance?.reject(
+        error instanceof Error ? error : new Error(String(error)),
+      );
       if (this.#turnDone === currentTurnDone) {
         this.#turnDone = undefined;
       }
       throw error;
     }
+    input.acceptance?.resolve();
     const activeTurnDone = this.#turnDone;
     if (activeTurnDone === currentTurnDone) {
       this.#activeTurnId = response.turn?.id ?? this.#activeTurnId;
@@ -693,15 +772,27 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     const outputId = this.#outputId(notification.itemId);
-    if (
-      await this.#emit({
-        type: "assistantOutput",
-        outputId,
-        content: notification.delta,
-        mode: "append",
-        done: false,
-      })
-    ) {
+    const previous = this.#streamedAssistantOutputs.get(outputId) ?? {
+      rawText: "",
+      emittedText: "",
+    };
+    const rawText = previous.rawText + notification.delta;
+    const safeText = streamingDisplayText(rawText);
+    const next = { rawText, emittedText: previous.emittedText };
+    this.#streamedAssistantOutputs.set(outputId, next);
+    if (safeText === previous.emittedText) {
+      return;
+    }
+    const append = safeText.startsWith(previous.emittedText);
+    const emitted = await this.#emit({
+      type: "assistantOutput",
+      outputId,
+      content: append ? safeText.slice(previous.emittedText.length) : safeText,
+      mode: append ? "append" : "replace",
+      done: false,
+    });
+    if (emitted) {
+      next.emittedText = safeText;
       this.#streamedOutputIds.add(outputId);
     }
   }
@@ -772,25 +863,21 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     const outputId = this.#outputId(item.id);
-    if (this.#streamedOutputIds.has(outputId)) {
+    this.#streamedAssistantOutputs.delete(outputId);
+    const directives = parseTextDirectives(item.text);
+    if (
+      directives.displayText.length > 0 ||
+      this.#streamedOutputIds.has(outputId)
+    ) {
       await this.#emit({
         type: "assistantOutput",
         outputId,
-        content: item.text,
+        content: directives.displayText,
         mode: "replace",
         done: true,
       });
-      await this.#emitTextDirectives(item.text);
-      return;
     }
-    await this.#emit({
-      type: "assistantOutput",
-      outputId,
-      content: item.text,
-      mode: "replace",
-      done: true,
-    });
-    await this.#emitTextDirectives(item.text);
+    await this.#emitTextDirectives(directives);
   }
 
   async #handleTurnCompleted(notification: TurnNotification): Promise<void> {
@@ -817,7 +904,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     if (status === "interrupted") {
-      this.#queue.length = 0;
+      this.#rejectQueuedInputs(new AgentInputUnavailableError());
       this.#pendingTerminalStatus = "stopped";
       done?.resolve();
       await this.#emitPendingTerminalStatus();
@@ -857,9 +944,7 @@ export class CodexAppServerSession implements AgentSession {
     this.#sendPendingInterrupt();
   }
 
-  #isCurrentRootItemEvent(
-    notification: unknown,
-  ): boolean {
+  #isCurrentRootItemEvent(notification: unknown): boolean {
     const threadId = isRecord(notification)
       ? asString(notification.threadId)
       : undefined;
@@ -1043,8 +1128,9 @@ export class CodexAppServerSession implements AgentSession {
     }
   }
 
-  async #emitTextDirectives(text: string): Promise<void> {
-    const directives = parseTextDirectives(text);
+  async #emitTextDirectives(
+    directives: ReturnType<typeof parseTextDirectives>,
+  ): Promise<void> {
     for (const draft of directives.artifacts) {
       await this.#emit({ type: "artifact", draft });
     }
@@ -1086,7 +1172,9 @@ export class CodexAppServerSession implements AgentSession {
         approvalId: decision.approvalId,
         approved: decision.approved,
         signedAt: decision.signedAt,
-        signature: decision.signature,
+        ...(decision.signature === undefined
+          ? {}
+          : { signature: decision.signature }),
       }),
     });
     if (!this.#activeTurnId) {
@@ -1108,7 +1196,7 @@ export class CodexAppServerSession implements AgentSession {
       return;
     }
     this.#closed = true;
-    this.#queue.length = 0;
+    this.#rejectQueuedInputs(new AgentInputUnavailableError(message));
     this.#pendingTerminalStatus = undefined;
     this.#resolveThreadIdleWaiters();
     this.#turnDone?.reject(new Error(message));
@@ -1173,11 +1261,28 @@ export class CodexAppServerSession implements AgentSession {
 
   #closeAppServer(signal: NodeJS.Signals): void {
     this.#closed = true;
-    this.#queue.length = 0;
+    this.#rejectQueuedInputs(new AgentInputUnavailableError());
     this.#resolveThreadIdleWaiters();
     this.#client?.close();
     this.#child?.kill(signal);
   }
+
+  #rejectQueuedInputs(error: Error): void {
+    for (const input of this.#queue.splice(0)) {
+      input.acceptance?.reject(error);
+    }
+  }
+}
+
+function createInputAcceptance(): InputAcceptance {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  void promise.catch(() => undefined);
+  return { promise, resolve, reject };
 }
 
 function userInputFor(input: QueuedInput): UserInput[] {
@@ -1412,8 +1517,8 @@ function toolActivityObject(item: Record<string, unknown>): string {
   const server = asString(item.server);
   const namespace = asString(item.namespace);
   const tool = asString(item.tool);
-  const parts = [server ?? namespace, tool].filter(
-    (part): part is string => Boolean(part),
+  const parts = [server ?? namespace, tool].filter((part): part is string =>
+    Boolean(part),
   );
   return compactActivityObject(parts.join(" ") || "tool");
 }

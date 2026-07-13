@@ -12,6 +12,7 @@ describe("AgentProcess", () => {
     await expect(
       spawnAgentProcess(process.execPath, [], {
         cwd: process.cwd(),
+        profile: "standard",
         requirePty: true
       })
     ).rejects.toThrow(`PTY spawn failed for ${process.execPath}: pty unavailable`);
@@ -30,6 +31,7 @@ describe("AgentProcess", () => {
       ],
       {
         cwd: process.cwd(),
+        profile: "standard",
         preferPty: false
       }
     );
@@ -56,6 +58,7 @@ describe("AgentProcess", () => {
       ["-e", "process.stdin.resume();process.stdin.on('end', () => { console.log('ended'); });"],
       {
         cwd: process.cwd(),
+        profile: "standard",
         preferPty: false
       }
     );
@@ -71,5 +74,31 @@ describe("AgentProcess", () => {
 
     await expect(exit).resolves.toMatchObject({ code: 0 });
     expect(output).toContain("ended");
+  });
+
+  it("sanitizes environment variables before spawning an agent", async () => {
+    const child = await spawnAgentProcess(
+      process.execPath,
+      [
+        "-e",
+        "console.log(JSON.stringify({ path: process.env.PATH, secret: process.env.ROAM_RUNNER_TOKEN }))",
+      ],
+      {
+        cwd: process.cwd(),
+        profile: "standard",
+        env: { PATH: process.env.PATH, ROAM_RUNNER_TOKEN: "runner-secret" },
+        preferPty: false,
+      },
+    );
+    let output = "";
+    child.onData((chunk) => {
+      output += chunk.toString();
+    });
+    const exit = new Promise<{ code: number | null }>((resolve) => {
+      child.onExit(resolve);
+    });
+
+    await expect(exit).resolves.toMatchObject({ code: 0 });
+    expect(JSON.parse(output.trim())).toEqual({ path: process.env.PATH });
   });
 });

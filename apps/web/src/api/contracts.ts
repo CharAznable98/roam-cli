@@ -17,6 +17,12 @@ export interface SessionDetailPayload {
   messages: Message[];
   activities?: AgentActivity[];
   attachments: MessageAttachment[];
+  pendingMessageDeliveries?: Array<{
+    messageId: string;
+    content: string;
+    createdAt: string;
+    attachments: MessageAttachment[];
+  }>;
   approvals: Approval[];
   artifacts: Artifact[];
 }

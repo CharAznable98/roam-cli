@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import type { WebSocket } from "ws";
 import type {
   RunnerCommand,
@@ -359,6 +361,108 @@ describe("SessionCommandService", () => {
     });
   });
 
+  it("replays an initial durable start after the server commits before sending", async () => {
+    let hub = new ConnectionHub(store);
+    let rpc = new RunnerRpcClient(hub);
+    let service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    hub.registerRunner(durableRunner, fakeSocket<RunnerCommand>([]));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createSession({
+        requestId: "initial-create-retry",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "survive commit-before-send",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    send.mockRestore();
+    const [pending] = store.listPendingInputDeliveries("runner-1");
+    expect(pending).toMatchObject({
+      kind: "start",
+      message: { content: "survive commit-before-send" },
+    });
+    expect(store.listMessages(pending!.sessionId)).toEqual([]);
+
+    await expect(
+      service.createSession({
+        requestId: "initial-create-retry",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "survive commit-before-send",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { session: { id: pending!.sessionId } },
+    });
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.listPendingInputDeliveries("runner-1")).toHaveLength(1);
+
+    for (const changed of [
+      { title: "Changed title" },
+      { executionMode: "managed_worktree" as const },
+      { gitBaseRef: "origin/changed" },
+      { gitBranchName: "changed-branch" },
+      { agentRuntimeConfig: { model: "changed-model" } },
+    ]) {
+      await expect(
+        service.createSession({
+          requestId: "initial-create-retry",
+          projectId: "project-1",
+          agent: "codex",
+          prompt: "survive commit-before-send",
+          ...changed,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "runner_error",
+        code: "INPUT_REQUEST_CONFLICT",
+      });
+    }
+    expect(store.listSessions()).toHaveLength(1);
+
+    store.close();
+    store = new ServerStore(dataDir);
+    hub = new ConnectionHub(store);
+    rpc = new RunnerRpcClient(hub);
+    service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    hub.registerRunner(durableRunner, fakeSocket(runnerMessages));
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const start = runnerMessages[0];
+    if (start?.type !== "startSession") {
+      throw new Error("initial durable start was not reconciled");
+    }
+    expect(start.deliveryId).toBe(pending!.deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: start.requestId!,
+      sessionId: pending!.sessionId,
+      deliveryId: pending!.deliveryId,
+      ownership: "owned",
+    });
+    await reconciliation;
+
+    expect(store.getPendingInputDelivery(pending!.deliveryId)).toBeUndefined();
+    expect(store.listMessages(pending!.sessionId)).toEqual([
+      expect.objectContaining({ content: "survive commit-before-send" }),
+    ]);
+  });
+
   it("persists and clears runner agent runtime default settings", () => {
     const saved = store.setRunnerAgentRuntimeConfigSetting(
       "runner-1",
@@ -387,6 +491,49 @@ describe("SessionCommandService", () => {
 
     expect(cleared).toBeUndefined();
     expect(store.listRunnerAgentRuntimeConfigSettings()).toEqual([]);
+  });
+
+  it("rejects omitting explicit fields from a retried session request", async () => {
+    const hub = new ConnectionHub(store);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      new RunnerRpcClient(hub),
+      100,
+    );
+    store.createProject(projectRecord());
+    hub.registerRunner(
+      durableRunnerRegistration(),
+      fakeSocket<RunnerCommand>([]),
+    );
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createSession({
+        requestId: "explicit-create-fields",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "same prompt",
+        title: "Explicit title",
+        agentRuntimeConfig: { model: "explicit-model" },
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    send.mockRestore();
+
+    await expect(
+      service.createSession({
+        requestId: "explicit-create-fields",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "same prompt",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "INPUT_REQUEST_CONFLICT",
+    });
+    expect(store.listSessions()).toHaveLength(1);
   });
 
   it("stores attachment metadata only after the runner writes image bytes", async () => {
@@ -489,6 +636,56 @@ describe("SessionCommandService", () => {
     expect(runnerMessages).toHaveLength(1);
   });
 
+  it("enforces the runner-advertised total image budget before writing", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const runner = imageRunnerRegistration();
+    hub.registerRunner(
+      {
+        ...runner,
+        capabilities: runner.capabilities.map((capability) => ({
+          ...capability,
+          maxImagesPerTurn: 2,
+          maxImageBytes: 4,
+          maxTotalImageBytes: 3,
+        })),
+      },
+      fakeSocket(runnerMessages),
+    );
+    store.createProject(projectRecord());
+
+    await expect(
+      service.createSession({
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "too much in aggregate",
+        attachments: [
+          {
+            name: "one.png",
+            mimeType: "image/png",
+            size: 2,
+            contentBase64: Buffer.from("aa").toString("base64"),
+          },
+          {
+            name: "two.png",
+            mimeType: "image/png",
+            size: 2,
+            contentBase64: Buffer.from("bb").toString("base64"),
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "image_too_large" });
+    expect(runnerMessages).toEqual([]);
+  });
+
   it.each(["pending", "running", "waiting_approval", "waiting_input"] as const)(
     "rejects active Claude Code messages before persistence when %s",
     async (status) => {
@@ -526,16 +723,11 @@ describe("SessionCommandService", () => {
     },
   );
 
-  it("routes ordinary user messages as user input answers while waiting_input", async () => {
+  it("persists a waiting-input answer only after the matching runner receipt", async () => {
     const hub = new ConnectionHub(store);
     const approvals = new ApprovalService(store, hub);
-    const service = new SessionCommandService(
-      store,
-      hub,
-      approvals,
-      new RunnerRpcClient(hub),
-      100,
-    );
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(store, hub, approvals, rpc, 100);
     const runnerMessages: RunnerCommand[] = [];
     store.createProject(projectRecord());
     hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
@@ -543,21 +735,1685 @@ describe("SessionCommandService", () => {
       ...sessionRecord(),
       status: "waiting_input",
     });
+    new RunnerEventService(store, hub, rpc).handle({
+      type: "agentActivity",
+      sessionId: "session-1",
+      agent: "codex",
+      kind: "status",
+      label: "Need input",
+      inputRequestId: "input-request-1",
+    });
 
-    const result = await service.createUserMessage("session-1", {
+    const pending = service.createUserMessage("session-1", {
       content: "continue",
     });
+
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.getPendingUserInputRequest("session-1")).toBe(
+      "input-request-1",
+    );
+    const command = runnerMessages[0];
+    expect(command).toMatchObject({
+      type: "checkSessionStatus",
+      sessionId: "session-1",
+      deliverInput: {
+        deliveryId: expect.any(String),
+        inputRequestId: "input-request-1",
+        content: "continue",
+      },
+    });
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "owned",
+      },
+    });
+
+    const result = await pending;
 
     expect(result).toMatchObject({
       ok: true,
       value: { message: expect.objectContaining({ content: "continue" }) },
     });
     expect(store.listMessages("session-1")).toHaveLength(1);
-    expect(runnerMessages.at(-1)).toMatchObject({
+    expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
+  });
+
+  it("retries a lost input receipt with the same delivery ID without persisting early", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      200,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "continue exactly once",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    expect(store.listMessages("session-1")).toEqual([]);
+    const [first, retry] = runnerMessages;
+    if (
+      first?.type !== "checkSessionStatus" ||
+      retry?.type !== "checkSessionStatus"
+    ) {
+      throw new Error("stable input retry was not sent");
+    }
+    expect(retry.requestId).not.toBe(first.requestId);
+    expect(retry.deliverInput?.deliveryId).toBe(first.deliverInput?.deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: retry.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: retry.deliverInput!.deliveryId!,
+        ownership: "owned",
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "continue exactly once" }),
+    ]);
+  });
+
+  it("coalesces concurrent retries with the same client request ID", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const input = {
+      requestId: "same-logical-request",
+      content: "deliver only once",
+    };
+    const first = service.createUserMessage("session-1", input);
+    const concurrentRetry = service.createUserMessage("session-1", input);
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "owned",
+      },
+    });
+
+    await expect(Promise.all([first, concurrentRetry])).resolves.toEqual([
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true }),
+    ]);
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.listMessages("session-1")).toHaveLength(1);
+  });
+
+  it("coalesces same-request retry and reconcile through one legacy fallback delivery", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      10,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const input = {
+      requestId: "legacy-fallback-once",
+      content: "deliver one legacy fallback",
+    };
+
+    await expect(
+      service.createUserMessage("session-1", input),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    const checksBeforeRetry = runnerMessages.filter(
+      (command) => command.type === "checkSessionStatus",
+    ).length;
+    const finalize = vi.spyOn(store, "finalizePendingInputDelivery");
+
+    const retry = service.createUserMessage("session-1", input);
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() =>
+      expect(
+        runnerMessages.filter(
+          (command) => command.type === "checkSessionStatus",
+        ),
+      ).toHaveLength(checksBeforeRetry + 1),
+    );
+    const receiptCheck = runnerMessages.at(-1);
+    if (receiptCheck?.type !== "checkSessionStatus") {
+      throw new Error("legacy fallback receipt was not checked");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: receiptCheck.requestId,
+      sessionId: "session-1",
+      active: true,
+    });
+
+    await expect(retry).resolves.toMatchObject({ ok: true });
+    await reconciliation;
+    expect(
+      runnerMessages.filter((command) => command.type === "deliverInput"),
+    ).toEqual([
+      {
+        type: "deliverInput",
+        sessionId: "session-1",
+        content: "deliver one legacy fallback",
+      },
+    ]);
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "deliver one legacy fallback" }),
+    ]);
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+  });
+
+  it("returns queued for a malformed receipt while the durable intent remains", async () => {
+    const hub = new ConnectionHub(store);
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const first = service.createUserMessage("session-1", {
+      requestId: "malformed-receipt",
+      content: "keep the durable intent",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const firstCommand = runnerMessages[0];
+    if (firstCommand?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    const deliveryId = firstCommand.deliverInput!.deliveryId!;
+    rpc.resolveRunnerResponse({
+      requestId: firstCommand.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: { deliveryId: "wrong-delivery", ownership: "owned" },
+    });
+
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      value: { queued: true },
+    });
+    expect(store.getPendingInputDelivery(deliveryId)).toBeDefined();
+
+    const retry = service.createUserMessage("session-1", {
+      requestId: "malformed-receipt",
+      content: "keep the durable intent",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    const retryCommand = runnerMessages[1];
+    if (retryCommand?.type !== "checkSessionStatus") {
+      throw new Error("stable input retry was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: retryCommand.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: { deliveryId, ownership: "not_owned" },
+    });
+
+    await expect(retry).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "AGENT_INPUT_ERROR",
+    });
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "error",
+      sessionId: "session-1",
+      messageId: deliveryId,
+      message: expect.any(String),
+      code: "INPUT_NOT_OWNED",
+    });
+  });
+
+  it("rejects changed attachments when retrying a finalized client request ID", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(imageRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const first = service.createUserMessage("session-1", {
+      requestId: "attachment-idempotency",
+      content: "same prompt",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const writeCommand = runnerMessages[0];
+    if (writeCommand?.type !== "writeSessionAttachments") {
+      throw new Error("attachment write command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: writeCommand.requestId,
+      sessionId: "session-1",
+      attachments: [runnerAttachmentRef("session-1")],
+    });
+
+    await expect(first).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages).toHaveLength(2);
+    expect(runnerMessages[1]).toMatchObject({ type: "startSession" });
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "attachment-idempotency",
+        content: "same prompt",
+        attachments: [imageUpload()],
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages).toHaveLength(2);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "attachment-idempotency",
+        content: "same prompt",
+        attachments: [{ ...imageUpload(), name: "changed.png" }],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "INPUT_REQUEST_CONFLICT",
+    });
+    expect(runnerMessages).toHaveLength(2);
+    expect(store.listMessages("session-1")).toHaveLength(1);
+    expect(store.listMessageAttachments("session-1")).toHaveLength(1);
+  });
+
+  it("reconciles an owned input after a server crash using the same delivery ID", async () => {
+    let hub = new ConnectionHub(store);
+    let rpc = new RunnerRpcClient(hub);
+    let service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    let runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    vi.spyOn(store, "finalizePendingInputDelivery").mockImplementationOnce(
+      () => {
+        throw new Error("simulated crash after owned receipt");
+      },
+    );
+
+    const firstAttempt = service.createUserMessage("session-1", {
+      requestId: "client-stable-input-1",
+      content: "survive the crash",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const firstCommand = runnerMessages[0];
+    if (firstCommand?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    const deliveryId = firstCommand.deliverInput!.deliveryId!;
+    rpc.resolveRunnerResponse({
+      requestId: firstCommand.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: { deliveryId, ownership: "owned" },
+    });
+    await expect(firstAttempt).resolves.toMatchObject({
+      ok: true,
+      value: { queued: true },
+    });
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.getPendingInputDelivery(deliveryId)).toBeDefined();
+
+    store.close();
+    store = new ServerStore(dataDir);
+    hub = new ConnectionHub(store);
+    rpc = new RunnerRpcClient(hub);
+    service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    runnerMessages = [];
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const retryCommand = runnerMessages[0];
+    if (retryCommand?.type !== "checkSessionStatus") {
+      throw new Error("pending input was not reconciled");
+    }
+    expect(retryCommand.deliverInput?.deliveryId).toBe(deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: retryCommand.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: { deliveryId, ownership: "owned" },
+    });
+    await reconciliation;
+
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ id: deliveryId, content: "survive the crash" }),
+    ]);
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "client-stable-input-1",
+        content: "survive the crash",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { message: { id: deliveryId } },
+    });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.listMessages("session-1")).toHaveLength(1);
+  });
+
+  it("uses the durable waiting-input intent with an old runner fallback", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "waiting_input" });
+    store.setPendingUserInputRequest("session-1", "legacy-input-request");
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      requestId: "legacy-client-request",
+      content: "legacy answer",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("status command was not sent");
+    }
+    expect(
+      store.getPendingInputDelivery(command.deliverInput!.deliveryId!),
+    ).toBeDefined();
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages[1]).toEqual({
       type: "resolveUserInput",
       sessionId: "session-1",
-      content: "continue",
+      inputRequestId: "legacy-input-request",
+      content: "legacy answer",
     });
+    expect(
+      store.getPendingInputDelivery(command.deliverInput!.deliveryId!),
+    ).toBeUndefined();
+    expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
+    expect(store.listMessages("session-1")).toHaveLength(1);
+  });
+
+  it("waits for a durable start receipt and reconciles the same start after a crash", async () => {
+    let hub = new ConnectionHub(store);
+    let rpc = new RunnerRpcClient(hub);
+    let service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    let runnerMessages: RunnerCommand[] = [];
+    const durableRunner = {
+      ...runnerRegistration(),
+      capabilities: runnerRegistration().capabilities.map((capability) => ({
+        ...capability,
+        supportsDurableSessionStart: true,
+      })),
+    };
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      agentThreadId: "thread-before-crash",
+    });
+    hub.registerRunner(durableRunner, fakeSocket(runnerMessages));
+    vi.spyOn(store, "finalizePendingInputDelivery").mockImplementationOnce(
+      () => {
+        throw new Error("simulated crash after durable start receipt");
+      },
+    );
+
+    const firstAttempt = service.createUserMessage("session-1", {
+      requestId: "durable-start-request",
+      content: "resume exactly once",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const firstStart = runnerMessages[0];
+    if (firstStart?.type !== "startSession") {
+      throw new Error("durable start command was not sent");
+    }
+    expect(firstStart).toMatchObject({
+      deliveryId: expect.any(String),
+      requestId: expect.any(String),
+      resumeThreadId: "thread-before-crash",
+    });
+    expect(store.listMessages("session-1")).toEqual([]);
+    rpc.resolveRunnerResponse({
+      requestId: firstStart.requestId!,
+      sessionId: "session-1",
+      deliveryId: firstStart.deliveryId!,
+      ownership: "owned",
+    });
+    await expect(firstAttempt).resolves.toMatchObject({
+      ok: true,
+      value: { queued: true },
+    });
+    expect(store.getPendingInputDelivery(firstStart.deliveryId!)).toBeDefined();
+
+    store.close();
+    store = new ServerStore(dataDir);
+    hub = new ConnectionHub(store);
+    rpc = new RunnerRpcClient(hub);
+    service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    runnerMessages = [];
+    hub.registerRunner(durableRunner, fakeSocket(runnerMessages));
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const retriedStart = runnerMessages[0];
+    if (retriedStart?.type !== "startSession") {
+      throw new Error("durable start was not reconciled");
+    }
+    expect(retriedStart.deliveryId).toBe(firstStart.deliveryId);
+    expect(retriedStart.requestId).not.toBe(firstStart.requestId);
+    rpc.resolveRunnerResponse({
+      requestId: retriedStart.requestId!,
+      sessionId: "session-1",
+      deliveryId: retriedStart.deliveryId!,
+      ownership: "owned",
+    });
+    await reconciliation;
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "resume exactly once" }),
+    ]);
+    expect(
+      store.getPendingInputDelivery(retriedStart.deliveryId!),
+    ).toBeUndefined();
+  });
+
+  it("keeps a timed-out durable start pending until an owned retry", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      10,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunner, fakeSocket(runnerMessages));
+
+    const first = await service.createUserMessage("session-1", {
+      requestId: "timed-out-start",
+      content: "retry after timeout",
+    });
+    expect(first).toMatchObject({ ok: true, value: { queued: true } });
+    const firstStart = runnerMessages[0];
+    if (firstStart?.type !== "startSession") {
+      throw new Error("durable start command was not sent");
+    }
+    expect(store.getPendingInputDelivery(firstStart.deliveryId!)).toBeDefined();
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.listVisibleMessages("session-1")).toEqual([]);
+    expect(store.listPendingMessageDeliveries("session-1")).toEqual([
+      expect.objectContaining({ content: "retry after timeout" }),
+    ]);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "different-request-while-pending",
+        content: "must not create a second start",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "session_turn_active" });
+    expect(store.listPendingInputDeliveries("runner-1")).toHaveLength(1);
+    expect(runnerMessages).toHaveLength(1);
+
+    const retry = service.createUserMessage("session-1", {
+      requestId: "timed-out-start",
+      content: "retry after timeout",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    const retriedStart = runnerMessages[1];
+    if (retriedStart?.type !== "startSession") {
+      throw new Error("durable start retry was not sent");
+    }
+    expect(retriedStart.deliveryId).toBe(firstStart.deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: retriedStart.requestId!,
+      sessionId: "session-1",
+      deliveryId: retriedStart.deliveryId!,
+      ownership: "owned",
+    });
+
+    await expect(retry).resolves.toMatchObject({ ok: true });
+    expect(
+      store.getPendingInputDelivery(firstStart.deliveryId!),
+    ).toBeUndefined();
+    expect(store.listMessages("session-1")).toHaveLength(1);
+  });
+
+  it("cancels an offline pending start before archiving and never reconciles it", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunner, fakeSocket<RunnerCommand>([]));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "archive-before-reconnect",
+        content: "must not start",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    send.mockRestore();
+    expect(store.listPendingInputDeliveries("runner-1")).toHaveLength(1);
+    hub.markRunnerOffline("runner-1");
+
+    await expect(service.deleteSession("session-1")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    const reconnectedMessages: RunnerCommand[] = [];
+    hub.registerRunner(durableRunner, fakeSocket(reconnectedMessages));
+    await service.reconcilePendingInputDeliveries("runner-1");
+
+    expect(reconnectedMessages).toEqual([]);
+    expect(store.getSession("session-1")).toMatchObject({
+      status: "stopped",
+      archivedAt: expect.any(String),
+    });
+  });
+
+  it("cancels an offline pending start before stop and never reconciles it", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunner, fakeSocket<RunnerCommand>([]));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "stop-before-reconnect",
+        content: "must not start",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    send.mockRestore();
+    expect(store.listPendingInputDeliveries("runner-1")).toHaveLength(1);
+    hub.markRunnerOffline("runner-1");
+
+    await service.handleClientCommand({
+      type: "controlSignal",
+      sessionId: "session-1",
+      signal: "stop",
+    });
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    const reconnectedMessages: RunnerCommand[] = [];
+    hub.registerRunner(durableRunner, fakeSocket(reconnectedMessages));
+    await service.reconcilePendingInputDeliveries("runner-1");
+
+    expect(reconnectedMessages).toEqual([]);
+    expect(store.getSession("session-1")?.status).toBe("stopped");
+  });
+
+  it("finalizes a terminal pending start without sending a ghost restart", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunner, fakeSocket<RunnerCommand>([]));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "terminal-before-reconnect",
+        content: "already executed",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    send.mockRestore();
+    const [pending] = store.listPendingInputDeliveries("runner-1");
+    expect(pending).toBeDefined();
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
+    hub.markRunnerOffline("runner-1");
+
+    const reconnectedMessages: RunnerCommand[] = [];
+    hub.registerRunner(durableRunner, fakeSocket(reconnectedMessages));
+    await service.reconcilePendingInputDeliveries("runner-1");
+
+    expect(reconnectedMessages).toEqual([]);
+    expect(store.getPendingInputDelivery(pending!.deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "already executed" }),
+    ]);
+  });
+
+  it("reconciles a durable control resume without creating a synthetic message", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const durableRunner = durableRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      agentThreadId: "resume-thread",
+    });
+    hub.registerRunner(durableRunner, fakeSocket<RunnerCommand>([]));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await service.handleClientCommand({
+      type: "controlSignal",
+      sessionId: "session-1",
+      signal: "resume",
+    });
+    send.mockRestore();
+    const [pending] = store.listPendingInputDeliveries("runner-1");
+    expect(pending).toMatchObject({
+      kind: "start",
+      persistMessage: false,
+      startCommand: { resumeThreadId: "resume-thread" },
+    });
+    expect(store.listPendingMessageDeliveries("session-1")).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([]);
+    await vi.waitFor(() =>
+      expect(
+        store.getPendingInputDelivery(pending!.deliveryId)?.attemptCount,
+      ).toBe(1),
+    );
+    hub.markRunnerOffline("runner-1");
+
+    const reconnectedMessages: RunnerCommand[] = [];
+    hub.registerRunner(durableRunner, fakeSocket(reconnectedMessages));
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(reconnectedMessages).toHaveLength(1));
+    const start = reconnectedMessages[0];
+    if (start?.type !== "startSession") {
+      throw new Error("control resume was not reconciled");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: start.requestId!,
+      sessionId: "session-1",
+      deliveryId: start.deliveryId!,
+      ownership: "owned",
+    });
+    await reconciliation;
+
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+    expect(store.listMessages("session-1")).toEqual([]);
+  });
+
+  it("settles a durable start rejection instead of leaving the session pending", async () => {
+    const hub = new ConnectionHub(store);
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+    const send = vi.spyOn(hub, "sendToRunner").mockReturnValueOnce(false);
+
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "stale-launched-start",
+        content: "do not replay",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { queued: true } });
+    send.mockRestore();
+    expect(store.listVisibleMessages("session-1")).toEqual([]);
+    expect(store.listPendingMessageDeliveries("session-1")).toHaveLength(1);
+
+    const pending = service.createUserMessage("session-1", {
+      requestId: "stale-launched-start",
+      content: "do not replay",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const start = runnerMessages[0];
+    if (start?.type !== "startSession") {
+      throw new Error("durable start command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: start.requestId!,
+      sessionId: "session-1",
+      deliveryId: start.deliveryId!,
+      ownership: "not_owned",
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "START_NOT_OWNED",
+    });
+    expect(store.getPendingInputDelivery(start.deliveryId!)).toBeUndefined();
+    expect(store.getSession("session-1")?.status).toBe("failed");
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.listVisibleMessages("session-1")).toEqual([]);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "error",
+      sessionId: "session-1",
+      messageId: start.deliveryId,
+      message: "runner did not accept the pending session start",
+      code: "START_NOT_OWNED",
+    });
+  });
+
+  it("keeps a waiting input pending when a restarted runner does not own it", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "waiting_input" });
+    store.setPendingUserInputRequest("session-1", "input-before-restart");
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "do not lose this answer",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "not_owned",
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "INPUT_NOT_OWNED",
+    });
+    expect(store.listMessages("session-1")).toEqual([]);
+    expect(store.getPendingUserInputRequest("session-1")).toBe(
+      "input-before-restart",
+    );
+  });
+
+  it("atomically delivers active Codex input through a status RPC", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "continue atomically",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    expect(command).toMatchObject({
+      type: "checkSessionStatus",
+      sessionId: "session-1",
+      deliverInput: { content: "continue atomically" },
+    });
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("atomic input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputDelivered: true,
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "continue atomically" }),
+    ]);
+  });
+
+  it("does not restart input accepted by a generation that just completed", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "continue exactly once",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("atomic input command was not sent");
+    }
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputDelivered: true,
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.getSession("session-1")?.status).toBe("completed");
+  });
+
+  it("restarts a terminal Codex turn when atomic input misses the old generation", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), agentThreadId: "thread-1" });
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "continue after completion",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("atomic input command was not sent");
+    }
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputDelivered: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages[1]).toMatchObject({
+      type: "startSession",
+      prompt: "continue after completion",
+      resumeThreadId: "thread-1",
+      session: expect.objectContaining({ status: "pending" }),
+    });
+    expect(store.getSession("session-1")?.status).toBe("pending");
+  });
+
+  it("falls back to legacy one-way delivery for an active old runner", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "legacy follow-up",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("legacy status command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(runnerMessages[1]).toEqual({
+      type: "deliverInput",
+      sessionId: "session-1",
+      content: "legacy follow-up",
+    });
+  });
+
+  it("does not restart when an active runner rejects atomic input", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "rejected follow-up",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("atomic input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputDelivered: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "AGENT_INPUT_ERROR",
+    });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.getSession("session-1")?.status).toBe("running");
+    expect(store.listMessages("session-1")).toEqual([]);
+  });
+
+  it("does not fall back to one-way delivery after a stable not-owned receipt", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      content: "must not be sent twice",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "not_owned",
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: "runner_error",
+      code: "AGENT_INPUT_ERROR",
+    });
+    expect(runnerMessages).toHaveLength(1);
+    expect(store.listMessages("session-1")).toEqual([]);
+  });
+
+  it("restarts an inactive session after not-owned without broadcasting a false input failure", async () => {
+    const hub = new ConnectionHub(store);
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const pending = service.createUserMessage("session-1", {
+      requestId: "inactive-not-owned",
+      content: "resume this exact message",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const delivery = runnerMessages[0];
+    if (delivery?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: delivery.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: {
+        deliveryId: delivery.deliverInput!.deliveryId!,
+        ownership: "not_owned",
+      },
+    });
+
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    const restart = runnerMessages[1];
+    if (restart?.type !== "startSession") {
+      throw new Error("session restart command was not sent");
+    }
+    expect(restart.deliveryId).toBe(delivery.deliverInput!.deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: restart.requestId!,
+      sessionId: "session-1",
+      deliveryId: restart.deliveryId!,
+      ownership: "owned",
+    });
+
+    const result = await pending;
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        message: {
+          id: delivery.deliverInput!.deliveryId,
+          content: "resume this exact message",
+        },
+      },
+    });
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({
+        id: delivery.deliverInput!.deliveryId,
+        content: "resume this exact message",
+      }),
+    ]);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        messageId: delivery.deliverInput!.deliveryId,
+        code: "INPUT_NOT_OWNED",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(store.listPendingInputDeliveries("runner-1")).toEqual([]),
+    );
+  });
+
+  it.each(["disconnect", "no-resume"] as const)(
+    "returns queued after inactive not-owned when the runner has an immediate %s transition",
+    async (transition) => {
+      const hub = new ConnectionHub(store);
+      const rpc = new RunnerRpcClient(hub);
+      const service = new SessionCommandService(
+        store,
+        hub,
+        new ApprovalService(store, hub),
+        rpc,
+        100,
+      );
+      const runner = durableRunnerRegistration();
+      const runnerMessages: RunnerCommand[] = [];
+      store.createProject(projectRecord());
+      store.createSession(sessionRecord());
+      hub.registerRunner(runner, fakeSocket(runnerMessages));
+
+      const accepted = service.createUserMessage("session-1", {
+        requestId: `transition-${transition}`,
+        content: "keep this exact durable turn",
+      });
+      await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+      const initialCheck = runnerMessages[0];
+      if (initialCheck?.type !== "checkSessionStatus") {
+        throw new Error("stable input command was not sent");
+      }
+      const deliveryId = initialCheck.deliverInput!.deliveryId!;
+      rpc.resolveRunnerResponse({
+        requestId: initialCheck.requestId,
+        sessionId: "session-1",
+        active: false,
+        inputReceipt: { deliveryId, ownership: "not_owned" },
+      });
+      if (transition === "disconnect") {
+        hub.markRunnerOffline("runner-1");
+      } else {
+        hub.registerRunner(
+          {
+            ...runner,
+            capabilities: runner.capabilities.map((capability) => ({
+              ...capability,
+              supportsResume: false,
+            })),
+          },
+          fakeSocket<RunnerCommand>([]),
+        );
+      }
+
+      await expect(accepted).resolves.toMatchObject({
+        ok: true,
+        value: {
+          queued: true,
+          message: { id: deliveryId, content: "keep this exact durable turn" },
+        },
+      });
+      expect(store.getPendingInputDelivery(deliveryId)).toMatchObject({
+        kind: "input",
+        message: { id: deliveryId },
+        attachments: [],
+      });
+
+      const reconnectedMessages: RunnerCommand[] = [];
+      hub.registerRunner(runner, fakeSocket(reconnectedMessages));
+      const retry = service.createUserMessage("session-1", {
+        requestId: `transition-${transition}`,
+        content: "keep this exact durable turn",
+      });
+      await vi.waitFor(() => expect(reconnectedMessages).toHaveLength(1));
+      const recheck = reconnectedMessages[0];
+      if (recheck?.type !== "checkSessionStatus") {
+        throw new Error("queued input receipt was not reconciled");
+      }
+      expect(recheck.deliverInput?.deliveryId).toBe(deliveryId);
+      rpc.resolveRunnerResponse({
+        requestId: recheck.requestId,
+        sessionId: "session-1",
+        active: false,
+        inputReceipt: { deliveryId, ownership: "not_owned" },
+      });
+      await vi.waitFor(() => expect(reconnectedMessages).toHaveLength(2));
+      const restart = reconnectedMessages[1];
+      if (restart?.type !== "startSession") {
+        throw new Error("queued input was not promoted to a session start");
+      }
+      expect(restart).toMatchObject({
+        deliveryId,
+        prompt: "keep this exact durable turn",
+        attachments: [],
+      });
+      rpc.resolveRunnerResponse({
+        requestId: restart.requestId!,
+        sessionId: "session-1",
+        deliveryId,
+        ownership: "owned",
+      });
+      await expect(retry).resolves.toMatchObject({
+        ok: true,
+        value: { message: { id: deliveryId } },
+      });
+
+      expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+      expect(store.listMessages("session-1")).toEqual([
+        expect.objectContaining({ id: deliveryId }),
+      ]);
+    },
+  );
+
+  it("checks a stable receipt before settling terminal pending input", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const createdAt = new Date().toISOString();
+    const deliveryId = "terminal-input-receipt";
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    store.putPendingInputDelivery({
+      deliveryId,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      message: pendingUserMessage(
+        deliveryId,
+        "committed before terminal",
+        createdAt,
+      ),
+      attachments: [storedAttachment(deliveryId, createdAt)],
+      createdAt,
+    });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const receiptCheck = runnerMessages[0];
+    if (receiptCheck?.type !== "checkSessionStatus") {
+      throw new Error("terminal input receipt was not checked");
+    }
+    expect(receiptCheck.deliverInput?.deliveryId).toBe(deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: receiptCheck.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: { deliveryId, ownership: "owned" },
+    });
+    await reconciliation;
+
+    expect(store.getPendingInputDelivery(deliveryId)).toBeUndefined();
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ id: deliveryId }),
+    ]);
+    expect(store.listMessageAttachments("session-1")).toEqual([
+      expect.objectContaining({
+        id: `attachment-${deliveryId}`,
+        messageId: deliveryId,
+      }),
+    ]);
+  });
+
+  it("promotes a terminal pending input on same-request retry without changing IDs or attachments", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const requestId = "same-terminal-pending-request";
+    const deliveryId = stableTestInputDeliveryId("session-1", requestId);
+    const createdAt = new Date().toISOString();
+    const attachment = storedAttachment(deliveryId, createdAt);
+    const imageRunner = imageRunnerRegistration();
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    store.putPendingInputDelivery({
+      deliveryId,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      message: pendingUserMessage(
+        deliveryId,
+        "retry this exact turn",
+        createdAt,
+      ),
+      attachments: [attachment],
+      createdAt,
+    });
+    hub.registerRunner(
+      {
+        ...imageRunner,
+        capabilities: imageRunner.capabilities.map((capability) => ({
+          ...capability,
+          supportsDurableSessionStart: true,
+        })),
+      },
+      fakeSocket(runnerMessages),
+    );
+
+    const retry = service.createUserMessage("session-1", {
+      requestId,
+      content: "retry this exact turn",
+      attachments: [imageUpload()],
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const receiptCheck = runnerMessages[0];
+    if (receiptCheck?.type !== "checkSessionStatus") {
+      throw new Error("same-request pending receipt was not checked");
+    }
+    expect(receiptCheck.deliverInput?.deliveryId).toBe(deliveryId);
+    rpc.resolveRunnerResponse({
+      requestId: receiptCheck.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: { deliveryId, ownership: "not_owned" },
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    const restart = runnerMessages[1];
+    if (restart?.type !== "startSession") {
+      throw new Error("same-request pending input was not promoted");
+    }
+    expect(restart).toMatchObject({
+      deliveryId,
+      prompt: "retry this exact turn",
+      attachments: [
+        {
+          id: attachment.id,
+          runnerStoragePath: attachment.runnerStoragePath,
+        },
+      ],
+    });
+    rpc.resolveRunnerResponse({
+      requestId: restart.requestId!,
+      sessionId: "session-1",
+      deliveryId,
+      ownership: "owned",
+    });
+
+    await expect(retry).resolves.toMatchObject({
+      ok: true,
+      value: {
+        message: { id: deliveryId, content: "retry this exact turn" },
+        attachments: [{ id: attachment.id, messageId: deliveryId }],
+      },
+    });
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ id: deliveryId }),
+    ]);
+    expect(store.listMessageAttachments("session-1")).toEqual([
+      expect.objectContaining({ id: attachment.id, messageId: deliveryId }),
+    ]);
+    expect(store.listPendingInputDeliveries("runner-1")).toEqual([]);
+  });
+
+  it("keeps a promoted visible message queued across a start timeout", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      20,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    const createdAt = new Date().toISOString();
+    const deliveryId = "promoted-visible-message";
+    const attachment = storedAttachment(deliveryId, createdAt);
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    store.putPendingInputDelivery({
+      deliveryId,
+      kind: "input",
+      runnerId: "runner-1",
+      sessionId: "session-1",
+      message: pendingUserMessage(
+        deliveryId,
+        "remain visible while queued",
+        createdAt,
+      ),
+      attachments: [attachment],
+      createdAt,
+    });
+    hub.registerRunner(durableRunnerRegistration(), fakeSocket(runnerMessages));
+
+    const reconciliation = service.reconcilePendingInputDeliveries("runner-1");
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const receiptCheck = runnerMessages[0];
+    if (receiptCheck?.type !== "checkSessionStatus") {
+      throw new Error("pending input receipt was not checked");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: receiptCheck.requestId,
+      sessionId: "session-1",
+      active: false,
+      inputReceipt: { deliveryId, ownership: "not_owned" },
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(2));
+    expect(runnerMessages[1]).toMatchObject({
+      type: "startSession",
+      deliveryId,
+      attachments: [
+        {
+          id: `attachment-${deliveryId}`,
+          runnerStoragePath: attachment.runnerStoragePath,
+        },
+      ],
+    });
+    await reconciliation;
+
+    expect(store.getPendingInputDelivery(deliveryId)).toMatchObject({
+      kind: "start",
+      deliveryId,
+      attachments: [attachment],
+    });
+    expect(store.listVisibleMessages("session-1")).toEqual([]);
+    expect(store.listVisibleMessageAttachments("session-1")).toEqual([]);
+    expect(store.listPendingMessageDeliveries("session-1")).toEqual([
+      expect.objectContaining({
+        messageId: deliveryId,
+        content: "remain visible while queued",
+        attachments: [
+          expect.objectContaining({ id: `attachment-${deliveryId}` }),
+        ],
+      }),
+    ]);
+  });
+
+  it("preserves the pending input request across a server restart and clears it after resolution", async () => {
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "waiting_input",
+    });
+    const initialHub = new ConnectionHub(store);
+    new RunnerEventService(
+      store,
+      initialHub,
+      new RunnerRpcClient(initialHub),
+    ).handle({
+      type: "agentActivity",
+      sessionId: "session-1",
+      agent: "codex",
+      kind: "status",
+      label: "Need input",
+      inputRequestId: "input-request-persisted",
+    });
+
+    store.close();
+    store = new ServerStore(dataDir);
+    const runnerMessages: RunnerCommand[] = [];
+    const hub = new ConnectionHub(store);
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+
+    const pending = service.createUserMessage("session-1", {
+      content: "continue after restart",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse({
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "owned",
+      },
+    });
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: true });
+    expect(command.deliverInput).toMatchObject({
+      inputRequestId: "input-request-persisted",
+      content: "continue after restart",
+    });
+    store.close();
+    store = new ServerStore(dataDir);
+    expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
+  });
+
+  it("migrates legacy session tables and clears pending input IDs on status and deletion", () => {
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    const dbPath = store.dbPath;
+    store.close();
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec("ALTER TABLE sessions DROP COLUMN pending_input_request_id");
+    legacyDb.close();
+
+    store = new ServerStore(dataDir);
+    store.setPendingUserInputRequest("session-1", "input-after-migration");
+    store.updateSessionStatus(
+      "session-1",
+      "waiting_input",
+      new Date().toISOString(),
+    );
+    expect(store.getPendingUserInputRequest("session-1")).toBe(
+      "input-after-migration",
+    );
+
+    store.updateSessionStatus(
+      "session-1",
+      "completed",
+      new Date().toISOString(),
+    );
+    store.updateSessionStatus(
+      "session-1",
+      "waiting_input",
+      new Date().toISOString(),
+    );
+    expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
+
+    store.setPendingUserInputRequest("session-1", "input-before-delete");
+    expect(store.deleteSession("session-1")).toBe(true);
+    store.createSession({ ...sessionRecord(), status: "waiting_input" });
+    expect(store.getPendingUserInputRequest("session-1")).toBeUndefined();
   });
 
   it("rolls back session creation when startSession cannot be delivered", async () => {
@@ -1109,8 +2965,7 @@ describe("SessionCommandService", () => {
       expect.objectContaining({
         id: stageCommand.requestId,
         operation: "stage",
-        status: "failed",
-        errorCode: "runner_timeout",
+        status: "succeeded",
       }),
     );
 
@@ -1293,7 +3148,7 @@ describe("SessionCommandService", () => {
     );
   });
 
-  it("archives worktree sessions when a legacy runner reports remove worktree success", async () => {
+  it("archives worktree sessions when success arrives after the runner timeout", async () => {
     const runnerMessages: RunnerCommand[] = [];
     const streamEvents: ServerEvent[] = [];
     const hub = new ConnectionHub(store);
@@ -1352,6 +3207,12 @@ describe("SessionCommandService", () => {
     });
     expect(store.getSession("session-1")?.archivedAt).toBeUndefined();
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.getGitJob(removeCommand?.requestId ?? "")).toMatchObject({
+      status: "failed",
+      errorCode: "runner_timeout",
+    });
 
     const now = "2000-01-01T00:00:00.000Z";
     runnerEvents.handle({
@@ -1617,6 +3478,40 @@ describe("WorkspaceService", () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("sends the persisted execution folder when patching a completed session", async () => {
+    store.createProject(projectRecord());
+    store.createSession({ ...sessionRecord(), status: "completed" });
+    const requestRunner = vi.fn().mockResolvedValue({
+      requestId: "patch-1",
+      sessionId: "session-1",
+      applied: true,
+      changedFiles: ["README.md"],
+      message: "Patch applied",
+      rejected: [],
+    });
+    const service = new WorkspaceService(
+      store,
+      { requestRunner } as unknown as RunnerRpcClient,
+      100,
+    );
+
+    const result = await service.applyPatch("session-1", {
+      patch: "diff --git a/README.md b/README.md\n",
+      strip: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestRunner).toHaveBeenCalledWith(
+      "runner-1",
+      expect.objectContaining({
+        type: "applyPatch",
+        sessionId: "session-1",
+        cwd: "/workspace",
+      }),
+      100,
+    );
+  });
+
   it("does not read files from a deleted managed worktree", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -1711,6 +3606,254 @@ describe("RunnerEventService", () => {
   afterEach(() => {
     store.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("keeps an orphaned worktree-removal job active across restart until its terminal replay", () => {
+    const now = new Date().toISOString();
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+    });
+    store.upsertGitJob({
+      id: "orphaned-remove-job",
+      projectId: "project-1",
+      sessionId: "session-1",
+      contextKind: "session_worktree",
+      operation: "remove_worktree",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+    });
+
+    store.close();
+    store = new ServerStore(dataDir);
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc);
+    const service = new RunnerEventService(store, hub, rpc, gitJobs);
+    expect(gitJobs.hasActiveWorktreeRemovalJob("session-1")).toBe(true);
+
+    service.handle({
+      type: "gitJobResult",
+      job: {
+        id: "orphaned-remove-job",
+        projectId: "untrusted-project",
+        sessionId: "untrusted-session",
+        contextKind: "project",
+        operation: "untrusted-operation",
+        status: "succeeded",
+        createdAt: now,
+        finishedAt: now,
+      },
+    });
+
+    expect(store.getGitJob("orphaned-remove-job")).toMatchObject({
+      projectId: "project-1",
+      sessionId: "session-1",
+      contextKind: "session_worktree",
+      operation: "remove_worktree",
+      status: "succeeded",
+    });
+    expect(gitJobs.hasActiveWorktreeRemovalJob("session-1")).toBe(false);
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toBe(now);
+  });
+
+  it("expires an overdue orphan after restart, releases its lock, and accepts a late terminal replay", () => {
+    const old = "2000-01-01T00:00:00.000Z";
+    const finishedAt = new Date().toISOString();
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+    });
+    store.upsertGitJob({
+      id: "expired-orphan-remove-job",
+      projectId: "project-1",
+      sessionId: "session-1",
+      contextKind: "session_worktree",
+      operation: "remove_worktree",
+      status: "running",
+      createdAt: old,
+      startedAt: old,
+    });
+
+    store.close();
+    store = new ServerStore(dataDir);
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc, 10);
+    expect(store.getGitJob("expired-orphan-remove-job")).toMatchObject({
+      status: "failed",
+      errorCode: "runner_result_unknown",
+      errorSummary: expect.stringContaining("outcome is unknown"),
+    });
+    expect(gitJobs.hasActiveWorktreeRemovalJob("session-1")).toBe(false);
+
+    const service = new RunnerEventService(store, hub, rpc, gitJobs);
+    service.handle({
+      type: "gitJobResult",
+      job: {
+        id: "expired-orphan-remove-job",
+        projectId: "project-1",
+        sessionId: "session-1",
+        contextKind: "session_worktree",
+        operation: "remove_worktree",
+        status: "succeeded",
+        createdAt: old,
+        startedAt: old,
+        finishedAt,
+      },
+    });
+
+    expect(store.getGitJob("expired-orphan-remove-job")).toMatchObject({
+      status: "succeeded",
+      finishedAt,
+    });
+    expect(
+      store.getGitJob("expired-orphan-remove-job")?.errorCode,
+    ).toBeUndefined();
+    expect(store.getSession("session-1")?.worktreeDeletedAt).toBe(finishedAt);
+  });
+
+  it("runs archive completion only after commit and recovers a missed callback on restart", () => {
+    const now = new Date().toISOString();
+    store.createProject(projectRecord());
+    store.createSession({
+      ...sessionRecord(),
+      status: "completed",
+      executionMode: "managed_worktree",
+      executionFolder: "/workspace/.roam-runner/worktrees/project-1/session-1",
+      cwd: "/workspace",
+    });
+    store.upsertGitJob({
+      id: "archive-job",
+      projectId: "project-1",
+      sessionId: "session-1",
+      contextKind: "session_worktree",
+      operation: "archive_remove_worktree",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+    });
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const gitJobs = new GitJobRunner(store, hub, rpc);
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const archive = vi.fn().mockImplementationOnce(() => {
+      throw new Error("injected archive callback failure");
+    });
+    const service = new RunnerEventService(store, hub, rpc, gitJobs, archive);
+
+    const afterCommit = service.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: "archive-job",
+          projectId: "project-1",
+          sessionId: "session-1",
+          contextKind: "session_worktree",
+          operation: "archive_remove_worktree",
+          status: "succeeded",
+          createdAt: now,
+          startedAt: now,
+          finishedAt: now,
+        },
+      },
+      true,
+    );
+    expect(store.getGitJob("archive-job")?.status).toBe("succeeded");
+    expect(archive).not.toHaveBeenCalled();
+
+    expect(() => afterCommit()).not.toThrow();
+    expect(archive).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "git:job",
+        job: expect.objectContaining({ id: "archive-job" }),
+      }),
+    );
+
+    store.close();
+    store = new ServerStore(dataDir);
+    const recoveredArchive = vi.fn();
+    new RunnerEventService(
+      store,
+      new ConnectionHub(store),
+      new RunnerRpcClient(new ConnectionHub(store)),
+      undefined,
+      recoveredArchive,
+    );
+    expect(recoveredArchive).toHaveBeenCalledOnce();
+    expect(recoveredArchive).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "archive-job", status: "succeeded" }),
+    );
+  });
+
+  it("isolates legacy runner-event effects so one failure does not skip later broadcasts", () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    vi.spyOn(rpc, "resolveRunnerResponse").mockImplementationOnce(() => {
+      throw new Error("injected RPC resolution failure");
+    });
+    const broadcast = vi.spyOn(hub, "broadcast");
+    const service = new RunnerEventService(store, hub, rpc);
+    const result = {
+      requestId: "file-content-1",
+      sessionId: "session-1",
+      path: "README.md",
+      kind: "text" as const,
+      content: "hello",
+      truncated: false,
+      encoding: "utf8" as const,
+    };
+
+    expect(() =>
+      service.handle({ type: "fileContentResult", result }),
+    ).not.toThrow();
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "file:content",
+      result,
+    });
+  });
+
+  it("rolls back event state and lifecycle metadata with the durable high-water", () => {
+    const streamId = "66666666-6666-4666-8666-666666666666";
+    store.createProject(projectRecord());
+    const session = store.createSession(sessionRecord());
+    expect(store.negotiateRunnerEventStream("runner-1", streamId, 0)).toEqual({
+      ok: true,
+      ackThrough: 0,
+    });
+
+    expect(() =>
+      store.processRunnerEvent("runner-1", streamId, 1, () => {
+        store.updateSessionStatus(
+          session.id,
+          "waiting_input",
+          new Date().toISOString(),
+        );
+        store.setPendingUserInputRequest(session.id, "input-rolled-back");
+        throw new Error("injected transaction failure");
+      }),
+    ).toThrow("injected transaction failure");
+    store.close();
+    store = new ServerStore(dataDir);
+    expect(store.getSession(session.id)?.status).toBe("running");
+    expect(store.getPendingUserInputRequest(session.id)).toBeUndefined();
+
+    const handle = vi.fn();
+    expect(store.processRunnerEvent("runner-1", streamId, 1, handle)).toEqual({
+      status: "committed",
+      ackThrough: 1,
+    });
+    expect(handle).toHaveBeenCalledOnce();
   });
 
   it("persists runner events, broadcasts updates, and resolves RPC responses", async () => {
@@ -2056,6 +4199,11 @@ describe("RunnerEventService", () => {
       sessionId: session.id,
       status: "waiting_approval",
     });
+    service.handle({
+      type: "sessionStatus",
+      sessionId: session.id,
+      status: "running",
+    });
 
     expect(store.getSession(session.id)?.status).toBe("completed");
 
@@ -2074,11 +4222,8 @@ describe("RunnerEventService", () => {
     });
 
     expect(store.getSession(session.id)?.status).toBe("completed");
-    expect(store.getApproval("approval-late")).toMatchObject({
-      id: "approval-late",
-      status: "pending",
-    });
-    expect(streamEvents).toContainEqual(
+    expect(store.getApproval("approval-late")).toBeUndefined();
+    expect(streamEvents).not.toContainEqual(
       expect.objectContaining({ type: "approval:requested" }),
     );
     expect(streamEvents).not.toContainEqual(
@@ -2090,6 +4235,16 @@ describe("RunnerEventService", () => {
         }),
       }),
     );
+
+    service.handle({
+      type: "agentActivity",
+      sessionId: session.id,
+      agent: "codex",
+      kind: "status",
+      label: "Late input",
+      inputRequestId: "input-late",
+    });
+    expect(store.getPendingUserInputRequest(session.id)).toBeUndefined();
   });
 
   it("does not broadcast unscoped runner connection parse errors to users", () => {
@@ -2179,6 +4334,17 @@ function runnerRegistration(): RunnerRegistration {
   };
 }
 
+function durableRunnerRegistration(): RunnerRegistration {
+  const runner = runnerRegistration();
+  return {
+    ...runner,
+    capabilities: runner.capabilities.map((capability) => ({
+      ...capability,
+      supportsDurableSessionStart: true,
+    })),
+  };
+}
+
 function imageRunnerRegistration(): RunnerRegistration {
   const runner = runnerRegistration();
   return {
@@ -2228,9 +4394,48 @@ function runnerAttachmentRef(sessionId: string) {
     name: "screen.png",
     mimeType: "image/png",
     size: 5,
-    sha256: "0123456789abcdef0123456789abcdef",
+    sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
     runnerStoragePath: `attachments/${sessionId}/attachment-1/screen.png`,
   } as const;
+}
+
+function pendingUserMessage(id: string, content: string, createdAt: string) {
+  return {
+    id,
+    sessionId: "session-1",
+    role: "user" as const,
+    content,
+    encrypted: false,
+    createdAt,
+  };
+}
+
+function storedAttachment(messageId: string, createdAt: string) {
+  return {
+    id: `attachment-${messageId}`,
+    sessionId: "session-1",
+    messageId,
+    runnerId: "runner-1",
+    kind: "image" as const,
+    name: "screen.png",
+    mimeType: "image/png",
+    size: 5,
+    sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    runnerStoragePath: `attachments/session-1/attachment-${messageId}/screen.png`,
+    status: "available" as const,
+    createdAt,
+  };
+}
+
+function stableTestInputDeliveryId(
+  sessionId: string,
+  requestId: string,
+): string {
+  return `input_${createHash("sha256")
+    .update(sessionId)
+    .update("\0")
+    .update(requestId)
+    .digest("hex")}`;
 }
 
 function projectRecord() {

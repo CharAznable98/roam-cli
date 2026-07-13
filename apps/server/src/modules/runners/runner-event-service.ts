@@ -26,17 +26,63 @@ export class RunnerEventService {
     private readonly onArchiveRemoveWorktreeJobSucceeded?: (
       job: GitJob,
     ) => void,
-  ) {}
+  ) {
+    this.reconcileCommittedEffects();
+  }
 
-  handle(event: RunnerEvent): void {
+  handle(event: RunnerEvent): void;
+  handle(event: RunnerEvent, deferUntilCommit: true): () => void;
+  handle(event: RunnerEvent, deferUntilCommit = false): void | (() => void) {
+    const effects: Array<() => void> = [];
+    this.persist(event, (effect) => effects.push(effect));
+    const afterCommit = () => {
+      for (const effect of effects) {
+        try {
+          effect();
+        } catch {
+          // A committed event must still ACK and run its remaining effects.
+          // Durable business effects are retried from persisted state below.
+        }
+      }
+      this.reconcileCommittedEffects();
+    };
+    if (deferUntilCommit) {
+      return afterCommit;
+    }
+    afterCommit();
+  }
+
+  reconcileCommittedEffects(): void {
+    if (!this.onArchiveRemoveWorktreeJobSucceeded) {
+      return;
+    }
+    let jobs: GitJob[];
+    try {
+      jobs = this.store.listSucceededArchiveRemovalJobsPendingSessionArchive();
+    } catch {
+      return;
+    }
+    for (const job of jobs) {
+      try {
+        this.onArchiveRemoveWorktreeJobSucceeded(job);
+      } catch {
+        // The terminal job remains persisted and will be retried on the next
+        // committed event, duplicate replay, or server restart.
+      }
+    }
+  }
+
+  private persist(
+    event: RunnerEvent,
+    defer: (effect: () => void) => void,
+  ): void {
     if (event.type === "registered") {
       return;
     }
 
     if (event.type === "sessionStatus") {
       if (
-        (event.status === "waiting_approval" ||
-          event.status === "waiting_input") &&
+        !isTerminalStatus(event.status) &&
         this.isTerminalSession(event.sessionId)
       ) {
         return;
@@ -47,7 +93,7 @@ export class RunnerEventService {
         nowIso(),
       );
       if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
+        defer(() => this.hub.broadcast({ type: "session:updated", session }));
       }
       return;
     }
@@ -59,38 +105,55 @@ export class RunnerEventService {
         nowIso(),
       );
       if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
+        defer(() => this.hub.broadcast({ type: "session:updated", session }));
       }
       return;
     }
 
     if (event.type === "sessionStatusCheckResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      return;
+    }
+
+    if (event.type === "sessionStartResult") {
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "agentSkillListResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "agentRuntimeConfigOptionsResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "pathSearchResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "agentActivity") {
-      this.addActivity({
-        sessionId: event.sessionId,
-        agent: event.agent,
-        kind: event.kind,
-        label: event.label,
-      });
+      if (
+        event.inputRequestId !== undefined &&
+        !this.isTerminalSession(event.sessionId)
+      ) {
+        this.store.setPendingUserInputRequest(
+          event.sessionId,
+          event.inputRequestId,
+        );
+      }
+      this.addActivity(
+        {
+          sessionId: event.sessionId,
+          agent: event.agent,
+          kind: event.kind,
+          label: event.label,
+        },
+        defer,
+      );
       return;
     }
 
@@ -109,156 +172,197 @@ export class RunnerEventService {
       }
       const appendingExistingOutput =
         !result.created && event.mode === "append";
-      this.hub.broadcast({
-        type: result.created ? "message:created" : "message:updated",
-        message: appendingExistingOutput
-          ? { ...result.message, content: event.content ?? "" }
-          : result.message,
-        ...(appendingExistingOutput ? { contentMode: "append" } : {}),
-      });
+      defer(() =>
+        this.hub.broadcast({
+          type: result.created ? "message:created" : "message:updated",
+          message: appendingExistingOutput
+            ? { ...result.message, content: event.content ?? "" }
+            : result.message,
+          ...(appendingExistingOutput ? { contentMode: "append" } : {}),
+        }),
+      );
       return;
     }
 
     if (event.type === "fileTreeResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       if (isRunnerDirectoryResult(event.result.sessionId)) {
         return;
       }
-      this.hub.broadcast({ type: "file:tree", result: event.result });
+      defer(() =>
+        this.hub.broadcast({ type: "file:tree", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "fileContentResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "file:content", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "file:content", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "fileWriteResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "file:written", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "file:written", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "directoryCreateResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "attachmentWriteResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "attachmentContentResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "attachmentDeleteResult") {
-      this.rpc.resolveRunnerResponse(event.result);
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
       return;
     }
 
     if (event.type === "patchApplyResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "patch:applied", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "patch:applied", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitStatusResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:status", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:status", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitFileDiffResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:diff", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:diff", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitBlameResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:blame", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:blame", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitCommitPageResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:history", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:history", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitCommitFilesResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:commitFiles", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:commitFiles", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitBranchListResult") {
-      this.rpc.resolveRunnerResponse(event.result);
-      this.hub.broadcast({ type: "git:branches", result: event.result });
+      defer(() => this.rpc.resolveRunnerResponse(event.result));
+      defer(() =>
+        this.hub.broadcast({ type: "git:branches", result: event.result }),
+      );
       return;
     }
 
     if (event.type === "gitJobResult") {
       const job =
         this.gitJobs?.normalizeRunnerJobResult(event.job) ?? event.job;
-      if (this.gitJobs && !this.gitJobs.handleRunnerJobResult(job)) {
+      if (this.gitJobs && !this.gitJobs.canAcceptRunnerJobResult(job)) {
         return;
       }
       this.store.upsertGitJob(job);
-      this.applyGitJobSessionEffects(job);
-      this.rpc.resolveRunnerResponse(job);
-      this.hub.broadcast({ type: "git:job", job });
+      this.applyGitJobSessionEffects(job, defer);
+      defer(() => this.gitJobs?.completeRunnerJobResult(job));
+      defer(() => this.rpc.resolveRunnerResponse(job));
+      defer(() => this.hub.broadcast({ type: "git:job", job }));
       return;
     }
 
     if (event.type === "approvalRequested") {
+      if (this.isTerminalSession(event.approval.sessionId)) {
+        return;
+      }
       const session = this.store.getSession(event.approval.sessionId);
-      this.addActivity({
-        sessionId: event.approval.sessionId,
-        agent: session?.agent ?? "unknown",
-        kind: "approval",
-        label: "Waiting for approval",
-      });
+      this.addActivity(
+        {
+          sessionId: event.approval.sessionId,
+          agent: session?.agent ?? "unknown",
+          kind: "approval",
+          label: "Waiting for approval",
+        },
+        defer,
+      );
       this.store.upsertApproval(event.approval);
-      if (!this.isTerminalSession(event.approval.sessionId)) {
-        const session = this.store.updateSessionStatus(
+      if (session?.status !== "waiting_input") {
+        const updatedSession = this.store.updateSessionStatus(
           event.approval.sessionId,
           "waiting_approval",
           nowIso(),
         );
-        if (session) {
-          this.hub.broadcast({ type: "session:updated", session });
+        if (updatedSession) {
+          defer(() =>
+            this.hub.broadcast({
+              type: "session:updated",
+              session: updatedSession,
+            }),
+          );
         }
       }
-      this.hub.broadcast({
-        type: "approval:requested",
-        approval: event.approval,
-      });
+      defer(() =>
+        this.hub.broadcast({
+          type: "approval:requested",
+          approval: event.approval,
+        }),
+      );
       return;
     }
 
     if (event.type === "artifactCreated") {
       this.store.addArtifact(event.artifact);
-      this.hub.broadcast({
-        type: "artifact:created",
-        artifact: event.artifact,
-      });
+      defer(() =>
+        this.hub.broadcast({
+          type: "artifact:created",
+          artifact: event.artifact,
+        }),
+      );
       return;
     }
 
-    this.handleErrorEvent(event);
+    this.handleErrorEvent(event, defer);
   }
 
-  private applyGitJobSessionEffects(job: GitJob): void {
+  private applyGitJobSessionEffects(
+    job: GitJob,
+    defer: (effect: () => void) => void,
+  ): void {
     if (
       job.status === "succeeded" &&
       job.operation === "archive_remove_worktree"
     ) {
-      this.onArchiveRemoveWorktreeJobSucceeded?.(job);
+      defer(() => this.onArchiveRemoveWorktreeJobSucceeded?.(job));
       return;
     }
     if (
@@ -278,12 +382,15 @@ export class RunnerEventService {
       job.finishedAt ?? nowIso(),
     );
     if (updated) {
-      this.hub.broadcast({ type: "session:updated", session: updated });
+      defer(() =>
+        this.hub.broadcast({ type: "session:updated", session: updated }),
+      );
     }
   }
 
   private addActivity(
     input: Pick<AgentActivity, "sessionId" | "agent" | "kind" | "label">,
+    defer: (effect: () => void) => void,
   ): AgentActivity {
     const activity = this.store.addAgentActivity({
       id: newId("activity"),
@@ -293,7 +400,7 @@ export class RunnerEventService {
       label: input.label,
       createdAt: this.nextOutputTimestamp(),
     });
-    this.hub.broadcast({ type: "activity:created", activity });
+    defer(() => this.hub.broadcast({ type: "activity:created", activity }));
     return activity;
   }
 
@@ -315,11 +422,14 @@ export class RunnerEventService {
 
   private handleErrorEvent(
     event: Extract<RunnerEvent, { type: "error" }>,
+    defer: (effect: () => void) => void,
   ): void {
     if (event.requestId) {
-      this.rpc.rejectRunnerResponse(
-        event.requestId,
-        new RunnerRpcError(event.message, "runner_error", event.code),
+      defer(() =>
+        this.rpc.rejectRunnerResponse(
+          event.requestId!,
+          new RunnerRpcError(event.message, "runner_error", event.code),
+        ),
       );
       return;
     }
@@ -328,12 +438,14 @@ export class RunnerEventService {
       return;
     }
 
-    this.hub.broadcast({
-      type: "error",
-      message: event.message,
-      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
-      ...(event.code ? { code: event.code } : {}),
-    });
+    defer(() =>
+      this.hub.broadcast({
+        type: "error",
+        message: event.message,
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        ...(event.code ? { code: event.code } : {}),
+      }),
+    );
     if (event.sessionId && event.code === "SESSION_NOT_RUNNING") {
       const session = this.store.updateSessionStatus(
         event.sessionId,
@@ -341,7 +453,7 @@ export class RunnerEventService {
         nowIso(),
       );
       if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
+        defer(() => this.hub.broadcast({ type: "session:updated", session }));
       }
       return;
     }
@@ -353,7 +465,7 @@ export class RunnerEventService {
         nowIso(),
       );
       if (session) {
-        this.hub.broadcast({ type: "session:updated", session });
+        defer(() => this.hub.broadcast({ type: "session:updated", session }));
       }
     }
   }

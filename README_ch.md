@@ -79,9 +79,9 @@ http://127.0.0.1:8787
 在 **Account & Security** 中复制 Runner token。然后在你希望暴露为 Runner workspace 的目录下，至少带一个 Agent 插件启动本地 workspace Runner：
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token-from-account-security> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
@@ -158,9 +158,9 @@ Windows 用户建议在启用 Docker Desktop 集成的 WSL2 中运行安装脚�
 在你希望暴露为 Runner workspace 的目录下启动 Runner。在 npm 包发布前，使用源码 checkout 的本地 workspace 命令：
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token-from-account-security> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex
 ```
@@ -168,21 +168,22 @@ pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
 同时启用两个内置 Agent 插件：
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- \
   --server ws://127.0.0.1:8787/v1/runner \
-  --token <runner-token> \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex \
   --agent-plugin @roamcli/agent-claude-code
 ```
 
-Runner 会把最终生效的启动配置写入 `<workspace>/<data-dir>/config.json`，默认是 workspace 下的 `.roam-runner/config.json`。之后在同一 workspace 启动时可以省略已持久化的参数：
+Runner 会把非敏感启动配置写入 `<workspace>/<data-dir>/config.json`，默认是 workspace 下的 `.roam-runner/config.json`。Runner token 永远不会写入配置，因此每次启动都要提供 `ROAM_RUNNER_TOKEN`，其他非敏感参数可以复用：
 
 ```bash
-pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
+ROAM_RUNNER_TOKEN=<runner-token> \
+  pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
 ```
 
-如果交互式终端里缺少必填参数，Runner 会进入 React Ink TUI 向导，并在收集完成后自动 re-exec 本地命令。非交互式环境必须显式传入 `--server`、`--token` 和至少一个 `--agent-plugin`。
+如果交互式终端里缺少必填参数，Runner 会进入 React Ink TUI 向导，并在收集完成后自动 re-exec 本地命令。非交互式环境必须提供 `--server`、`ROAM_RUNNER_TOKEN` 和至少一个 `--agent-plugin`。优先使用环境变量，避免 token 出现在进程参数中；两种 token 输入方式都不会写入本地配置。
 
 ## 使用 RoamCli
 
@@ -197,6 +198,8 @@ pnpm --dir /path/to/roam-cli --filter @roamcli/runner dev -- --workspace "$PWD"
 ## Agent 插件
 
 Runner 核心保持极简，不会默认加载任何 Agent 插件。你必须通过 `--agent-plugin` 或 `ROAMCLI_AGENT_PLUGINS` 选择至少一个插件。
+
+Agent 插件是受信任的进程内扩展，只应安装你信任的插件代码：模块初始化阶段可以访问 Runner 进程及 `process.env`。权限 profile 的环境过滤只作用于传给插件回调和 Agent 子进程的 `context.env`，并不是插件模块的隔离沙箱。`strict` 和 `standard` 会从该上下文中过滤 `ROAMCLI_AGENT_CODEX_*` 命令/模式覆盖变量，`trusted` 则会传入这些变量；所有 profile 都会移除 `ROAM_RUNNER_TOKEN`。
 
 内置 workspace 插件包：
 
@@ -235,17 +238,17 @@ ROAMCLI_AGENT_CODEX_ARGS
 
 ### Runner
 
-Runner 会从 `<workspace>/<data-dir>/config.json` 读取本地配置。CLI 参数和环境变量会覆盖本地配置，并在 Runner 连接前写回。
+Runner 会从 `<workspace>/<data-dir>/config.json` 读取非敏感本地配置。CLI 参数和环境变量会覆盖本地配置，并在 Runner 连接前写回，但 Runner token 永远不会持久化。包含 token 的旧配置可读取一次用于迁移，随后会被改写并移除 token。
 
-| CLI 参数         | 环境变量                | 说明                                                                                                           |
-| ---------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。                                               |
-| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。                                                                     |
-| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                                                              |
-| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。                                                   |
-| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | workspace 下的相对 Runner 数据目录，用于状态和 session worktree。默认 `.roam-runner`，拒绝绝对路径和父级跳转。 |
-| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。                                         |
-| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 必填的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。                                                      |
+| CLI 参数         | 环境变量                | 说明                                                                                                                                        |
+| ---------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--server`       | `ROAM_RUNNER_SERVER`    | Server WebSocket URL。`http` 和 `https` 会转换为 `ws` 和 `wss`。                                                                            |
+| `--token`        | `ROAM_RUNNER_TOKEN`     | Account & Security 中展示的 Runner token。每次启动都要提供；优先使用环境变量，token 永远不会持久化。                                        |
+| `--runner-id`    | `ROAM_RUNNER_ID`        | 稳定 Runner 标识。默认是 hostname 加生成的 UUID。                                                                                           |
+| `--workspace`    | `ROAM_RUNNER_WORKSPACE` | 暴露给 RoamCli Session 的 workspace 根目录。默认是当前目录。                                                                                |
+| `--data-dir`     | `ROAM_RUNNER_DATA_DIR`  | canonical workspace 下的相对 Runner 数据目录，用于状态和 session worktree。默认 `.roam-runner`，拒绝绝对路径、父级跳转和 symlink 路径组件。 |
+| `--profile`      | `ROAM_RUNNER_PROFILE`   | Runner profile：`strict`、`standard` 或 `trusted`。默认是 `standard`。                                                                      |
+| `--agent-plugin` | `ROAMCLI_AGENT_PLUGINS` | 必填的 Agent 插件包。CLI 可重复传入，环境变量用逗号分隔。                                                                                   |
 
 ## 仓库结构
 

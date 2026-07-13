@@ -40,6 +40,7 @@ describe("claude code agent plugin", () => {
       args: [],
       parser: "claude-agent-sdk",
       supportsResume: true,
+      supportsDurableSessionStart: true,
       supportsImages: true,
       supportedImageMimeTypes: [
         "image/png",
@@ -89,6 +90,16 @@ describe("claude code agent plugin", () => {
         }),
       }),
     );
+  });
+
+  it("rejects start when the SDK does not accept the initial query", async () => {
+    sdk.query.mockImplementation(() => {
+      throw new Error("query rejected");
+    });
+
+    const session = claudeCodeAgent.createSession(makeContext());
+
+    await expect(session.start()).rejects.toThrow("query rejected");
   });
 
   it("uses stored runtime config for SDK model, effort, and Fast Mode", async () => {

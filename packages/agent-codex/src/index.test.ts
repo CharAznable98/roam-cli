@@ -10,9 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type {
-  AgentRuntimeEvent,
-  AgentSessionContext,
+import {
+  AgentInputUnavailableError,
+  type AgentRuntimeEvent,
+  type AgentSessionContext,
 } from "@roamcli/agent-plugin-sdk";
 import { DEFAULT_MAX_IMAGE_BYTES } from "@roamcli/shared/protocol";
 import { describe, expect, it, vi } from "vitest";
@@ -40,6 +41,7 @@ describe("codex agent plugin", () => {
       args: ["app-server", "--stdio", "-c", "skip_git_repo_check=true"],
       parser: "codex-app-server",
       supportsResume: true,
+      supportsDurableSessionStart: true,
       supportsImages: true,
       supportedImageMimeTypes: ["image/png", "image/jpeg"],
       maxImagesPerTurn: 5,
@@ -85,6 +87,7 @@ describe("codex agent plugin", () => {
       ],
       parser: "codex-json",
       supportsResume: true,
+      supportsDurableSessionStart: true,
       supportsImages: true,
       supportedImageMimeTypes: ["image/png", "image/jpeg"],
       maxImagesPerTurn: 5,
@@ -245,6 +248,28 @@ describe("codex agent plugin", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("rejects exec-json start when the prompt process cannot spawn", async () => {
+    const workspace = await mkdirTemp("roam-codex-spawn-failure-");
+    const session = codexAgent.createSession({
+      profile: "standard",
+      env: {
+        ROAMCLI_AGENT_CODEX_MODE: "exec-json",
+        ROAMCLI_AGENT_CODEX_COMMAND: join(workspace, "missing-codex"),
+      },
+      session: makeSession(workspace),
+      cwd: workspace,
+      prompt: "hello",
+      emit: async () => undefined,
+      requestApproval: async () => ({
+        approvalId: "approval-1",
+        approved: true,
+        signedAt: "2026-06-21T00:00:00.000Z",
+      }),
+    });
+
+    await expect(session.start()).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("lists Codex runtime config options from app-server model metadata", async () => {
@@ -464,6 +489,43 @@ describe("codex agent plugin", () => {
         kind: "execCommand",
         summary: "Run tests",
         payload: { command: "pnpm test" },
+      },
+    ]);
+    expect(result.assistantOutputs).toEqual([]);
+  });
+
+  it("keeps human-readable text while hiding recognized directive lines", () => {
+    const parser = new CodexJsonParser();
+    const result = parser.feed(
+      `${JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_1",
+          type: "agent_message",
+          text: [
+            "I prepared the requested output.",
+            'ROAMCLI_ARTIFACT: {"type":"artifact","path":"result.log","kind":"log"}',
+            "You can review it in the artifact panel.",
+          ].join("\n"),
+        },
+      })}\n`,
+    );
+
+    expect(result.artifacts).toEqual([
+      {
+        path: "result.log",
+        kind: "log",
+        mimeType: "application/octet-stream",
+      },
+    ]);
+    expect(result.assistantOutputs).toEqual([
+      {
+        type: "assistantOutput",
+        outputId: expect.stringMatching(/^codex-run-[^:]+:item_1$/),
+        content:
+          "I prepared the requested output.\nYou can review it in the artifact panel.",
+        mode: "replace",
+        done: true,
       },
     ]);
   });
@@ -732,6 +794,9 @@ describe("codex agent plugin", () => {
       });
       expect(events).toContainEqual({ type: "status", status: "completed" });
     });
+    await expect(
+      session.deliverInput({ content: "too late" }),
+    ).rejects.toBeInstanceOf(AgentInputUnavailableError);
   });
 
   it("keeps stdin open for subprocess approval responses", async () => {
@@ -938,7 +1003,9 @@ describe("codex agent plugin", () => {
     });
     await session.control("stop");
 
-    await expect(startPromise).resolves.toBeUndefined();
+    await expect(startPromise).rejects.toBeInstanceOf(
+      AgentInputUnavailableError,
+    );
     expect(events).toContainEqual({ type: "status", status: "stopped" });
     expect(events).not.toContainEqual({ type: "status", status: "failed" });
   });
@@ -1265,8 +1332,10 @@ describe("codex agent plugin", () => {
   it("preserves delivered input when app-server completes before steer succeeds", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-steer-race-");
     const startedMarker = join(workspace, "started.txt");
+    const steerMarker = join(workspace, "steer.txt");
     await writeAppServerScript(workspace, "steer-race.mjs", [
       `const startedMarker = ${JSON.stringify(startedMarker)};`,
+      `const steerMarker = ${JSON.stringify(steerMarker)};`,
       "let turnCount = 0;",
       "handleMessage = (message) => {",
       "  if (message.method === 'initialize') write({ id: message.id, result: {} });",
@@ -1283,8 +1352,9 @@ describe("codex agent plugin", () => {
       "    write({ method: 'turn/completed', params: { turn: { id: 'turn-2', status: 'completed' } } });",
       "  }",
       "  if (message.method === 'turn/steer') {",
+      "    fs.writeFileSync(steerMarker, 'pending');",
       "    write({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });",
-      "    write({ id: message.id, error: { code: -32000, message: 'turn already completed' } });",
+      "    setTimeout(() => write({ id: message.id, error: { code: -32000, message: 'turn already completed' } }), 250);",
       "  }",
       "};",
       "setInterval(() => undefined, 1000);",
@@ -1313,18 +1383,45 @@ describe("codex agent plugin", () => {
     await vi.waitFor(async () => {
       await expect(readFile(startedMarker, "utf8")).resolves.toBe("started");
     });
-    session.deliverInput({ content: "run as next turn" });
+    const deliveryResult = session.deliverInput({
+      content: "run as next turn",
+      deliveryId: "delivery-steer-race-1",
+    });
+    const duplicate = session.deliverInput({
+      content: "run as next turn",
+      deliveryId: "delivery-steer-race-1",
+    });
+    expect(duplicate).toBe(deliveryResult);
+    const delivery = Promise.resolve(deliveryResult);
+    let deliverySettled = false;
+    void delivery.then(() => {
+      deliverySettled = true;
+    });
+    await vi.waitFor(async () => {
+      await expect(readFile(steerMarker, "utf8")).resolves.toBe("pending");
+    });
+    expect(deliverySettled).toBe(false);
+    await delivery;
 
     await vi.waitFor(() => {
-      expect(events).toContainEqual({
-        type: "assistantOutput",
-        outputId: expect.stringMatching(
-          /^codex-app-server-run-[^:]+-2:item-2$/,
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "assistantOutput" &&
+            event.content === "run as next turn" &&
+            event.done,
         ),
-        content: "run as next turn",
-        mode: "replace",
-        done: true,
-      });
+      ).toEqual([
+        {
+          type: "assistantOutput",
+          outputId: expect.stringMatching(
+            /^codex-app-server-run-[^:]+-2:item-2$/,
+          ),
+          content: "run as next turn",
+          mode: "replace",
+          done: true,
+        },
+      ]);
       expect(events).toContainEqual({ type: "status", status: "completed" });
     });
   });
@@ -1586,7 +1683,9 @@ describe("codex agent plugin", () => {
       }),
     });
 
-    await session.start();
+    await expect(session.start()).rejects.toThrow(
+      /Codex app-server turn\/start failed/,
+    );
 
     await vi.waitFor(() => {
       expect(events).toContainEqual({

@@ -2,8 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_MAX_IMAGE_BYTES,
+  MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_IMAGE_BYTES_PER_TURN,
   type RunnerRegistration,
   type Session,
 } from "@roamcli/shared/protocol";
@@ -109,6 +112,124 @@ describe("server", () => {
     });
     expect(authorized.statusCode).toBe(200);
     expect(authorized.json()).toEqual({ sessions: [] });
+  });
+
+  it("requires request ids and rehydrates a queued running-session message from session detail", async () => {
+    createTestProject(app);
+    const now = new Date().toISOString();
+    app.roam.store.createSession({
+      id: "session-queued-message",
+      title: "Queued message",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "running",
+      executionMode: "direct",
+      executionFolder: "/workspace",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const missingSessionRequestId = await app.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "missing request id",
+      },
+    });
+    expect(missingSessionRequestId.statusCode).toBe(400);
+
+    const missingMessageRequestId = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/session-queued-message/messages",
+      headers: { "x-test-auth": "1" },
+      payload: { content: "missing request id" },
+    });
+    expect(missingMessageRequestId.statusCode).toBe(400);
+
+    const queued = await app.inject({
+      method: "POST",
+      url: "/v1/sessions/session-queued-message/messages",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        requestId: "queued-message-request",
+        content: "deliver after reconnect",
+      },
+    });
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json()).toMatchObject({ queued: true });
+    const messageId = queued.json().message.id as string;
+
+    const detail = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/session-queued-message",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().messages).toEqual([]);
+    expect(detail.json().attachments).toEqual([]);
+    expect(detail.json().pendingMessageDeliveries).toEqual([
+      {
+        messageId,
+        content: "deliver after reconnect",
+        createdAt: expect.any(String),
+        attachments: [],
+      },
+    ]);
+
+    const queuedSession = app.roam.store.getSession("session-queued-message")!;
+    const promotedAt = new Date().toISOString();
+    app.roam.store.promotePendingInputDeliveryToStart(
+      messageId,
+      {
+        type: "startSession",
+        requestId: "promoted-start-request",
+        deliveryId: messageId,
+        session: {
+          ...queuedSession,
+          status: "pending",
+          updatedAt: promotedAt,
+        },
+        prompt: "deliver after reconnect",
+        attachments: [],
+      },
+      promotedAt,
+    );
+    const promotedDetail = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/session-queued-message",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(promotedDetail.statusCode).toBe(200);
+    expect(promotedDetail.json().messages).toEqual([]);
+    expect(promotedDetail.json().pendingMessageDeliveries).toEqual([
+      {
+        messageId,
+        content: "deliver after reconnect",
+        createdAt: expect.any(String),
+        attachments: [],
+      },
+    ]);
+
+    expect(
+      app.roam.store.finalizePendingInputDelivery(messageId),
+    ).toBeDefined();
+    const finalizedDetail = await app.inject({
+      method: "GET",
+      url: "/v1/sessions/session-queued-message",
+      headers: { "x-test-auth": "1" },
+    });
+    expect(finalizedDetail.json().messages).toEqual([
+      expect.objectContaining({
+        id: messageId,
+        content: "deliver after reconnect",
+      }),
+    ]);
+    expect(finalizedDetail.json().pendingMessageDeliveries).toEqual([]);
   });
 
   it("keeps login rate limits scoped to the failing source", async () => {
@@ -442,6 +563,529 @@ describe("server", () => {
     expect(runnerMessages).toEqual([]);
 
     runner.close();
+  });
+
+  it("negotiates durable runner events and ACKs each sequence exactly once", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const streamId = "11111111-1111-4111-8111-111111111111";
+    const resume = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(resume).resolves.toEqual({
+      type: "runnerEventResume",
+      protocol: "ack_v1",
+      streamId,
+      ackThrough: 0,
+    });
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+
+    createTestProject(app);
+    const now = new Date().toISOString();
+    app.roam.store.createSession({
+      id: "ack-session",
+      title: "ACK Session",
+      projectId: "project-1",
+      runnerId: "runner-1",
+      agent: "codex",
+      status: "running",
+      executionMode: "direct",
+      executionFolder: "/workspace",
+      cwd: "/workspace",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const handle = vi.spyOn(app.roam.services.runnerEvents, "handle");
+    const event = {
+      type: "assistantOutput",
+      sessionId: "ack-session",
+      outputId: "ack-output",
+      content: "exactly once",
+      mode: "append",
+      done: true,
+      encrypted: false,
+    };
+    const firstAck = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerEvent(streamId, 1, event)));
+    await expect(firstAck).resolves.toEqual({
+      type: "runnerEventAck",
+      protocol: "ack_v1",
+      streamId,
+      ackThrough: 1,
+    });
+    expect(handle).toHaveBeenCalledTimes(1);
+    expect(app.roam.store.listMessages("ack-session")).toMatchObject([
+      { content: "exactly once" },
+    ]);
+
+    const duplicateAck = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerEvent(streamId, 1, event)));
+    await expect(duplicateAck).resolves.toEqual({
+      type: "runnerEventAck",
+      protocol: "ack_v1",
+      streamId,
+      ackThrough: 1,
+    });
+    expect(handle).toHaveBeenCalledTimes(1);
+    expect(app.roam.store.listMessages("ack-session")).toMatchObject([
+      { content: "exactly once" },
+    ]);
+
+    const gap = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerEvent(streamId, 3, event)));
+    await expect(gap).resolves.toEqual({
+      type: "runnerEventNack",
+      protocol: "ack_v1",
+      streamId,
+      ackThrough: 1,
+      expectedSequence: 2,
+    });
+    expect(handle).toHaveBeenCalledTimes(1);
+
+    const secondAck = nextJson(runner);
+    runner.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 2, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(secondAck).resolves.toEqual({
+      type: "runnerEventAck",
+      protocol: "ack_v1",
+      streamId,
+      ackThrough: 2,
+    });
+    expect(handle).toHaveBeenCalledTimes(2);
+
+    runner.close();
+  });
+
+  it("persists runner event high-water state across reconnects and restarts", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const streamId = "22222222-2222-4222-8222-222222222222";
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const resume = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(resume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+    const ack = nextJson(runner);
+    runner.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(ack).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId,
+      ackThrough: 1,
+    });
+
+    await app.close();
+    app = await createServer({
+      dataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const reconnected = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const persistedResume = nextJson(reconnected);
+    reconnected.send(JSON.stringify(ackRunnerAuthentication(streamId, 0)));
+    await expect(persistedResume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 1,
+    });
+
+    const duplicateAck = nextJson(reconnected);
+    reconnected.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(duplicateAck).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId,
+      ackThrough: 1,
+    });
+
+    reconnected.close();
+  });
+
+  it("commits a replayed terminal Git job result after a server restart", async () => {
+    createTestProject(app);
+    const now = new Date().toISOString();
+    app.roam.store.upsertGitJob({
+      id: "git-replayed-after-restart",
+      projectId: "project-1",
+      contextKind: "project",
+      operation: "stage",
+      status: "running",
+      createdAt: now,
+      startedAt: now,
+    });
+
+    await app.close();
+    app = await createServer({
+      dataDir,
+      publicOrigin: TEST_ORIGIN,
+      webDistDir: false,
+      runnerRpcTimeoutMs: 50,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const streamId = "77777777-7777-4777-8777-777777777777";
+    const resume = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(resume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+
+    const finishedAt = new Date().toISOString();
+    const ack = nextJson(runner);
+    runner.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "gitJobResult",
+          job: {
+            id: "git-replayed-after-restart",
+            projectId: "project-1",
+            contextKind: "project",
+            operation: "stage",
+            status: "succeeded",
+            createdAt: now,
+            startedAt: now,
+            finishedAt,
+          },
+        }),
+      ),
+    );
+    await expect(ack).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId,
+      ackThrough: 1,
+    });
+    expect(app.roam.store.listGitJobs("project-1")).toContainEqual(
+      expect.objectContaining({
+        id: "git-replayed-after-restart",
+        operation: "stage",
+        status: "succeeded",
+        finishedAt,
+      }),
+    );
+
+    runner.close();
+  });
+
+  it("defers Git result side effects until the durable event transaction commits", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const runnerMessages: Array<Record<string, any>> = [];
+    runner.on("message", (data) => {
+      runnerMessages.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+    const streamId = "88888888-8888-4888-8888-888888888888";
+    const resume = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(resume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+    await waitUntil(() => app.roam.hub.isRunnerOnline("runner-1"));
+    createTestProject(app);
+
+    const stageResponse = await app.inject({
+      method: "POST",
+      url: "/v1/git/stage",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        context: { kind: "project", projectId: "project-1" },
+        paths: ["README.md"],
+      },
+    });
+    expect(stageResponse.statusCode).toBe(200);
+    await waitUntil(() =>
+      runnerMessages.some((message) => message.type === "gitStagePaths"),
+    );
+    const stageCommand = runnerMessages.find(
+      (message) => message.type === "gitStagePaths",
+    );
+    expect(stageCommand).toBeDefined();
+
+    const discardResponse = await app.inject({
+      method: "POST",
+      url: "/v1/git/discard",
+      headers: { "x-test-auth": "1" },
+      payload: {
+        context: { kind: "project", projectId: "project-1" },
+        paths: ["README.md"],
+      },
+    });
+    expect(discardResponse.statusCode).toBe(200);
+    expect(
+      runnerMessages.some((message) => message.type === "gitDiscardPaths"),
+    ).toBe(false);
+
+    const broadcast = vi.spyOn(app.roam.hub, "broadcast");
+    broadcast.mockClear();
+    const rollbackInjector = new DatabaseSync(app.roam.store.dbPath);
+    rollbackInjector.exec(`
+      CREATE TRIGGER fail_runner_event_high_water
+      BEFORE UPDATE OF committed_through ON runner_event_streams
+      BEGIN
+        SELECT RAISE(ABORT, 'injected runner event commit failure');
+      END;
+    `);
+
+    const failedClose = nextClose(runner);
+    const finishedAt = new Date().toISOString();
+    runner.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "gitJobResult",
+          job: {
+            id: stageCommand?.requestId,
+            projectId: "project-1",
+            contextKind: "project",
+            operation: "stage",
+            status: "succeeded",
+            createdAt: finishedAt,
+            startedAt: finishedAt,
+            finishedAt,
+          },
+        }),
+      ),
+    );
+    await expect(failedClose).resolves.toEqual({
+      code: 1011,
+      reason: "runner event handler failed",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      app.roam.store.getGitJob(String(stageCommand?.requestId)),
+    ).toMatchObject({ status: "running" });
+    expect(
+      broadcast.mock.calls.some(
+        ([event]) =>
+          event.type === "git:job" &&
+          event.job.id === stageCommand?.requestId &&
+          event.job.status === "succeeded",
+      ),
+    ).toBe(false);
+    expect(
+      runnerMessages.some((message) => message.type === "gitDiscardPaths"),
+    ).toBe(false);
+
+    rollbackInjector.exec("DROP TRIGGER fail_runner_event_high_water");
+    rollbackInjector.close();
+    const reconnected = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const reconnectedMessages: Array<Record<string, any>> = [];
+    reconnected.on("message", (data) => {
+      reconnectedMessages.push(JSON.parse(String(data)) as Record<string, any>);
+    });
+    const replayResume = nextJson(reconnected);
+    reconnected.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(replayResume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+    const replayAck = nextJson(reconnected);
+    broadcast.mockImplementationOnce(() => {
+      throw new Error("injected post-commit broadcast failure");
+    });
+    reconnected.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "gitJobResult",
+          job: {
+            id: stageCommand?.requestId,
+            projectId: "project-1",
+            contextKind: "project",
+            operation: "stage",
+            status: "succeeded",
+            createdAt: finishedAt,
+            startedAt: finishedAt,
+            finishedAt,
+          },
+        }),
+      ),
+    );
+    await expect(replayAck).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId,
+      ackThrough: 1,
+    });
+    await waitUntil(() =>
+      reconnectedMessages.some((message) => message.type === "gitDiscardPaths"),
+    );
+    expect(
+      app.roam.store.getGitJob(String(stageCommand?.requestId)),
+    ).toMatchObject({ status: "succeeded", finishedAt });
+    expect(
+      broadcast.mock.calls.some(
+        ([event]) =>
+          event.type === "git:job" &&
+          event.job.id === stageCommand?.requestId &&
+          event.job.status === "succeeded",
+      ),
+    ).toBe(true);
+
+    reconnected.close();
+  });
+
+  it("rolls back failed runner events without ACKing and rejects unsafe stream state", async () => {
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const streamId = "33333333-3333-4333-8333-333333333333";
+    const runner = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const resume = nextJson(runner);
+    runner.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(resume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+
+    vi.spyOn(app.roam.services.runnerEvents, "handle").mockImplementationOnce(
+      () => {
+        throw new Error("injected handler failure");
+      },
+    );
+    const failedClose = nextClose(runner);
+    runner.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(failedClose).resolves.toEqual({
+      code: 1011,
+      reason: "runner event handler failed",
+    });
+
+    const retry = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const retryResume = nextJson(retry);
+    retry.send(JSON.stringify(ackRunnerAuthentication(streamId)));
+    await expect(retryResume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 0,
+    });
+
+    const retryAck = nextJson(retry);
+    retry.send(
+      JSON.stringify(
+        ackRunnerEvent(streamId, 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(retryAck).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId,
+      ackThrough: 1,
+    });
+
+    const mismatchedClose = nextClose(retry);
+    retry.send(
+      JSON.stringify(
+        ackRunnerEvent("44444444-4444-4444-8444-444444444444", 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(mismatchedClose).resolves.toEqual({
+      code: 1008,
+      reason: "runner event stream mismatch",
+    });
+
+    const ahead = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const aheadClose = nextClose(ahead);
+    ahead.send(JSON.stringify(ackRunnerAuthentication(streamId, 2)));
+    await expect(aheadClose).resolves.toEqual({
+      code: 1008,
+      reason: "runner event stream mismatch",
+    });
+
+    const rotatedStreamId = "55555555-5555-4555-8555-555555555555";
+    const rotated = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const rotatedResume = nextJson(rotated);
+    rotated.send(JSON.stringify(ackRunnerAuthentication(rotatedStreamId)));
+    await expect(rotatedResume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId: rotatedStreamId,
+      ackThrough: 0,
+    });
+
+    const rotatedAck = nextJson(rotated);
+    rotated.send(
+      JSON.stringify(
+        ackRunnerEvent(rotatedStreamId, 1, {
+          type: "registered",
+          runner: runnerRegistration(),
+        }),
+      ),
+    );
+    await expect(rotatedAck).resolves.toMatchObject({
+      type: "runnerEventAck",
+      streamId: rotatedStreamId,
+      ackThrough: 1,
+    });
+
+    const rotatedClose = nextClose(rotated);
+    rotated.close();
+    await rotatedClose;
+    const originalAgain = await openSocket(`${localBaseUrl(app)}/v1/runner`, {
+      authenticateRunner: false,
+    });
+    const originalResume = nextJson(originalAgain);
+    originalAgain.send(JSON.stringify(ackRunnerAuthentication(streamId, 1)));
+    await expect(originalResume).resolves.toMatchObject({
+      type: "runnerEventResume",
+      streamId,
+      ackThrough: 1,
+    });
+
+    originalAgain.close();
   });
 
   it("checks the runner token before parsing runner registration", async () => {
@@ -933,6 +1577,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-server-work",
         projectId: "project-1",
         agent: "codex",
         prompt: "implement server",
@@ -1043,6 +1688,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-long-running-task",
         projectId: "project-1",
         agent: "codex",
         prompt: "long running task",
@@ -1107,7 +1753,7 @@ describe("server", () => {
     secondRunner.close();
   });
 
-  it("accepts 5MB image payloads and rejects larger images at the business limit", async () => {
+  it("accepts the advertised total image budget before enforcing per-image limits", async () => {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const baseUrl = localBaseUrl(app);
     const runner = await openSocket(`${baseUrl}/v1/runner`);
@@ -1129,6 +1775,7 @@ describe("server", () => {
         "content-type": "application/json",
       },
       payload: JSON.stringify({
+        requestId: "create-five-megabytes",
         projectId: "project-1",
         agent: "codex",
         prompt: "describe five megabytes",
@@ -1180,7 +1827,11 @@ describe("server", () => {
       ],
     });
 
-    const oversized = await app.inject({
+    const budgetUploads = [
+      imageUploadOfSize(13 * 1024 * 1024, "thirteen-mb.png"),
+      imageUploadOfSize(12 * 1024 * 1024, "twelve-mb.png"),
+    ];
+    const budgetResponse = await app.inject({
       method: "POST",
       url: "/v1/sessions",
       headers: {
@@ -1188,16 +1839,15 @@ describe("server", () => {
         "content-type": "application/json",
       },
       payload: JSON.stringify({
-        projectId: "project-1",
+        requestId: "create-full-image-budget",
+        projectId: "missing-project",
         agent: "codex",
-        prompt: "reject oversized image",
-        attachments: [
-          imageUploadOfSize(DEFAULT_MAX_IMAGE_BYTES + 1, "too-large.png"),
-        ],
+        prompt: "accept the full image budget",
+        attachments: budgetUploads,
       }),
     });
-    expect(oversized.statusCode).toBe(400);
-    expect(oversized.json()).toEqual({ error: "image_too_large" });
+    expect(budgetResponse.statusCode).toBe(404);
+    expect(budgetResponse.json()).toEqual({ error: "project_not_found" });
 
     runner.close();
   });
@@ -1230,6 +1880,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-first-question",
         projectId: "project-1",
         agent: "codex",
         prompt: "first question",
@@ -1356,6 +2007,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-start-once",
         projectId: "project-1",
         agent: "codex",
         prompt: "start once",
@@ -1425,6 +2077,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-first-prompt",
         projectId: "project-1",
         agent: "codex",
         prompt: "first prompt",
@@ -1502,6 +2155,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-inspect-files",
         projectId: "project-1",
         agent: "codex",
         prompt: "inspect files",
@@ -1864,6 +2518,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-inspect-file-errors",
         projectId: "project-1",
         agent: "codex",
         prompt: "inspect files",
@@ -1929,6 +2584,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-needs-approval",
         projectId: "project-1",
         agent: "codex",
         prompt: "needs approval",
@@ -2208,6 +2864,7 @@ describe("server", () => {
       url: "/v1/sessions",
       headers: { "x-test-auth": "1" },
       payload: {
+        requestId: "create-apply-patch",
         projectId: "project-1",
         agent: "codex",
         prompt: "apply patch",
@@ -2246,6 +2903,7 @@ describe("server", () => {
     expect(patchCommand).toMatchObject({
       type: "applyPatch",
       sessionId,
+      cwd: "/workspace",
       patch,
       strip: 1,
     });
@@ -2305,6 +2963,33 @@ function runnerRegistration(
   };
 }
 
+function ackRunnerAuthentication(streamId: string, acknowledgedThrough = 0) {
+  return {
+    type: "runnerAuthenticate",
+    token: runnerToken,
+    runner: runnerRegistration(),
+    eventDelivery: {
+      protocol: "ack_v1",
+      streamId,
+      acknowledgedThrough,
+    },
+  };
+}
+
+function ackRunnerEvent(
+  streamId: string,
+  sequence: number,
+  event: Record<string, unknown>,
+) {
+  return {
+    type: "runnerEvent",
+    protocol: "ack_v1",
+    streamId,
+    sequence,
+    event,
+  };
+}
+
 function imageRunnerRegistration(): RunnerRegistration {
   const runner = runnerRegistration({ agent: "codex", parser: "codex-json" });
   return {
@@ -2315,7 +3000,8 @@ function imageRunnerRegistration(): RunnerRegistration {
         supportsImages: true,
         supportedImageMimeTypes: ["image/png"],
         maxImagesPerTurn: 5,
-        maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
+        maxImageBytes: MAX_ATTACHMENT_BYTES,
+        maxTotalImageBytes: MAX_TOTAL_IMAGE_BYTES_PER_TURN,
       },
     ],
   };

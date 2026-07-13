@@ -94,7 +94,7 @@ describe("ChatPanel", () => {
     const composer = screen.getByRole("textbox", { name: "Chat composer" });
     expect(composer).toHaveAttribute(
       "placeholder",
-      "Message the active session, Cmd/Ctrl+Enter to send",
+      "Message the active session",
     );
     fireEvent.change(composer, { target: { value: "  run tests  " } });
     fireEvent.keyDown(composer, {
@@ -614,6 +614,73 @@ describe("ChatPanel", () => {
 
     expect(onSend).not.toHaveBeenCalled();
     expect(composer).toHaveValue("first line");
+  });
+
+  it("keeps a newer draft when an earlier send finishes", async () => {
+    let finishSend: (() => void) | undefined;
+    const onSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSend = resolve;
+        }),
+    );
+    render(<ChatPanel session={baseSession} messages={[]} onSend={onSend} />);
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    fireEvent.change(composer, { target: { value: "first message" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(composer, { target: { value: "new draft" } });
+    finishSend?.();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toBeEnabled(),
+    );
+    expect(composer).toHaveValue("new draft");
+  });
+
+  it("keeps images added while an earlier send finishes", async () => {
+    let finishSend: (() => void) | undefined;
+    const onSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSend = resolve;
+        }),
+    );
+    const { container } = render(
+      <ChatPanel
+        session={baseSession}
+        messages={[]}
+        onSend={onSend}
+        imageCapability={imageCapability}
+      />,
+    );
+    const input = fileInput(container);
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["old"], "old.png", { type: "image/png" })],
+      },
+    });
+    fireEvent.change(composer, { target: { value: "first message" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["new"], "new.png", { type: "image/png" })],
+      },
+    });
+    fireEvent.change(composer, { target: { value: "new draft" } });
+    finishSend?.();
+
+    await waitFor(() => expect(screen.queryByText("old.png")).toBeNull());
+    expect(screen.getByText("new.png")).toBeInTheDocument();
+    expect(composer).toHaveValue("new draft");
   });
 
   it("sends selected images with the composed message", async () => {

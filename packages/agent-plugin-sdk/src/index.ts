@@ -51,7 +51,8 @@ export interface ApprovalDecision {
   approvalId: string;
   approved: boolean;
   signedAt: string;
-  signature: string;
+  /** Present only when a future authenticated approval channel provides one. */
+  signature?: string;
 }
 
 export interface UserInputQuestionOption {
@@ -119,6 +120,16 @@ export interface AgentOutputParser {
 
 export interface AgentInput {
   content: string;
+  deliveryId?: string;
+}
+
+export class AgentInputUnavailableError extends Error {
+  readonly code = "AGENT_INPUT_UNAVAILABLE";
+
+  public constructor(message = "Agent input channel is unavailable") {
+    super(message);
+    this.name = "AgentInputUnavailableError";
+  }
 }
 
 export interface AgentSession {

@@ -40,6 +40,7 @@ import {
   sendStreamCommand,
   type RoamApiClient,
 } from "../api";
+import type { SessionDetailPayload } from "../api/contracts";
 import {
   appliedPatchApprovalIds,
   buildPatchFromHunks,
@@ -66,7 +67,9 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 const ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS = 1_500;
 const ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS = 10_000;
 const SESSION_DETAIL_REFRESH_INDICATOR_DELAY_MS = 300;
+const MAX_OBSERVED_TERMINAL_MESSAGE_IDS = 256;
 let fileTreeRequestSequence = 0;
+let browserRequestSequence = 0;
 
 export type StreamReconnectInfo = {
   mode: "connecting" | "connected" | "waiting";
@@ -83,6 +86,18 @@ export type AuthViewState =
 
 export type SessionArchiveOptions = {
   worktree?: "keep" | "remove";
+};
+
+export type PendingMessageDelivery = {
+  requestId: string;
+  sessionId: string;
+  messageId: string;
+};
+
+type PendingDetailRequestToken = {
+  sessionId: string;
+  requestSequence: number;
+  mutationVersion: number;
 };
 
 export function useRoamController() {
@@ -116,6 +131,9 @@ export function useRoamController() {
   const [checkingSessionStatusId, setCheckingSessionStatusId] = useState<
     string | undefined
   >();
+  const [pendingMessageDeliveries, setPendingMessageDeliveries] = useState<
+    PendingMessageDelivery[]
+  >([]);
   const apiRef = useRef<RoamApiClient | undefined>(undefined);
   const streamRef = useRef<WebSocket | undefined>(undefined);
   const reconnectStreamRef = useRef<(() => void) | undefined>(undefined);
@@ -128,6 +146,45 @@ export function useRoamController() {
   const promptPresetReorderChainsRef = useRef<
     Record<string, Promise<ProjectPromptPreset[]>>
   >({});
+  const observedTerminalMessageIdsRef = useRef<Set<string>>(new Set());
+  const pendingMessageMutationVersionsRef = useRef<Record<string, number>>({});
+  const pendingDetailRequestSequenceRef = useRef(0);
+  const latestPendingDetailRequestBySessionRef = useRef<Record<string, number>>(
+    {},
+  );
+
+  const rememberTerminalMessageId = useCallback((messageId: string) => {
+    const observed = observedTerminalMessageIdsRef.current;
+    observed.delete(messageId);
+    observed.add(messageId);
+    if (observed.size > MAX_OBSERVED_TERMINAL_MESSAGE_IDS) {
+      const oldest = observed.values().next().value;
+      if (oldest !== undefined) {
+        observed.delete(oldest);
+      }
+    }
+  }, []);
+
+  const markPendingMessageMutation = useCallback((sessionId: string) => {
+    pendingMessageMutationVersionsRef.current[sessionId] =
+      (pendingMessageMutationVersionsRef.current[sessionId] ?? 0) + 1;
+  }, []);
+
+  const beginPendingDetailRequest = useCallback(
+    (sessionId: string): PendingDetailRequestToken => {
+      pendingDetailRequestSequenceRef.current += 1;
+      const requestSequence = pendingDetailRequestSequenceRef.current;
+      latestPendingDetailRequestBySessionRef.current[sessionId] =
+        requestSequence;
+      return {
+        sessionId,
+        requestSequence,
+        mutationVersion:
+          pendingMessageMutationVersionsRef.current[sessionId] ?? 0,
+      };
+    },
+    [],
+  );
 
   const nextAccountSecurityRequestId = useCallback(() => {
     accountSecurityRequestIdRef.current += 1;
@@ -172,42 +229,79 @@ export function useRoamController() {
     [],
   );
 
-  const loadSessionDetail = useCallback(async (sessionId: string) => {
-    const api = apiRef.current;
-    if (!api) {
-      throw new Error("API client is not ready.");
-    }
-    sessionDetailRequestSequenceRef.current += 1;
-    const requestId = `session-detail-${Date.now()}-${sessionDetailRequestSequenceRef.current}`;
-    dispatch({ type: "sessionDetailLoadStarted", sessionId, requestId });
-    const refreshIndicatorTimer = globalThis.setTimeout(() => {
-      dispatch({
-        type: "sessionDetailRefreshIndicatorShown",
-        sessionId,
-        requestId,
-      });
-    }, SESSION_DETAIL_REFRESH_INDICATOR_DELAY_MS);
-    try {
-      const detail = await api.fetchSessionDetail(sessionId);
-      dispatch({
-        type: "sessionDetailLoadSucceeded",
-        requestId,
-        detail,
-      });
-      return detail;
-    } catch (detailError: unknown) {
-      const message = errorMessage(detailError);
-      dispatch({
-        type: "sessionDetailLoadFailed",
-        sessionId,
-        requestId,
-        message,
-      });
-      throw new Error(message);
-    } finally {
-      globalThis.clearTimeout(refreshIndicatorTimer);
-    }
-  }, []);
+  const syncPendingMessageDeliveriesFromDetail = useCallback(
+    (detail: SessionDetailPayload, token: PendingDetailRequestToken) => {
+      const pending = detail.pendingMessageDeliveries;
+      if (
+        pending === undefined ||
+        token.sessionId !== detail.session.id ||
+        latestPendingDetailRequestBySessionRef.current[token.sessionId] !==
+          token.requestSequence ||
+        (pendingMessageMutationVersionsRef.current[token.sessionId] ?? 0) !==
+          token.mutationVersion
+      ) {
+        return;
+      }
+      setPendingMessageDeliveries((current) => [
+        ...current.filter(
+          (delivery) => delivery.sessionId !== detail.session.id,
+        ),
+        ...pending
+          .filter(
+            (delivery) =>
+              !observedTerminalMessageIdsRef.current.has(delivery.messageId),
+          )
+          .map((delivery) => ({
+            requestId: `rehydrated-${delivery.messageId}`,
+            sessionId: detail.session.id,
+            messageId: delivery.messageId,
+          })),
+      ]);
+    },
+    [],
+  );
+
+  const loadSessionDetail = useCallback(
+    async (sessionId: string) => {
+      const api = apiRef.current;
+      if (!api) {
+        throw new Error("API client is not ready.");
+      }
+      sessionDetailRequestSequenceRef.current += 1;
+      const requestId = `session-detail-${Date.now()}-${sessionDetailRequestSequenceRef.current}`;
+      const pendingToken = beginPendingDetailRequest(sessionId);
+      dispatch({ type: "sessionDetailLoadStarted", sessionId, requestId });
+      const refreshIndicatorTimer = globalThis.setTimeout(() => {
+        dispatch({
+          type: "sessionDetailRefreshIndicatorShown",
+          sessionId,
+          requestId,
+        });
+      }, SESSION_DETAIL_REFRESH_INDICATOR_DELAY_MS);
+      try {
+        const detail = await api.fetchSessionDetail(sessionId);
+        syncPendingMessageDeliveriesFromDetail(detail, pendingToken);
+        dispatch({
+          type: "sessionDetailLoadSucceeded",
+          requestId,
+          detail,
+        });
+        return detail;
+      } catch (detailError: unknown) {
+        const message = errorMessage(detailError);
+        dispatch({
+          type: "sessionDetailLoadFailed",
+          sessionId,
+          requestId,
+          message,
+        });
+        throw new Error(message);
+      } finally {
+        globalThis.clearTimeout(refreshIndicatorTimer);
+      }
+    },
+    [beginPendingDetailRequest, syncPendingMessageDeliveriesFromDetail],
+  );
 
   useEffect(() => {
     const api = createRoamApiClient();
@@ -319,10 +413,12 @@ export function useRoamController() {
       if (!sessionId) {
         return;
       }
+      const pendingToken = beginPendingDetailRequest(sessionId);
       void api
         .fetchSessionDetail(sessionId)
         .then((detail) => {
           if (!cancelled) {
+            syncPendingMessageDeliveriesFromDetail(detail, pendingToken);
             dispatch({ type: "sessionDetailMerged", detail });
           }
         })
@@ -371,6 +467,30 @@ export function useRoamController() {
     }
 
     function enqueueServerEvent(event: ServerEvent) {
+      const terminalMessageId = terminalMessageIdFromServerEvent(event);
+      if (terminalMessageId) {
+        rememberTerminalMessageId(terminalMessageId);
+      }
+      if (event.type === "message:created") {
+        markPendingMessageMutation(event.message.sessionId);
+        setPendingMessageDeliveries((current) =>
+          current.filter((delivery) => delivery.messageId !== event.message.id),
+        );
+      } else if (
+        event.type === "error" &&
+        (event.code === "INPUT_NOT_OWNED" ||
+          event.code === "START_NOT_OWNED") &&
+        event.sessionId
+      ) {
+        markPendingMessageMutation(event.sessionId);
+        setPendingMessageDeliveries((current) =>
+          current.filter((delivery) =>
+            event.messageId
+              ? delivery.messageId !== event.messageId
+              : delivery.sessionId !== event.sessionId,
+          ),
+        );
+      }
       pendingServerEvents.push(event);
       if (shouldFlushServerEventImmediately(event)) {
         clearEventFlush();
@@ -551,6 +671,10 @@ export function useRoamController() {
     authEpoch,
     clearAccountSecurity,
     nextAccountSecurityRequestId,
+    beginPendingDetailRequest,
+    markPendingMessageMutation,
+    rememberTerminalMessageId,
+    syncPendingMessageDeliveriesFromDetail,
     syncActiveSessionSubscription,
   ]);
 
@@ -738,11 +862,13 @@ export function useRoamController() {
         return;
       }
       let nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_INITIAL_DELAY_MS;
+      const pendingToken = beginPendingDetailRequest(sessionId);
       void api
         .fetchSessionDetail(sessionId)
         .then((detail) => {
           nextDelayMs = ACTIVE_SESSION_DETAIL_SYNC_BACKOFF_DELAY_MS;
           if (!cancelled) {
+            syncPendingMessageDeliveriesFromDetail(detail, pendingToken);
             dispatch({ type: "sessionDetailMerged", detail });
           }
         })
@@ -761,7 +887,12 @@ export function useRoamController() {
         globalThis.clearTimeout(syncTimer);
       }
     };
-  }, [selectedSession?.id, selectedSession?.status]);
+  }, [
+    beginPendingDetailRequest,
+    selectedSession?.id,
+    selectedSession?.status,
+    syncPendingMessageDeliveriesFromDetail,
+  ]);
 
   const selectedGitContext = useMemo<ApiGitContext | undefined>(() => {
     if (
@@ -960,6 +1091,7 @@ export function useRoamController() {
     }
     try {
       const session = await apiRef.current.createSession({
+        requestId: createSessionRequestId(),
         projectId,
         ...values,
       });
@@ -1043,23 +1175,38 @@ export function useRoamController() {
       });
       throw new Error("Event stream is disconnected.");
     }
+    const sessionId = selectedSession.id;
+    const requestId = createMessageRequestId();
     try {
-      const result = await apiRef.current.createUserMessage(
-        selectedSession.id,
-        {
-          content,
-          attachments,
-        },
-      );
-      dispatch({
-        type: "serverEventReceived",
-        event: { type: "message:created", message: result.message },
+      const result = await apiRef.current.createUserMessage(sessionId, {
+        requestId,
+        content,
+        attachments,
       });
-      for (const attachment of result.attachments) {
+      markPendingMessageMutation(sessionId);
+      if (result.queued) {
+        if (observedTerminalMessageIdsRef.current.delete(result.message.id)) {
+          return;
+        }
+        setPendingMessageDeliveries((current) => [
+          ...current.filter((delivery) => delivery.requestId !== requestId),
+          {
+            requestId,
+            sessionId,
+            messageId: result.message.id,
+          },
+        ]);
+      } else {
         dispatch({
           type: "serverEventReceived",
-          event: { type: "message_attachment:created", attachment },
+          event: { type: "message:created", message: result.message },
         });
+        for (const attachment of result.attachments) {
+          dispatch({
+            type: "serverEventReceived",
+            event: { type: "message_attachment:created", attachment },
+          });
+        }
       }
     } catch (sendError: unknown) {
       const message = errorMessage(sendError);
@@ -1864,6 +2011,7 @@ export function useRoamController() {
     accountSecurity,
     installMetadata,
     streamReconnect,
+    pendingMessageDeliveries,
     reconnectStream,
     setupOwner,
     loginOwner,
@@ -2006,6 +2154,38 @@ function hydrateInitialSelection(state: AppState): AppState {
 function nextFileTreeRequestId(): string {
   fileTreeRequestSequence += 1;
   return `file-tree-${Date.now()}-${fileTreeRequestSequence}`;
+}
+
+function createMessageRequestId(): string {
+  return createBrowserRequestId("message");
+}
+
+function createSessionRequestId(): string {
+  return createBrowserRequestId("session");
+}
+
+function createBrowserRequestId(prefix: "message" | "session"): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  browserRequestSequence += 1;
+  return `${prefix}-${Date.now()}-${browserRequestSequence}`;
+}
+
+function terminalMessageIdFromServerEvent(
+  event: ServerEvent,
+): string | undefined {
+  if (event.type === "message:created") {
+    return event.message.id;
+  }
+  if (
+    event.type === "error" &&
+    (event.code === "INPUT_NOT_OWNED" || event.code === "START_NOT_OWNED") &&
+    typeof event.messageId === "string"
+  ) {
+    return event.messageId;
+  }
+  return undefined;
 }
 
 function isWorkspaceUnavailable(

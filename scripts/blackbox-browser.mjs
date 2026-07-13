@@ -23,6 +23,8 @@ const runNonce = `${process.pid}-${Date.now().toString(36)}`;
 const runnerId =
   process.env.ROAMCLI_BLACKBOX_RUNNER_ID ?? `blackbox-${runNonce}`;
 const runtimeRunnerId = `${runnerId}-runtime`;
+const runnerDataDir = `.roam-runner-blackbox-${runNonce}`;
+const runtimeRunnerDataDir = `.roam-runner-blackbox-runtime-${runNonce}`;
 const children = [];
 const tempDirs = [];
 const tempPaths = [];
@@ -344,7 +346,7 @@ async function runUserJourney(browser, scenario) {
       await assertMobileConnectionSheet(page);
     } else {
       await expectText(page, "stream connected");
-      await expectText(page, "runners online");
+      await expectText(page, "1 runner online");
     }
 
     const project = await createProjectFromUi(page, scenario, {
@@ -371,7 +373,7 @@ async function runUserJourney(browser, scenario) {
       if (
         session.executionMode !== "managed_worktree" ||
         session.executionFolder === projectDir ||
-        !session.executionFolder.includes(".roam-runner/worktrees")
+        !session.executionFolder.includes(`${runnerDataDir}/worktrees`)
       ) {
         throw new Error(
           `desktop session did not use a managed worktree: ${JSON.stringify(session)}`,
@@ -396,6 +398,15 @@ async function runUserJourney(browser, scenario) {
     await captureScreenshot(page, scenario, "chat-round-trip");
     pass(`${scenario.name}: chat round-trip`);
     await waitForSessionStatus(session.id, "completed");
+    if (scenario.name === "mobile") {
+      await assertChatImageUpload(page, scenario, session, {
+        imagePath: resolve(session.executionFolder, imageFileName),
+        imageFileName,
+      });
+      await captureScreenshot(page, scenario, "chat-image-upload");
+      pass(`${scenario.name}: chat image upload round-trip`);
+      await waitForSessionStatus(session.id, "completed");
+    }
     if (executionMode === "managed_worktree") {
       await assertManagedWorktreeGitUi(page, scenario, project, session, {
         fileName,
@@ -485,6 +496,7 @@ async function runUserJourney(browser, scenario) {
     await openTab(page, scenario, "approvals");
     await assertNoVisibleButton(page, "Artifacts");
     await captureScreenshot(page, scenario, "artifact-persisted");
+    await assertNoRunnerRequestFailed(page, 1_000);
     pass(`${scenario.name}: artifact persisted without primary UI`);
 
     const hunkId = `hunk-${scenario.name}-${Date.now()}`;
@@ -520,10 +532,13 @@ async function runUserJourney(browser, scenario) {
     await page.getByRole("button", { name: "Apply" }).click();
     await expectFileContent(session.id, fileName, `${patchedValue}\n`);
     await expectText(page, "edited");
+    await assertNoRunnerRequestFailed(page, 1_000);
     await captureScreenshot(page, scenario, "patch-review-apply");
     pass(`${scenario.name}: patch review/apply`);
 
+    await waitForSessionStatus(session.id, "completed");
     await assertResumeFromUi(page, scenario, session);
+    await assertNoRunnerRequestFailed(page, 1_000);
     await captureScreenshot(page, scenario, "resume-completed-session");
     pass(`${scenario.name}: resume completed session`);
 
@@ -601,6 +616,7 @@ async function assertManagedWorktreeGitUi(
         group.changes.some((change) => change.path === values.fileName),
     ),
   );
+  await assertNotificationsClearComposer(page, scenario);
 
   await page
     .locator(".git-commit-box textarea")
@@ -626,6 +642,72 @@ async function assertManagedWorktreeGitUi(
   await assertNoRunnerRequestFailed(page);
   await captureScreenshot(page, scenario, "git-worktree-remove");
   pass(`${scenario.name}: Git worktree stage/commit/remove`);
+}
+
+async function assertNotificationsClearComposer(page, scenario) {
+  const switchedToChat = scenario.mobile || scenario.tablet;
+  if (switchedToChat) {
+    await openTab(page, scenario, "chat");
+  }
+  await waitFor(
+    async () =>
+      page
+        .locator(".notification-stack .notification-card:visible")
+        .count()
+        .then((count) => count > 0),
+    "Git notification to become visible",
+  );
+  const geometry = await page.evaluate(() => {
+    const stack = document.querySelector(".notification-stack");
+    const composer = document.querySelector("form.composer");
+    const card = stack?.querySelector(".notification-card");
+    const close = card?.querySelector(".notification-close");
+    if (
+      !(stack instanceof HTMLElement) ||
+      !(composer instanceof HTMLElement) ||
+      !(card instanceof HTMLElement) ||
+      !(close instanceof HTMLElement)
+    ) {
+      return null;
+    }
+    const stackRect = stack.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const closeRect = close.getBoundingClientRect();
+    return {
+      overlap:
+        stackRect.left < composerRect.right &&
+        stackRect.right > composerRect.left &&
+        stackRect.top < composerRect.bottom &&
+        stackRect.bottom > composerRect.top,
+      closeContained:
+        closeRect.left >= cardRect.left &&
+        closeRect.right <= cardRect.right &&
+        closeRect.top >= cardRect.top &&
+        closeRect.bottom <= cardRect.bottom,
+      stackOverflow: stack.scrollWidth > stack.clientWidth,
+    };
+  });
+  if (geometry === null) {
+    throw new Error("Notification stack or chat composer was not rendered");
+  }
+  if (geometry.overlap) {
+    throw new Error("Notification stack overlaps the chat composer");
+  }
+  if (!geometry.closeContained || geometry.stackOverflow) {
+    throw new Error(
+      `Notification close geometry overflowed: ${JSON.stringify(geometry)}`,
+    );
+  }
+  const dismissButtons = page.locator(
+    ".notification-stack .notification-close:visible",
+  );
+  while ((await dismissButtons.count()) > 0) {
+    await dismissButtons.first().click();
+  }
+  if (switchedToChat) {
+    await openTab(page, scenario, "git");
+  }
 }
 
 async function expectGitContextLabel(page, text) {
@@ -968,14 +1050,19 @@ async function waitForGitDiffReady(page) {
   }, "Git Monaco diff to render");
 }
 
-async function assertNoRunnerRequestFailed(page) {
-  if (await hasVisibleText(page, "Runner request failed")) {
-    throw new Error("Runner request failed notification is visible");
-  }
+async function assertNoRunnerRequestFailed(page, stableMs = 0) {
+  const deadline = Date.now() + stableMs;
+  do {
+    if (await hasVisibleText(page, "Runner request failed")) {
+      throw new Error("Runner request failed notification is visible");
+    }
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (true);
 }
 
 async function assertMobileGitTouchTargets(page, scenario) {
-  if (!scenario.mobile) {
+  if (!scenario.mobile && !scenario.tablet) {
     return;
   }
   const firstActionMenu = page.locator(".git-panel .git-action-menu").first();
@@ -995,6 +1082,24 @@ async function assertMobileGitTouchTargets(page, scenario) {
       );
     };
     const targets = [
+      ...Array.from(document.querySelectorAll(".git-panel-header .icon-button"))
+        .filter(visible)
+        .map((element, index) => ({
+          name: `Git header icon ${index + 1}`,
+          element,
+        })),
+      ...Array.from(document.querySelectorAll(".git-tabs button"))
+        .filter(visible)
+        .map((element, index) => ({
+          name: `Git view tab ${index + 1}`,
+          element,
+        })),
+      ...Array.from(document.querySelectorAll(".git-diff-header .icon-button"))
+        .filter(visible)
+        .map((element, index) => ({
+          name: `Git diff icon ${index + 1}`,
+          element,
+        })),
       ...Array.from(
         document.querySelectorAll(".git-panel .git-action-menu > summary"),
       ).map((element, index) => ({
@@ -1031,7 +1136,7 @@ async function assertMobileGitTouchTargets(page, scenario) {
   await page.keyboard.press("Escape");
   if (failures.length > 0) {
     throw new Error(
-      `mobile Git touch targets below 44px: ${JSON.stringify(failures)}`,
+      `touch Git targets below 44px: ${JSON.stringify(failures)}`,
     );
   }
 }
@@ -1100,13 +1205,24 @@ function sessionActionMenuItemName(actionName) {
 }
 
 async function assertResumeFromUi(page, scenario, session) {
+  const before = await requestJson(`/v1/sessions/${session.id}`);
+  const previousMessageCount = before.messages?.length ?? 0;
   await openTab(page, scenario, "chat");
   await clickSessionAction(page, scenario, "Resume session");
-  await expectText(page, `Resume session ${session.id}`);
+  const resumePrompt = `Resume session ${session.id}`;
   await waitFor(async () => {
     const payload = await requestJson(`/v1/sessions/${session.id}`);
-    return payload.session?.agentThreadId === "codex-thread-resumed";
-  }, `session ${session.id} to resume with codex-thread-resumed`);
+    const newMessages = payload.messages?.slice(previousMessageCount) ?? [];
+    return (
+      payload.session?.status === "completed" &&
+      payload.session?.agentThreadId === "codex-thread-resumed" &&
+      newMessages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.content.includes(resumePrompt),
+      )
+    );
+  }, `session ${session.id} to complete a new resumed turn`);
 }
 
 async function runNoRunnerJourney(browser) {
@@ -1348,7 +1464,7 @@ async function runAccountSecurityJourney(browser, scenario) {
 
     await expectTextIn(settings, "Runner Token");
     await expectTextIn(settings, runnerToken);
-    await expectTextIn(settings, "--token");
+    await expectTextIn(settings, "ROAM_RUNNER_TOKEN=");
     await expectTextIn(settings, "Copy command");
     if ((await settings.getByLabel("Current password").count()) !== 0) {
       throw new Error("change password form is visible before opening it");
@@ -1802,8 +1918,59 @@ async function closeDialog(dialog) {
 
 async function sendChatMessage(page, scenario, content) {
   await openTab(page, scenario, "chat");
-  await page.getByLabel("Chat composer").fill(content);
-  await page.getByRole("button", { name: "Send message" }).click();
+  const composer = page.locator("form.composer:visible");
+  const input = composer.getByLabel("Chat composer");
+  const send = composer.getByRole("button", { name: "Send message" });
+  await input.fill(content);
+  await waitFor(
+    async () =>
+      (await input.inputValue()) === content && (await send.isEnabled()),
+    "chat composer to contain the new draft and become sendable",
+  );
+  await send.click();
+}
+
+async function assertChatImageUpload(
+  page,
+  scenario,
+  session,
+  { imagePath, imageFileName },
+) {
+  await openTab(page, scenario, "chat");
+  const composer = page.locator("form.composer");
+  await composer.locator('input[type="file"]').setInputFiles(imagePath);
+  await composer.getByLabel("Attached images").waitFor();
+
+  const prompt = `describe attached image ${scenario.name} ${Date.now()}`;
+  await composer.getByLabel("Chat composer").fill(prompt);
+  await composer.getByRole("button", { name: "Send message" }).click();
+
+  await waitFor(async () => {
+    const detail = await requestJson(`/v1/sessions/${session.id}`);
+    const attachmentAvailable = detail.attachments?.some(
+      (attachment) =>
+        attachment.name === imageFileName && attachment.status === "available",
+    );
+    const agentReceivedImage = detail.messages?.some(
+      (message) =>
+        message.role === "assistant" && message.content.includes(imageFileName),
+    );
+    return attachmentAvailable && agentReceivedImage;
+  }, `mobile image ${imageFileName} to persist and reach the agent`);
+
+  const renderedImage = page
+    .getByLabel("Message images")
+    .locator("figure", { hasText: imageFileName })
+    .locator("img")
+    .last();
+  await waitFor(
+    async () =>
+      (await renderedImage.count()) > 0 &&
+      (await renderedImage.evaluate(
+        (image) => image instanceof HTMLImageElement && image.naturalWidth > 0,
+      )),
+    `mobile image ${imageFileName} to render in the conversation`,
+  );
 }
 
 async function sendChatMessageAndExpect(
@@ -1860,9 +2027,7 @@ async function openTab(page, scenario, tab) {
       .getByRole("navigation", { name: "Mobile tabs" })
       .getByRole("button", { name: label })
       .click();
-    return;
-  }
-  if (scenario.tablet) {
+  } else if (scenario.tablet) {
     const label =
       tab === "chat"
         ? "Conversation"
@@ -1873,19 +2038,18 @@ async function openTab(page, scenario, tab) {
       .getByRole("navigation", { name: "Tablet workspace tabs" })
       .getByRole("button", { name: label })
       .click();
-    return;
-  }
-  if (tab === "chat") {
+  } else if (tab === "chat") {
     await page
       .getByRole("navigation", { name: "Tool tabs" })
       .getByRole("button", { name: "Conversation" })
       .click();
-    return;
+  } else {
+    await page
+      .getByRole("navigation", { name: "Tool tabs" })
+      .getByRole("button", { name: titleCase(tab) })
+      .click();
   }
-  await page
-    .getByRole("navigation", { name: "Tool tabs" })
-    .getByRole("button", { name: titleCase(tab) })
-    .click();
+  await page.locator(`.app-shell.active-${tab}`).waitFor();
 }
 
 async function replaceEditorContent(page, fileName, value) {
@@ -1964,6 +2128,7 @@ async function ensureRunnerOnline() {
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const fakeCodex = await createFakeCodexCommand();
+  tempDirs.push(resolve(workspace, runnerDataDir));
   startChild(
     "runner",
     "pnpm",
@@ -1973,12 +2138,12 @@ async function ensureRunnerOnline() {
       "dev",
       "--server",
       wsUrl.toString(),
-      "--token",
-      runnerToken,
       "--runner-id",
       runnerId,
       "--workspace",
       workspace,
+      "--data-dir",
+      runnerDataDir,
       "--profile",
       "trusted",
       "--agent-plugin",
@@ -1989,6 +2154,7 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_TOKEN: runnerToken,
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
+      ROAM_RUNNER_DATA_DIR: runnerDataDir,
       ROAM_RUNNER_PROFILE: "trusted",
       ROAMCLI_AGENT_CODEX_MODE: "exec-json",
       ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
@@ -2014,6 +2180,7 @@ async function ensureRuntimeOptionsRunnerOnline() {
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const fakeCodex = await createFakeCodexAppServerCommand();
+  tempDirs.push(resolve(workspace, runtimeRunnerDataDir));
   startChild(
     "runtime-runner",
     "pnpm",
@@ -2023,12 +2190,12 @@ async function ensureRuntimeOptionsRunnerOnline() {
       "dev",
       "--server",
       wsUrl.toString(),
-      "--token",
-      runnerToken,
       "--runner-id",
       runtimeRunnerId,
       "--workspace",
       workspace,
+      "--data-dir",
+      runtimeRunnerDataDir,
       "--profile",
       "trusted",
       "--agent-plugin",
@@ -2039,6 +2206,7 @@ async function ensureRuntimeOptionsRunnerOnline() {
       ROAM_RUNNER_TOKEN: runnerToken,
       ROAM_RUNNER_ID: runtimeRunnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
+      ROAM_RUNNER_DATA_DIR: runtimeRunnerDataDir,
       ROAM_RUNNER_PROFILE: "trusted",
       ROAMCLI_AGENT_CODEX_MODE: "app-server",
       ROAMCLI_AGENT_CODEX_COMMAND: fakeCodex,

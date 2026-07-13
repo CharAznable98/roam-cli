@@ -20,6 +20,7 @@ import type {
   MessageAttachment,
   Project,
   ProjectPromptPreset,
+  RunnerCommand,
   RunnerRegistration,
   Session,
   SessionStatus,
@@ -67,6 +68,8 @@ interface SessionRow {
   archived_at: string | null;
   archived_by_project_id: string | null;
   agent_runtime_config_json: string | null;
+  pending_input_request_id: string | null;
+  creation_request_fingerprint: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,6 +109,23 @@ interface MessageAttachmentRow {
   deleted_at: string | null;
 }
 
+interface PendingInputDeliveryRow {
+  delivery_id: string;
+  kind: "input" | "start";
+  runner_id: string;
+  session_id: string;
+  input_request_id: string | null;
+  message_json: string;
+  attachments_json: string;
+  start_command_json: string | null;
+  persist_message: number;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface ApprovalRow {
   id: string;
   session_id: string;
@@ -137,6 +157,12 @@ interface RunnerRow {
   registration_json: string;
   online: number;
   last_seen_at: string;
+}
+
+interface RunnerEventStreamRow {
+  runner_id: string;
+  stream_id: string;
+  committed_through: number;
 }
 
 interface RunnerAgentRuntimeConfigSettingRow {
@@ -187,6 +213,30 @@ export type StoredMessageAttachment = MessageAttachment & {
   runnerStoragePath: string;
 };
 
+export interface PendingInputDelivery {
+  deliveryId: string;
+  kind: "input" | "start";
+  runnerId: string;
+  sessionId: string;
+  inputRequestId?: string;
+  message: Message;
+  attachments: StoredMessageAttachment[];
+  startCommand?: Extract<RunnerCommand, { type: "startSession" }>;
+  persistMessage?: boolean;
+  attemptCount: number;
+  lastAttemptAt?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PendingMessageDelivery {
+  messageId: string;
+  content: string;
+  createdAt: string;
+  attachments: MessageAttachment[];
+}
+
 export interface OwnerCredentialRecord {
   passwordRecordJson: string;
   createdAt: string;
@@ -202,6 +252,23 @@ export interface AuthSessionRecord {
   userAgent?: string;
   ipHash?: string;
 }
+
+export type RunnerEventStreamNegotiation =
+  | { ok: true; ackThrough: number }
+  | {
+      ok: false;
+      reason: "acknowledgement_ahead";
+      ackThrough: number;
+    };
+
+export type RunnerEventProcessingResult =
+  | { status: "committed" | "duplicate"; ackThrough: number }
+  | {
+      status: "gap";
+      ackThrough: number;
+      expectedSequence: number;
+    }
+  | { status: "stream_mismatch"; ackThrough: number };
 
 export class ServerStore {
   readonly dbPath: string;
@@ -401,17 +468,34 @@ export class ServerStore {
   }
 
   archiveProject(id: string, archivedAt: string): Project | undefined {
-    this.db
-      .prepare(
-        "UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ?",
-      )
-      .run(archivedAt, archivedAt, id);
-    this.db
-      .prepare(
-        "UPDATE sessions SET archived_at = ?, archived_by_project_id = ?, updated_at = ? WHERE project_id = ? AND archived_at IS NULL",
-      )
-      .run(archivedAt, id, archivedAt, id);
-    return this.getProject(id);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare(
+          `DELETE FROM pending_input_deliveries
+           WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+        )
+        .run(id);
+      this.db
+        .prepare(
+          "UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(archivedAt, archivedAt, id);
+      this.db
+        .prepare(
+          `UPDATE sessions
+           SET archived_at = ?, archived_by_project_id = ?,
+               status = CASE WHEN status = 'pending' THEN 'stopped' ELSE status END,
+               updated_at = ?
+           WHERE project_id = ? AND archived_at IS NULL`,
+        )
+        .run(archivedAt, id, archivedAt, id);
+      this.db.exec("COMMIT");
+      return this.getProject(id);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   restoreProject(id: string, restoredAt: string): Project | undefined {
@@ -573,6 +657,36 @@ export class ServerStore {
     return session;
   }
 
+  createSessionWithPendingStart(
+    session: Session,
+    delivery: Omit<
+      PendingInputDelivery,
+      "attemptCount" | "lastAttemptAt" | "lastError" | "updatedAt"
+    >,
+    creationRequestFingerprint?: string,
+  ): { session: Session; delivery: PendingInputDelivery } {
+    if (delivery.kind !== "start" || !delivery.startCommand) {
+      throw new Error("pending session start requires a start command");
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const created = this.createSession(session);
+      if (creationRequestFingerprint) {
+        this.db
+          .prepare(
+            "UPDATE sessions SET creation_request_fingerprint = ? WHERE id = ?",
+          )
+          .run(creationRequestFingerprint, session.id);
+      }
+      const pending = this.putPendingInputDelivery(delivery);
+      this.db.exec("COMMIT");
+      return { session: created, delivery: pending };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listSessions(options: { includeArchived?: boolean } = {}): Session[] {
     const rows = this.db
       .prepare(
@@ -591,18 +705,39 @@ export class ServerStore {
     return row ? toSession(row) : undefined;
   }
 
+  getSessionCreationRequestFingerprint(id: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT creation_request_fingerprint FROM sessions WHERE id = ?")
+      .get(id) as { creation_request_fingerprint: string | null } | undefined;
+    return row?.creation_request_fingerprint ?? undefined;
+  }
+
   deleteSession(id: string): boolean {
     const result = this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
     return result.changes > 0;
   }
 
   archiveSession(id: string, archivedAt: string): Session | undefined {
-    this.db
-      .prepare(
-        "UPDATE sessions SET archived_at = ?, archived_by_project_id = NULL, updated_at = ? WHERE id = ?",
-      )
-      .run(archivedAt, archivedAt, id);
-    return this.getSession(id);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare("DELETE FROM pending_input_deliveries WHERE session_id = ?")
+        .run(id);
+      this.db
+        .prepare(
+          `UPDATE sessions
+           SET archived_at = ?, archived_by_project_id = NULL,
+               status = CASE WHEN status = 'pending' THEN 'stopped' ELSE status END,
+               updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(archivedAt, archivedAt, id);
+      this.db.exec("COMMIT");
+      return this.getSession(id);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   restoreSession(id: string, restoredAt: string): Session | undefined {
@@ -620,9 +755,55 @@ export class ServerStore {
     updatedAt: string,
   ): Session | undefined {
     this.db
-      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
-      .run(status, updatedAt, id);
+      .prepare(
+        `UPDATE sessions
+         SET status = ?,
+             pending_input_request_id = CASE
+               WHEN ? = 'waiting_input' THEN pending_input_request_id
+               ELSE NULL
+             END,
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(status, status, updatedAt, id);
     return this.getSession(id);
+  }
+
+  setPendingUserInputRequest(sessionId: string, inputRequestId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions
+         SET pending_input_request_id = ?
+         WHERE id = ? AND status NOT IN ('completed', 'failed', 'stopped')`,
+      )
+      .run(inputRequestId, sessionId);
+  }
+
+  getPendingUserInputRequest(sessionId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT pending_input_request_id
+         FROM sessions
+         WHERE id = ? AND status = 'waiting_input'`,
+      )
+      .get(sessionId) as
+      | { pending_input_request_id: string | null }
+      | undefined;
+    return row?.pending_input_request_id ?? undefined;
+  }
+
+  clearPendingUserInputRequest(
+    sessionId: string,
+    inputRequestId: string,
+  ): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE sessions
+         SET pending_input_request_id = NULL
+         WHERE id = ? AND pending_input_request_id = ?`,
+      )
+      .run(sessionId, inputRequestId);
+    return result.changes > 0;
   }
 
   updateSessionTitle(
@@ -724,6 +905,280 @@ export class ServerStore {
     return message;
   }
 
+  getMessage(sessionId: string, messageId: string): Message | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM messages WHERE session_id = ? AND id = ?")
+      .get(sessionId, messageId) as MessageRow | undefined;
+    return row ? toMessage(row) : undefined;
+  }
+
+  getMessageById(messageId: string): Message | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM messages WHERE id = ?")
+      .get(messageId) as MessageRow | undefined;
+    return row ? toMessage(row) : undefined;
+  }
+
+  putPendingInputDelivery(
+    delivery: Omit<
+      PendingInputDelivery,
+      "attemptCount" | "lastAttemptAt" | "lastError" | "updatedAt"
+    >,
+  ): PendingInputDelivery {
+    this.db
+      .prepare(
+        `INSERT INTO pending_input_deliveries
+           (delivery_id, kind, runner_id, session_id, input_request_id, message_json,
+            attachments_json, start_command_json, persist_message, attempt_count,
+            created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+         ON CONFLICT(delivery_id) DO NOTHING`,
+      )
+      .run(
+        delivery.deliveryId,
+        delivery.kind,
+        delivery.runnerId,
+        delivery.sessionId,
+        delivery.inputRequestId ?? null,
+        JSON.stringify(delivery.message),
+        JSON.stringify(delivery.attachments),
+        delivery.startCommand ? JSON.stringify(delivery.startCommand) : null,
+        delivery.persistMessage === false ? 0 : 1,
+        delivery.createdAt,
+        delivery.createdAt,
+      );
+    const stored = this.getPendingInputDelivery(delivery.deliveryId);
+    if (!stored) {
+      throw new Error("failed to persist pending input delivery");
+    }
+    return stored;
+  }
+
+  preparePendingSessionStart(
+    delivery: Omit<
+      PendingInputDelivery,
+      "attemptCount" | "lastAttemptAt" | "lastError" | "updatedAt"
+    >,
+    restartedAt: string,
+  ): { delivery: PendingInputDelivery; session: Session } {
+    if (delivery.kind !== "start" || !delivery.startCommand) {
+      throw new Error("pending session start requires a start command");
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const stored = this.putPendingInputDelivery(delivery);
+      const pending = this.updateSessionStatus(
+        delivery.sessionId,
+        "pending",
+        restartedAt,
+      );
+      const restarted = pending?.worktreeDeletedAt
+        ? this.clearSessionWorktreeDeleted(delivery.sessionId, restartedAt)
+        : pending;
+      if (!restarted) {
+        throw new Error("session no longer exists");
+      }
+      this.db.exec("COMMIT");
+      return { delivery: stored, session: restarted };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  promotePendingInputDeliveryToStart(
+    deliveryId: string,
+    startCommand: Extract<RunnerCommand, { type: "startSession" }>,
+    restartedAt: string,
+  ): { delivery: PendingInputDelivery; session: Session } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const pending = this.getPendingInputDelivery(deliveryId);
+      if (!pending || pending.kind !== "input") {
+        throw new Error("pending input delivery no longer exists");
+      }
+      this.db
+        .prepare(
+          `UPDATE pending_input_deliveries
+           SET kind = 'start', input_request_id = NULL, start_command_json = ?,
+               attempt_count = 0, last_attempt_at = NULL, last_error = NULL,
+               updated_at = ?
+           WHERE delivery_id = ? AND kind = 'input'`,
+        )
+        .run(JSON.stringify(startCommand), restartedAt, deliveryId);
+      const restarted = this.updateSessionStatus(
+        pending.sessionId,
+        "pending",
+        restartedAt,
+      );
+      if (!restarted) {
+        throw new Error("session no longer exists");
+      }
+      const promoted = this.getPendingInputDelivery(deliveryId);
+      if (!promoted || promoted.kind !== "start") {
+        throw new Error("failed to promote pending input delivery");
+      }
+      this.db.exec("COMMIT");
+      return { delivery: promoted, session: restarted };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getPendingInputDelivery(
+    deliveryId: string,
+  ): PendingInputDelivery | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM pending_input_deliveries WHERE delivery_id = ?")
+      .get(deliveryId) as PendingInputDeliveryRow | undefined;
+    return row ? toPendingInputDelivery(row) : undefined;
+  }
+
+  listPendingInputDeliveries(runnerId: string): PendingInputDelivery[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM pending_input_deliveries
+         WHERE runner_id = ?
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(runnerId) as unknown as PendingInputDeliveryRow[];
+    return rows.map(toPendingInputDelivery);
+  }
+
+  markPendingInputDeliveryAttempt(
+    deliveryId: string,
+    attemptedAt: string,
+    error?: string,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE pending_input_deliveries
+         SET attempt_count = attempt_count + 1,
+             last_attempt_at = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE delivery_id = ?`,
+      )
+      .run(attemptedAt, error ?? null, attemptedAt, deliveryId);
+  }
+
+  deletePendingInputDelivery(deliveryId: string): boolean {
+    return (
+      this.db
+        .prepare("DELETE FROM pending_input_deliveries WHERE delivery_id = ?")
+        .run(deliveryId).changes > 0
+    );
+  }
+
+  cancelPendingInputDeliveriesForSession(
+    sessionId: string,
+    cancelledAt: string,
+  ): { deleted: number; session: Session | undefined } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const deleted = Number(
+        this.db
+          .prepare("DELETE FROM pending_input_deliveries WHERE session_id = ?")
+          .run(sessionId).changes,
+      );
+      if (deleted > 0) {
+        this.db
+          .prepare(
+            `UPDATE sessions SET status = 'stopped', updated_at = ?
+             WHERE id = ? AND status = 'pending'`,
+          )
+          .run(cancelledAt, sessionId);
+      }
+      this.db.exec("COMMIT");
+      return { deleted, session: this.getSession(sessionId) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  rejectPendingSessionStart(
+    deliveryId: string,
+    rejectedAt: string,
+  ): Session | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const pending = this.getPendingInputDelivery(deliveryId);
+      if (!pending) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      this.deletePendingInputDelivery(deliveryId);
+      if (pending.kind === "start") {
+        this.db
+          .prepare(
+            `UPDATE sessions SET status = 'failed', updated_at = ?
+             WHERE id = ? AND status = 'pending'`,
+          )
+          .run(rejectedAt, pending.sessionId);
+      }
+      this.db.exec("COMMIT");
+      return this.getSession(pending.sessionId);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  finalizePendingInputDelivery(deliveryId: string):
+    | {
+        message: Message;
+        attachments: StoredMessageAttachment[];
+        created: boolean;
+      }
+    | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const pending = this.getPendingInputDelivery(deliveryId);
+      if (!pending) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const shouldPersistMessage = pending.persistMessage !== false;
+      const existing = shouldPersistMessage
+        ? this.getMessage(pending.message.sessionId, pending.message.id)
+        : undefined;
+      if (
+        existing &&
+        (existing.role !== pending.message.role ||
+          existing.content !== pending.message.content ||
+          existing.createdAt !== pending.message.createdAt)
+      ) {
+        throw new Error(
+          "input delivery message id conflicts with existing data",
+        );
+      }
+      if (shouldPersistMessage && !existing) {
+        this.addMessage(pending.message);
+      }
+      if (shouldPersistMessage) {
+        this.addMessageAttachments(pending.attachments);
+      }
+      if (pending.inputRequestId) {
+        this.clearPendingUserInputRequest(
+          pending.sessionId,
+          pending.inputRequestId,
+        );
+      }
+      this.deletePendingInputDelivery(deliveryId);
+      this.db.exec("COMMIT");
+      return {
+        message: pending.message,
+        attachments: pending.attachments,
+        created: shouldPersistMessage && !existing,
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   applyAssistantOutput(
     sessionId: string,
     outputId: string,
@@ -786,6 +1241,10 @@ export class ServerStore {
     return rows.map(toMessage);
   }
 
+  listVisibleMessages(sessionId: string): Message[] {
+    return this.listMessages(sessionId);
+  }
+
   addAgentActivity(activity: AgentActivity): AgentActivity {
     this.db
       .prepare(
@@ -846,6 +1305,33 @@ export class ServerStore {
     return this.listStoredMessageAttachments(sessionId).map(
       toPublicMessageAttachment,
     );
+  }
+
+  listVisibleMessageAttachments(sessionId: string): MessageAttachment[] {
+    return this.listMessageAttachments(sessionId);
+  }
+
+  listPendingMessageDeliveries(sessionId: string): PendingMessageDelivery[] {
+    return this.listPendingInputDeliveriesForSession(sessionId)
+      .filter((delivery) => delivery.persistMessage !== false)
+      .map((delivery) => ({
+        messageId: delivery.message.id,
+        content: delivery.message.content,
+        createdAt: delivery.createdAt,
+        attachments: delivery.attachments.map(toPublicMessageAttachment),
+      }));
+  }
+
+  private listPendingInputDeliveriesForSession(
+    sessionId: string,
+  ): PendingInputDelivery[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM pending_input_deliveries
+         WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(sessionId) as unknown as PendingInputDeliveryRow[];
+    return rows.map(toPendingInputDelivery);
   }
 
   listStoredMessageAttachments(sessionId: string): StoredMessageAttachment[] {
@@ -1010,6 +1496,97 @@ export class ServerStore {
     );
   }
 
+  negotiateRunnerEventStream(
+    runnerId: string,
+    streamId: string,
+    acknowledgedThrough: number,
+  ): RunnerEventStreamNegotiation {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.getRunnerEventStream(runnerId, streamId);
+      if (!existing) {
+        if (acknowledgedThrough !== 0) {
+          this.db.exec("COMMIT");
+          return {
+            ok: false,
+            reason: "acknowledgement_ahead",
+            ackThrough: 0,
+          };
+        }
+        this.db
+          .prepare(
+            `INSERT INTO runner_event_streams (runner_id, stream_id, committed_through)
+             VALUES (?, ?, 0)`,
+          )
+          .run(runnerId, streamId);
+        this.db.exec("COMMIT");
+        return { ok: true, ackThrough: 0 };
+      }
+      if (acknowledgedThrough > existing.committed_through) {
+        this.db.exec("COMMIT");
+        return {
+          ok: false,
+          reason: "acknowledgement_ahead",
+          ackThrough: existing.committed_through,
+        };
+      }
+      this.db.exec("COMMIT");
+      return { ok: true, ackThrough: existing.committed_through };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  processRunnerEvent(
+    runnerId: string,
+    streamId: string,
+    sequence: number,
+    handle: () => void,
+  ): RunnerEventProcessingResult {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const stream = this.getRunnerEventStream(runnerId, streamId);
+      if (!stream) {
+        this.db.exec("COMMIT");
+        return {
+          status: "stream_mismatch",
+          ackThrough: 0,
+        };
+      }
+      if (sequence <= stream.committed_through) {
+        this.db.exec("COMMIT");
+        return { status: "duplicate", ackThrough: stream.committed_through };
+      }
+      const expectedSequence = stream.committed_through + 1;
+      if (sequence !== expectedSequence) {
+        this.db.exec("COMMIT");
+        return {
+          status: "gap",
+          ackThrough: stream.committed_through,
+          expectedSequence,
+        };
+      }
+
+      handle();
+      const update = this.db
+        .prepare(
+          `UPDATE runner_event_streams
+           SET committed_through = ?
+           WHERE runner_id = ? AND stream_id = ? AND committed_through = ?`,
+        )
+        .run(sequence, runnerId, streamId, stream.committed_through);
+      if (update.changes !== 1) {
+        throw new Error("runner event stream changed during transaction");
+      }
+      this.db.exec("COMMIT");
+      return { status: "committed", ackThrough: sequence };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listRunnerAgentRuntimeConfigSettings(): RunnerAgentRuntimeConfigSetting[] {
     const rows = this.db
       .prepare(
@@ -1090,6 +1667,53 @@ export class ServerStore {
     return job;
   }
 
+  getGitJob(id: string): GitJob | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM git_jobs WHERE id = ?")
+      .get(id) as GitJobRow | undefined;
+    return row ? toGitJob(row) : undefined;
+  }
+
+  listActiveGitJobs(): GitJob[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM git_jobs
+         WHERE status IN ('queued', 'running')
+         ORDER BY created_at ASC`,
+      )
+      .all() as unknown as GitJobRow[];
+    return rows.map(toGitJob);
+  }
+
+  hasActiveWorktreeRemovalJob(sessionId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM git_jobs
+         WHERE session_id = ?
+           AND operation IN ('remove_worktree', 'archive_remove_worktree')
+           AND status IN ('queued', 'running')
+         LIMIT 1`,
+      )
+      .get(sessionId);
+    return row !== undefined;
+  }
+
+  listSucceededArchiveRemovalJobsPendingSessionArchive(): GitJob[] {
+    const rows = this.db
+      .prepare(
+        `SELECT git_jobs.*
+         FROM git_jobs
+         JOIN sessions ON sessions.id = git_jobs.session_id
+         WHERE git_jobs.operation = 'archive_remove_worktree'
+           AND git_jobs.status = 'succeeded'
+           AND sessions.archived_at IS NULL
+         ORDER BY git_jobs.finished_at ASC`,
+      )
+      .all() as unknown as GitJobRow[];
+    return rows.map(toGitJob);
+  }
+
   listGitJobs(projectId: string): GitJob[] {
     const rows = this.db
       .prepare(
@@ -1115,6 +1739,8 @@ export class ServerStore {
         pinned_at TEXT,
         archived_at TEXT,
         archived_by_project_id TEXT,
+        pending_input_request_id TEXT,
+        creation_request_fingerprint TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -1185,6 +1811,27 @@ export class ServerStore {
         FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS pending_input_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'input',
+        runner_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        input_request_id TEXT,
+        message_json TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        start_command_json TEXT,
+        persist_message INTEGER NOT NULL DEFAULT 1,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS pending_input_deliveries_runner_idx
+        ON pending_input_deliveries(runner_id, created_at);
+
       CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -1218,6 +1865,13 @@ export class ServerStore {
         registration_json TEXT NOT NULL,
         online INTEGER NOT NULL DEFAULT 0,
         last_seen_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS runner_event_streams (
+        runner_id TEXT NOT NULL,
+        stream_id TEXT NOT NULL,
+        committed_through INTEGER NOT NULL DEFAULT 0 CHECK (committed_through >= 0),
+        PRIMARY KEY (runner_id, stream_id)
       );
 
       CREATE TABLE IF NOT EXISTS runner_agent_runtime_config_settings (
@@ -1283,6 +1937,23 @@ export class ServerStore {
     this.addColumnIfMissing("sessions", "archived_at", "TEXT");
     this.addColumnIfMissing("sessions", "archived_by_project_id", "TEXT");
     this.addColumnIfMissing("sessions", "agent_runtime_config_json", "TEXT");
+    this.addColumnIfMissing("sessions", "pending_input_request_id", "TEXT");
+    this.addColumnIfMissing("sessions", "creation_request_fingerprint", "TEXT");
+    this.addColumnIfMissing(
+      "pending_input_deliveries",
+      "start_command_json",
+      "TEXT",
+    );
+    this.addColumnIfMissing(
+      "pending_input_deliveries",
+      "kind",
+      "TEXT NOT NULL DEFAULT 'input'",
+    );
+    this.addColumnIfMissing(
+      "pending_input_deliveries",
+      "persist_message",
+      "INTEGER NOT NULL DEFAULT 1",
+    );
     this.addColumnIfMissing("projects", "pinned_at", "TEXT");
     this.addColumnIfMissing(
       "messages",
@@ -1305,6 +1976,17 @@ export class ServerStore {
       this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
+
+  private getRunnerEventStream(
+    runnerId: string,
+    streamId: string,
+  ): RunnerEventStreamRow | undefined {
+    return this.db
+      .prepare(
+        "SELECT * FROM runner_event_streams WHERE runner_id = ? AND stream_id = ?",
+      )
+      .get(runnerId, streamId) as RunnerEventStreamRow | undefined;
+  }
 }
 
 function toProject(row: ProjectRow): Project {
@@ -1318,6 +2000,34 @@ function toProject(row: ProjectRow): Project {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActiveAt: row.last_active_at,
+  };
+}
+
+function toPendingInputDelivery(
+  row: PendingInputDeliveryRow,
+): PendingInputDelivery {
+  return {
+    deliveryId: row.delivery_id,
+    kind: row.kind,
+    runnerId: row.runner_id,
+    sessionId: row.session_id,
+    ...(row.input_request_id ? { inputRequestId: row.input_request_id } : {}),
+    message: JSON.parse(row.message_json) as Message,
+    attachments: JSON.parse(row.attachments_json) as StoredMessageAttachment[],
+    ...(row.start_command_json
+      ? {
+          startCommand: JSON.parse(row.start_command_json) as Extract<
+            RunnerCommand,
+            { type: "startSession" }
+          >,
+        }
+      : {}),
+    ...(row.persist_message === 0 ? { persistMessage: false } : {}),
+    attemptCount: row.attempt_count,
+    ...(row.last_attempt_at ? { lastAttemptAt: row.last_attempt_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

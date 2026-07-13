@@ -29,8 +29,7 @@ import {
   ApiUpdateProjectPromptPresetSchema,
   ApiUpdateSessionSchema,
   ApiWriteFileSchema,
-  DEFAULT_MAX_IMAGE_BYTES,
-  DEFAULT_MAX_IMAGES_PER_TURN,
+  MAX_TOTAL_IMAGE_BYTES_PER_TURN,
   nowIso,
 } from "@roamcli/shared/protocol";
 import { newId } from "../infra/ids.js";
@@ -54,8 +53,7 @@ import {
 } from "./schemas.js";
 
 const IMAGE_UPLOAD_JSON_BODY_LIMIT_BYTES =
-  Math.ceil(DEFAULT_MAX_IMAGE_BYTES * DEFAULT_MAX_IMAGES_PER_TURN * (4 / 3)) +
-  1024 * 1024;
+  Math.ceil(MAX_TOTAL_IMAGE_BYTES_PER_TURN * (4 / 3)) + 1024 * 1024;
 
 function toFileTreeQuery(parsed: {
   path: string;
@@ -392,6 +390,9 @@ function registerSessionRoutes(
     return {
       session,
       messages: context.store.listMessages(session.id),
+      pendingMessageDeliveries: context.store.listPendingMessageDeliveries(
+        session.id,
+      ),
       activities: context.store.listAgentActivities(session.id),
       attachments: context.store.listMessageAttachments(session.id),
       approvals: context.store.listApprovals(session.id),
@@ -451,7 +452,7 @@ function registerSessionRoutes(
         }
         return reply.code(400).send({ error: result.error });
       }
-      return reply.code(201).send(result.value);
+      return reply.code(result.value.queued ? 202 : 201).send(result.value);
     },
   );
 

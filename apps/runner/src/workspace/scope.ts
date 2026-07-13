@@ -1,5 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 
 export interface FileRequestScope {
   workspace: string;
@@ -21,6 +21,80 @@ export function resolveWorkspaceChild(workspace: string, path: string): string {
   return candidate;
 }
 
+export async function resolveWorkspaceDirectory(
+  workspace: string,
+  path: string,
+): Promise<string> {
+  const workspacePath = resolve(workspace);
+  const candidate = isAbsolute(path)
+    ? resolve(path)
+    : resolve(workspacePath, path);
+  const realWorkspace = await realpath(workspacePath);
+  let realCandidate: string;
+  try {
+    realCandidate = await realpath(candidate);
+  } catch (error: unknown) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    const ancestor = await nearestExistingAncestor(
+      candidate,
+      parse(candidate).root,
+    );
+    const realAncestor = await realpath(ancestor);
+    const unresolvedCandidate = resolve(
+      realAncestor,
+      relative(ancestor, candidate),
+    );
+    if (!isInside(realWorkspace, unresolvedCandidate)) {
+      throw new Error(`Path escapes workspace: ${path}`);
+    }
+    throw error;
+  }
+  if (!isInside(realWorkspace, realCandidate)) {
+    throw new Error(`Path escapes workspace: ${path}`);
+  }
+  const candidateStat = await stat(realCandidate);
+  if (!candidateStat.isDirectory()) {
+    throw new Error(`Path is not a directory: ${path}`);
+  }
+  return realCandidate;
+}
+
+export async function resolveWorkspaceCreationPath(
+  workspace: string,
+  path: string,
+): Promise<string> {
+  const root = resolve(workspace);
+  const candidate = isAbsolute(path) ? resolve(path) : resolve(root, path);
+  const realWorkspace = await realpath(root);
+  try {
+    const realCandidate = await realpath(candidate);
+    if (!isInside(realWorkspace, realCandidate)) {
+      throw new Error(`Path escapes workspace: ${path}`);
+    }
+    return realCandidate;
+  } catch (error: unknown) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
+
+  const ancestor = await nearestExistingAncestor(
+    candidate,
+    parse(candidate).root,
+  );
+  const realAncestor = await realpath(ancestor);
+  const realCandidate = resolve(realAncestor, relative(ancestor, candidate));
+  if (
+    !isInside(realWorkspace, realAncestor) ||
+    !isInside(realWorkspace, realCandidate)
+  ) {
+    throw new Error(`Path escapes workspace: ${path}`);
+  }
+  return realCandidate;
+}
+
 export function resolveSessionChild(sessionCwd: string, path: string): string {
   const root = resolve(sessionCwd);
   const candidate = resolve(root, path);
@@ -37,9 +111,6 @@ export async function resolveExistingPath(
   const workspace = resolve(scope.workspace);
   const sessionCwd = resolve(scope.sessionCwd);
   const candidate = resolveSessionChild(sessionCwd, path);
-  if (!isInside(workspace, sessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
 
   const [realWorkspace, realSessionCwd, realCandidate] = await Promise.all([
     realpath(workspace),
@@ -58,24 +129,27 @@ export async function resolveExistingPath(
 export async function resolveWritableExistingFilePath(
   scope: FileRequestScope,
   path: string,
-): Promise<{ path: string }> {
+): Promise<{ path: string; nodePath: string }> {
   const target = await resolveWritablePathBase(scope, path);
   try {
     const realCandidate = await realpath(target.path);
-    const candidateStat = await stat(target.path);
+    const candidateStat = await stat(realCandidate);
     if (!candidateStat.isFile()) {
       throw new Error(`Path is not a file: ${path}`);
     }
     if (!isInside(target.realSessionCwd, realCandidate)) {
       throw new Error(`Path escapes session cwd: ${path}`);
     }
+    return {
+      path: realCandidate,
+      nodePath: toNodePath(target.sessionCwd, target.path),
+    };
   } catch (error: unknown) {
     if (isMissingPathError(error)) {
       throw new Error(`Path does not exist: ${path}`);
     }
     throw error;
   }
-  return { path: target.path };
 }
 
 export async function resolvePatchTargetPath(
@@ -117,7 +191,8 @@ export async function resolvePatchTargetPath(
 }
 
 export function isInside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${sep}`);
+  const childPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return candidate === root || candidate.startsWith(childPrefix);
 }
 
 export function toNodePath(sessionCwd: string, path: string): string {
@@ -136,9 +211,6 @@ async function resolveWritablePathBase(
   const workspace = resolve(scope.workspace);
   const sessionCwd = resolve(scope.sessionCwd);
   const candidate = resolveSessionChild(sessionCwd, path);
-  if (!isInside(workspace, sessionCwd)) {
-    throw new Error(`Session cwd escapes workspace: ${scope.sessionCwd}`);
-  }
 
   const [realWorkspace, realSessionCwd] = await Promise.all([
     realpath(workspace),

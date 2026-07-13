@@ -11,8 +11,12 @@ import {
   RunnerConnection,
   type WebSocketFactory,
 } from "../transport/connection.js";
-import { persistRunnerConfig, resolveRunnerConfig } from "./cli.js";
-import { createRunnerRegistration, runnerStateDir } from "./registration.js";
+import {
+  persistRunnerConfig,
+  resolveRunnerDataDir,
+  resolveRunnerConfig,
+} from "./cli.js";
+import { createRunnerRegistration } from "./registration.js";
 
 export interface CreateRunnerOptions {
   createSocket?: WebSocketFactory;
@@ -23,6 +27,7 @@ export async function createRunner(
   options: CreateRunnerOptions = {},
 ): Promise<RunnerConnection> {
   const { options: cli, configPath } = await resolveRunnerConfig(argv);
+  const stateDir = await resolveRunnerDataDir(cli.workspace, cli.dataDir, true);
   const registry = await loadAgentRegistry(cli.profile, cli.agentPlugins);
   await persistRunnerConfig(configPath, cli);
   const registration = createRunnerRegistration({
@@ -33,7 +38,6 @@ export async function createRunner(
     capabilities: registry.capabilities,
   });
 
-  const stateDir = runnerStateDir(cli.workspace, cli.dataDir);
   const audit = new AuditLog(join(stateDir, "audit.jsonl"));
   const cache = new EventCache(join(stateDir, "pending-events.jsonl"));
   let connection: RunnerConnection;
