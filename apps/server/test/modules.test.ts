@@ -956,6 +956,55 @@ describe("SessionCommandService", () => {
     expect(store.listMessages("session-1")).toHaveLength(1);
   });
 
+  it("rejects conflicting concurrent retries with the same client request ID", async () => {
+    const hub = new ConnectionHub(store);
+    const rpc = new RunnerRpcClient(hub);
+    const service = new SessionCommandService(
+      store,
+      hub,
+      new ApprovalService(store, hub),
+      rpc,
+      100,
+    );
+    const runnerMessages: RunnerCommand[] = [];
+    store.createProject(projectRecord());
+    store.createSession(sessionRecord());
+    hub.registerRunner(runnerRegistration(), fakeSocket(runnerMessages));
+
+    const first = service.createUserMessage("session-1", {
+      requestId: "conflicting-logical-request",
+      content: "accepted content",
+    });
+    await vi.waitFor(() => expect(runnerMessages).toHaveLength(1));
+    await expect(
+      service.createUserMessage("session-1", {
+        requestId: "conflicting-logical-request",
+        content: "conflicting content",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "INPUT_REQUEST_CONFLICT",
+    });
+
+    const command = runnerMessages[0];
+    if (command?.type !== "checkSessionStatus") {
+      throw new Error("stable input command was not sent");
+    }
+    rpc.resolveRunnerResponse("runner-1", {
+      requestId: command.requestId,
+      sessionId: "session-1",
+      active: true,
+      inputReceipt: {
+        deliveryId: command.deliverInput!.deliveryId!,
+        ownership: "owned",
+      },
+    });
+    await expect(first).resolves.toMatchObject({ ok: true });
+    expect(store.listMessages("session-1")).toEqual([
+      expect.objectContaining({ content: "accepted content" }),
+    ]);
+  });
+
   it("coalesces same-request retry and reconcile through one legacy fallback delivery", async () => {
     const hub = new ConnectionHub(store);
     const rpc = new RunnerRpcClient(hub);
@@ -2752,10 +2801,7 @@ describe("SessionCommandService", () => {
       ).toMatchObject({ status: "available" });
 
       const replayedCommands: RunnerCommand[] = [];
-      hub.registerRunner(
-        runnerRegistration(),
-        fakeSocket(replayedCommands),
-      );
+      hub.registerRunner(runnerRegistration(), fakeSocket(replayedCommands));
       const replay = service.reconcileAttachmentCleanupJobs("runner-1");
       await vi.waitFor(() => {
         expect(
@@ -2773,7 +2819,9 @@ describe("SessionCommandService", () => {
         > => command.type === "deleteSessionAttachments",
       );
       if (!deletion) {
-        throw new Error("cancelled pending attachment cleanup was not replayed");
+        throw new Error(
+          "cancelled pending attachment cleanup was not replayed",
+        );
       }
       expect(deletion.attachments).toEqual([
         {
@@ -3000,6 +3048,55 @@ describe("SessionCommandService", () => {
       message: "runner did not accept the pending session start",
       code: "START_NOT_OWNED",
     });
+  });
+
+  it("queues pending start attachments for cleanup when rejecting delivery", () => {
+    const createdAt = "2026-06-05T00:00:00.000Z";
+    store.createProject(projectRecord());
+    const session = store.createSession({
+      ...sessionRecord(),
+      status: "pending",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const attachment = storedAttachment("rejected-start", createdAt);
+    store.preparePendingSessionStart(
+      {
+        deliveryId: "rejected-start",
+        kind: "start",
+        runnerId: session.runnerId,
+        sessionId: session.id,
+        message: pendingUserMessage(
+          "rejected-start",
+          "start with rejected image",
+          createdAt,
+        ),
+        attachments: [attachment],
+        startCommand: {
+          type: "startSession",
+          requestId: "request-rejected-start",
+          deliveryId: "rejected-start",
+          session,
+          prompt: "start with rejected image",
+          attachments: [toRunnerAttachment(attachment)],
+        },
+        initialSessionCreate: true,
+        createdAt,
+      },
+      createdAt,
+    );
+
+    store.rejectPendingSessionStart("rejected-start", createdAt);
+
+    expect(store.getPendingInputDelivery("rejected-start")).toBeUndefined();
+    expect(store.listAttachmentCleanupJobs("project-1")).toEqual([
+      expect.objectContaining({
+        sessionId: session.id,
+        runnerId: session.runnerId,
+        attachmentId: attachment.id,
+        runnerStoragePath: attachment.runnerStoragePath,
+      }),
+    ]);
   });
 
   it("keeps a waiting input pending when a restarted runner does not own it", async () => {
@@ -4000,7 +4097,9 @@ describe("SessionCommandService", () => {
     for (const shape of shapes) {
       const sessionId = `session-receipt-migration-${shape.name}`;
       const deliveryId = `delivery-receipt-migration-${shape.name}`;
-      const runnerId = shape.legacy ? legacyRunner.runnerId : durableRunner.runnerId;
+      const runnerId = shape.legacy
+        ? legacyRunner.runnerId
+        : durableRunner.runnerId;
       const projectId = `project-receipt-migration-${shape.name}`;
       store.createProject({
         ...projectRecord(),
@@ -4708,20 +4807,24 @@ describe("SessionCommandService", () => {
     expect(store.getSession("session-1")?.worktreeDeletedAt).toBeUndefined();
 
     const now = "2000-01-01T00:00:00.000Z";
-    runnerEvents.handle({
-      type: "gitJobResult",
-      job: {
-        id: removeCommand?.requestId ?? "",
-        projectId: "project-1",
-        sessionId: "session-1",
-        contextKind: "session_worktree",
-        operation: "archive_remove_worktree",
-        status: "succeeded",
-        createdAt: now,
-        startedAt: now,
-        finishedAt: now,
+    runnerEvents.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: removeCommand?.requestId ?? "",
+          projectId: "project-1",
+          sessionId: "session-1",
+          contextKind: "session_worktree",
+          operation: "archive_remove_worktree",
+          status: "succeeded",
+          createdAt: now,
+          startedAt: now,
+          finishedAt: now,
+        },
       },
-    }, false, "runner-1");
+      false,
+      "runner-1",
+    );
 
     const archived = store.getSession("session-1");
     expect(archived).toMatchObject({
@@ -4847,19 +4950,23 @@ describe("SessionCommandService", () => {
       }),
     );
     const lateFinishedAt = new Date().toISOString();
-    runnerEvents.handle({
-      type: "gitJobResult",
-      job: {
-        id: stageCommand.requestId,
-        projectId: "project-1",
-        contextKind: "project",
-        operation: "stage",
-        status: "succeeded",
-        createdAt: lateFinishedAt,
-        startedAt: lateFinishedAt,
-        finishedAt: lateFinishedAt,
+    runnerEvents.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: stageCommand.requestId,
+          projectId: "project-1",
+          contextKind: "project",
+          operation: "stage",
+          status: "succeeded",
+          createdAt: lateFinishedAt,
+          startedAt: lateFinishedAt,
+          finishedAt: lateFinishedAt,
+        },
       },
-    }, false, "runner-1");
+      false,
+      "runner-1",
+    );
     expect(store.listGitJobs("project-1")).toContainEqual(
       expect.objectContaining({
         id: stageCommand.requestId,
@@ -4973,22 +5080,26 @@ describe("SessionCommandService", () => {
     expect(removeCommand).toBeDefined();
 
     const now = new Date().toISOString();
-    runnerEvents.handle({
-      type: "gitJobResult",
-      job: {
-        id: removeCommand?.requestId ?? "",
-        projectId: "project-1",
-        sessionId: "session-1",
-        contextKind: "session_worktree",
-        operation: "archive_remove_worktree",
-        status: "failed",
-        createdAt: now,
-        startedAt: now,
-        finishedAt: now,
-        errorCode: "GIT_OPERATION_ERROR",
-        errorSummary: "Directory is not a git repository",
+    runnerEvents.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: removeCommand?.requestId ?? "",
+          projectId: "project-1",
+          sessionId: "session-1",
+          contextKind: "session_worktree",
+          operation: "archive_remove_worktree",
+          status: "failed",
+          createdAt: now,
+          startedAt: now,
+          finishedAt: now,
+          errorCode: "GIT_OPERATION_ERROR",
+          errorSummary: "Directory is not a git repository",
+        },
       },
-    }, false, "runner-1");
+      false,
+      "runner-1",
+    );
 
     await expect(pending).resolves.toMatchObject({
       ok: true,
@@ -5114,20 +5225,24 @@ describe("SessionCommandService", () => {
     });
 
     const now = "2000-01-01T00:00:00.000Z";
-    runnerEvents.handle({
-      type: "gitJobResult",
-      job: {
-        id: removeCommand?.requestId ?? "",
-        projectId: "project-1",
-        sessionId: "session-1",
-        contextKind: "session_worktree",
-        operation: "remove_worktree",
-        status: "succeeded",
-        createdAt: now,
-        startedAt: now,
-        finishedAt: now,
+    runnerEvents.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: removeCommand?.requestId ?? "",
+          projectId: "project-1",
+          sessionId: "session-1",
+          contextKind: "session_worktree",
+          operation: "remove_worktree",
+          status: "succeeded",
+          createdAt: now,
+          startedAt: now,
+          finishedAt: now,
+        },
       },
-    }, false, "runner-1");
+      false,
+      "runner-1",
+    );
 
     const archived = store.getSession("session-1");
     expect(archived).toMatchObject({
@@ -5601,20 +5716,24 @@ describe("RunnerEventService", () => {
     expect(gitJobs.hasActiveWorktreeRemovalJob("session-1")).toBe(false);
 
     const service = new RunnerEventService(store, hub, rpc, gitJobs);
-    service.handle({
-      type: "gitJobResult",
-      job: {
-        id: "expired-orphan-remove-job",
-        projectId: "project-1",
-        sessionId: "session-1",
-        contextKind: "session_worktree",
-        operation: "remove_worktree",
-        status: "succeeded",
-        createdAt: old,
-        startedAt: old,
-        finishedAt,
+    service.handle(
+      {
+        type: "gitJobResult",
+        job: {
+          id: "expired-orphan-remove-job",
+          projectId: "project-1",
+          sessionId: "session-1",
+          contextKind: "session_worktree",
+          operation: "remove_worktree",
+          status: "succeeded",
+          createdAt: old,
+          startedAt: old,
+          finishedAt,
+        },
       },
-    }, false, "runner-1");
+      false,
+      "runner-1",
+    );
 
     expect(store.getGitJob("expired-orphan-remove-job")).toMatchObject({
       status: "succeeded",
@@ -5766,15 +5885,19 @@ describe("RunnerEventService", () => {
     store.createProject(projectRecord());
     const session = store.createSession(sessionRecord());
 
-    service.handle({
-      type: "assistantOutput",
-      sessionId: session.id,
-      outputId: "output-1",
-      content: "partial",
-      mode: "append",
-      done: false,
-      encrypted: false,
-    }, false, "runner-1");
+    service.handle(
+      {
+        type: "assistantOutput",
+        sessionId: session.id,
+        outputId: "output-1",
+        content: "partial",
+        mode: "append",
+        done: false,
+        encrypted: false,
+      },
+      false,
+      "runner-1",
+    );
     expect(store.listMessages(session.id)).toMatchObject([
       {
         role: "assistant",
@@ -5920,13 +6043,17 @@ describe("RunnerEventService", () => {
       },
       100,
     );
-    service.handle({
-      type: "error",
-      requestId: "request-2",
-      sessionId: session.id,
-      message: "Session cwd is unavailable",
-      code: "SESSION_NOT_FOUND",
-    }, false, "runner-1");
+    service.handle(
+      {
+        type: "error",
+        requestId: "request-2",
+        sessionId: session.id,
+        message: "Session cwd is unavailable",
+        code: "SESSION_NOT_FOUND",
+      },
+      false,
+      "runner-1",
+    );
     await expect(failed).rejects.toBeInstanceOf(RunnerRpcError);
     await expect(failed).rejects.toMatchObject({
       code: "runner_error",
@@ -5946,13 +6073,17 @@ describe("RunnerEventService", () => {
       },
       100,
     );
-    service.handle({
-      type: "error",
-      requestId: "request-attachment",
-      sessionId: session.id,
-      message: "ENOENT: no such file or directory",
-      code: "ATTACHMENT_READ_ERROR",
-    }, false, "runner-1");
+    service.handle(
+      {
+        type: "error",
+        requestId: "request-attachment",
+        sessionId: session.id,
+        message: "ENOENT: no such file or directory",
+        code: "ATTACHMENT_READ_ERROR",
+      },
+      false,
+      "runner-1",
+    );
     await expect(missingAttachment).rejects.toMatchObject({
       code: "runner_error",
       runnerCode: "ATTACHMENT_READ_ERROR",

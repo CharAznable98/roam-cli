@@ -99,13 +99,16 @@ export class SessionCommandService {
   private readonly requestedAttachmentCleanupReruns = new Set<string>();
   private readonly clientInputRequests = new Map<
     string,
-    Promise<
-      ServiceResult<{
-        message: Message;
-        attachments: MessageAttachment[];
-        queued?: true;
-      }>
-    >
+    {
+      fingerprint: string;
+      request: Promise<
+        ServiceResult<{
+          message: Message;
+          attachments: MessageAttachment[];
+          queued?: true;
+        }>
+      >;
+    }
   >();
 
   constructor(
@@ -499,16 +502,23 @@ export class SessionCommandService {
       return this.createUserMessageOnce(sessionId, input);
     }
     const key = `${sessionId}\0${clientRequestId}`;
+    const fingerprint = messageCreationRequestFingerprint(input);
     const existing = this.clientInputRequests.get(key);
     if (existing) {
-      return existing;
+      if (existing.fingerprint !== fingerprint) {
+        return fail("runner_error", {
+          message: "requestId was already used for different input",
+          code: "INPUT_REQUEST_CONFLICT",
+        });
+      }
+      return existing.request;
     }
     const request = this.createUserMessageOnce(sessionId, input).finally(() => {
-      if (this.clientInputRequests.get(key) === request) {
+      if (this.clientInputRequests.get(key)?.request === request) {
         this.clientInputRequests.delete(key);
       }
     });
-    this.clientInputRequests.set(key, request);
+    this.clientInputRequests.set(key, { fingerprint, request });
     return request;
   }
 
@@ -1684,9 +1694,7 @@ export class SessionCommandService {
       stoppedAt,
     );
     for (const runnerId of cancellation.cleanupRunnerIds) {
-      void this.reconcileAttachmentCleanupJobs(runnerId).catch(
-        () => undefined,
-      );
+      void this.reconcileAttachmentCleanupJobs(runnerId).catch(() => undefined);
     }
     let stopped =
       cancellation.session?.status === "stopped"
@@ -1706,6 +1714,11 @@ export class SessionCommandService {
   private rejectPendingSessionStart(deliveryId: string): void {
     const pending = this.store.getPendingInputDelivery(deliveryId);
     const session = this.store.rejectPendingSessionStart(deliveryId, nowIso());
+    if (pending?.attachments.length) {
+      void this.reconcileAttachmentCleanupJobs(pending.runnerId).catch(
+        () => undefined,
+      );
+    }
     if (session) {
       this.hub.broadcast({ type: "session:updated", session });
     }
@@ -2020,6 +2033,29 @@ function sessionCreationRequestFingerprint(
           input.agentRuntimeConfig === undefined
             ? null
             : normalizeAgentRuntimeConfig(input.agentRuntimeConfig),
+        attachments: (input.attachments ?? []).map((attachment) => ({
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          sha256: createHash("sha256")
+            .update(Buffer.from(attachment.contentBase64, "base64"))
+            .digest("hex"),
+        })),
+      }),
+    )
+    .digest("hex");
+}
+
+function messageCreationRequestFingerprint(
+  input:
+    | ApiCreateMessage
+    | LegacyApiCreateMessage
+    | Extract<ClientCommand, { type: "userMessage" }>,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        content: input.content,
         attachments: (input.attachments ?? []).map((attachment) => ({
           name: attachment.name,
           mimeType: attachment.mimeType,

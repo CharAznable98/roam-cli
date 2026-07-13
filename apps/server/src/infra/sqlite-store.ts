@@ -1308,6 +1308,30 @@ export class ServerStore {
         this.db.exec("COMMIT");
         return undefined;
       }
+      const session = this.getSession(pending.sessionId);
+      if (session) {
+        const isFinalized = this.db.prepare(
+          `SELECT 1 FROM message_attachments
+           WHERE session_id = ? AND id = ?`,
+        );
+        const insertCleanup = this.db.prepare(
+          `INSERT OR IGNORE INTO attachment_cleanup_jobs
+             (project_id, session_id, runner_id, attachment_id, runner_storage_path, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const attachment of pending.attachments) {
+          if (!isFinalized.get(pending.sessionId, attachment.id)) {
+            insertCleanup.run(
+              session.projectId,
+              pending.sessionId,
+              pending.runnerId,
+              attachment.id,
+              attachment.runnerStoragePath,
+              rejectedAt,
+            );
+          }
+        }
+      }
       this.deletePendingInputDelivery(deliveryId);
       if (pending.kind === "start") {
         this.db
