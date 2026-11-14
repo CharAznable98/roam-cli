@@ -1,15 +1,12 @@
+import {
+  setPrivateMode,
+  setPrivateDirectoryMode,
+  syncDirectoryHandle,
+  renameWithRetry,
+} from "../platform/filesystem.js";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  rename,
-  rm,
-  unlink,
-} from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { RunnerEventSchema, type RunnerEvent } from "@roamcli/shared/protocol";
 
@@ -751,6 +748,8 @@ async function inspectCacheLock(
     }
     throw error;
   }
+  // A concurrently unlinked Windows handle may be observed with nlink=0.
+  if (pathInfo.nlink === 0) return undefined;
   if (pathInfo.isSymbolicLink() || !pathInfo.isFile() || pathInfo.nlink !== 1) {
     throw new Error(`Runner event outbox lock is not a private file: ${path}`);
   }
@@ -877,7 +876,7 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
       );
     }
   }
-  await chmod(path, 0o700);
+  await setPrivateDirectoryMode(path);
 }
 
 async function assertRegularFileOrMissing(path: string): Promise<void> {
@@ -904,7 +903,7 @@ async function readUtf8NoFollow(path: string): Promise<string> {
         `Runner event outbox is not a private regular file: ${path}`,
       );
     }
-    await handle.chmod(0o600);
+    await setPrivateMode(handle, path, 0o600);
     return await handle.readFile("utf8");
   } finally {
     await handle.close();
@@ -928,7 +927,7 @@ async function appendDurably(path: string, content: string): Promise<void> {
         `Runner event outbox is not a private regular file: ${path}`,
       );
     }
-    await handle.chmod(0o600);
+    await setPrivateMode(handle, path, 0o600);
     await handle.writeFile(content, "utf8");
     await handle.sync();
   } finally {
@@ -956,7 +955,7 @@ async function replaceDurably(path: string, content: string): Promise<void> {
       await handle.close();
     }
     await assertRegularFileOrMissing(path);
-    await rename(replacementPath, path);
+    await renameWithRetry(replacementPath, path);
     renamed = true;
     await syncDirectory(dirname(path));
   } finally {
@@ -972,7 +971,7 @@ async function syncDirectory(path: string): Promise<void> {
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
   );
   try {
-    await handle.sync();
+    await syncDirectoryHandle(handle);
   } finally {
     await handle.close();
   }

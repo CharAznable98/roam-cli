@@ -1,11 +1,5 @@
-import {
-  chmod,
-  mkdtemp,
-  readdir,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { symlink, expectPrivateMode } from "./platform.js";
+import { chmod, mkdtemp, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -51,8 +45,8 @@ describe("input delivery receipt persistence security", () => {
       ownership: "owned",
     });
 
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect((await stat(directory)).mode & 0o777).toBe(0o700);
+    await expectPrivateMode(path, 0o600);
+    await expectPrivateMode(directory, 0o700);
     expect(
       (await readdir(directory)).filter((name) => name.endsWith(".tmp")),
     ).toEqual([]);

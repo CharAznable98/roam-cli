@@ -1,14 +1,7 @@
+import { setPrivateDirectoryMode } from "../platform/filesystem.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  realpath,
-  rm,
-  rmdir,
-} from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rm, rmdir } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -504,7 +497,7 @@ async function ensureDirectDirectory(
     }
   });
   const realDirectory = await validateDirectDirectory(realParent, directory);
-  await chmod(realDirectory, 0o700);
+  await setPrivateDirectoryMode(realDirectory);
   return realDirectory;
 }
 

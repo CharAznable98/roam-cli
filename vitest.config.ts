@@ -6,6 +6,18 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 export default defineConfig({
   test: {
     globals: false,
+    // Native Windows ACL operations start system utilities; concurrent fixtures need more time.
+    testTimeout: process.platform === "win32" ? 15_000 : 5_000,
+    poolOptions: {
+      forks: {
+        // Let jsdom provide Web Storage instead of Node 25+ native storage.
+        execArgv: process.allowedNodeEnvironmentFlags.has(
+          "--no-experimental-webstorage",
+        )
+          ? ["--no-experimental-webstorage"]
+          : [],
+      },
+    },
   },
   resolve: {
     alias: {

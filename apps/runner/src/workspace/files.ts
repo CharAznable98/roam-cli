@@ -210,15 +210,13 @@ export async function writeFileContent(
   options: WriteFileContentOptions,
 ): Promise<FileWriteResult> {
   const target = await resolveWritableExistingFilePath(options, options.path);
-  const handle = await open(
-    target.path,
-    fsConstants.O_WRONLY | fsConstants.O_TRUNC | noFollowFlag(),
-  );
+  const handle = await open(target.path, fsConstants.O_RDWR | noFollowFlag());
   try {
     const targetStat = await handle.stat();
     if (!targetStat.isFile()) {
       throw new Error(`Path is not a file: ${options.path}`);
     }
+    await handle.truncate(0);
     await handle.writeFile(options.content, "utf8");
   } finally {
     await handle.close();

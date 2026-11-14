@@ -1,9 +1,13 @@
 #!/usr/bin/env node
+import {
+  spawnWorkspace,
+  launchTestBrowser,
+  terminateTestChild,
+} from "./process-helpers.mjs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import net from "node:net";
@@ -11,9 +15,12 @@ import net from "node:net";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ownerPassword =
   process.env.ROAMCLI_SMOKE_PASSWORD ?? "roamcli-smoke-password";
-const workspace = resolve(process.env.ROAMCLI_SMOKE_WORKSPACE ?? repoRoot);
+let workspace = process.env.ROAMCLI_SMOKE_WORKSPACE
+  ? resolve(process.env.ROAMCLI_SMOKE_WORKSPACE)
+  : undefined;
+const realAgent = process.env.ROAMCLI_SMOKE_REAL_AGENT === "1";
 const suppliedBaseUrl = process.env.ROAMCLI_SMOKE_BASE_URL;
-const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? 30_000);
+const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? (realAgent ? 300_000 : 30_000));
 const runnerId = process.env.ROAMCLI_SMOKE_RUNNER_ID ?? `smoke-${process.pid}`;
 const runnerDataDir = `.roam-runner-smoke-${process.pid}-${Date.now().toString(36)}`;
 const smokeMaxImageBytes = 5 * 1024 * 1024;
@@ -41,9 +48,10 @@ Environment:
   ROAMCLI_SMOKE_BASE_URL        Connect to an existing server instead of starting one.
   ROAMCLI_SMOKE_PASSWORD        Owner password for login/setup. Default: roamcli-smoke-password.
   ROAMCLI_SMOKE_RUNNER_ID       Runner id to use or start. Default: smoke-<pid>.
-  ROAMCLI_SMOKE_WORKSPACE       Workspace exposed to the runner. Default: repo root.
+  ROAMCLI_SMOKE_WORKSPACE       Workspace exposed to the runner. Default: isolated temporary workspace.
+  ROAMCLI_SMOKE_REAL_AGENT=1   Use the authenticated Codex CLI; verify a real file edit and follow-up turn.
   ROAMCLI_SMOKE_SKIP_BUILD=1    Skip shared package prebuild.
-  ROAMCLI_SMOKE_TIMEOUT_MS      Per-step timeout. Default: 30000.
+  ROAMCLI_SMOKE_TIMEOUT_MS      Per-step timeout. Default: 30000 (real agent: 300000).
   ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0
                                 Skip patch apply assertion.`);
   process.exit(0);
@@ -74,6 +82,14 @@ try {
 }
 
 async function runSmoke() {
+  if (!workspace) {
+    workspace = await mkdtemp(resolve(tmpdir(), "roamcli-smoke-workspace-"));
+    tempDirs.push(workspace);
+    await writeFile(
+      resolve(workspace, "package.json"),
+      '{"name": "roamcli"}\n',
+    );
+  }
   if (process.env.ROAMCLI_SMOKE_SKIP_BUILD !== "1") {
     await runCommand("build:shared", "pnpm", [
       "--filter",
@@ -123,16 +139,54 @@ async function runSmoke() {
   const project = await createProject(runner.runnerId);
   pass(`project created: ${project.id}`);
 
-  const prompt = `roamcli smoke prompt ${Date.now()}`;
+  const marker = `ROAMCLI_OK_${Date.now()}`;
+  const prompt = realAgent
+    ? `Create a UTF-8 file named real-agent-proof.txt in the current working directory containing exactly ${marker} followed by a newline. Use your file editing tools. Do not change any other files. Then reply with exactly: ${marker}`
+    : `roamcli smoke prompt ${Date.now()}`;
   const session = await createSession(project.id, prompt);
   pass(`session created: ${session.id}`);
 
-  await waitForPersistedAssistantMessage(session.id, prompt);
+  await waitForPersistedAssistantMessage(
+    session.id,
+    realAgent ? marker : prompt,
+  );
   pass("assistant message persisted");
   await waitForSessionStatus(session.id, "completed");
   pass("session reached completed state");
 
-  await imageAttachmentAssertionEntry(project.id, runner);
+  if (realAgent) {
+    assert(
+      (
+        await readFile(resolve(workspace, "real-agent-proof.txt"), "utf8")
+      ).trim() === marker,
+      "real Codex did not create the requested workspace file",
+    );
+    pass("real Codex file editing tool created the requested workspace file");
+    const initial = await requestJson(`/v1/sessions/${session.id}`);
+    const reply = `ROAMCLI_RESUMED_${Date.now()}`;
+    await requestJson(`/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: randomUUID(),
+        content: `Read real-agent-proof.txt, then reply with exactly: ${reply}`,
+      }),
+    });
+    await waitForPersistedAssistantMessage(session.id, reply);
+    await waitForSessionStatus(session.id, "completed");
+    const resumed = await requestJson(`/v1/sessions/${session.id}`);
+    assert(
+      initial.session.agentThreadId &&
+        resumed.session.agentThreadId === initial.session.agentThreadId,
+      "follow-up did not resume the original Codex thread",
+    );
+    pass("real Codex follow-up resumed the same thread and completed");
+  }
+
+  if (!realAgent) await imageAttachmentAssertionEntry(project.id, runner);
+  else
+    pass(
+      "real Codex app-server round-trip completed (image fixture assertions covered by default smoke)",
+    );
 
   const tree = await requestJson(
     `/v1/sessions/${session.id}/files?path=.&depth=2`,
@@ -228,7 +282,9 @@ async function ensureRunnerOnline() {
 
   const wsUrl = new URL("/v1/runner", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const fakeCodex = await createFakeCodexCommand("smoke");
+  const fakeCodex = realAgent
+    ? undefined
+    : await createFakeCodexCommand("smoke");
   tempDirs.push(resolve(workspace, runnerDataDir));
   startChild(
     "runner",
@@ -246,7 +302,7 @@ async function ensureRunnerOnline() {
       "--data-dir",
       runnerDataDir,
       "--profile",
-      "trusted",
+      realAgent ? "standard" : "trusted",
       "--agent-plugin",
       "@roamcli/agent-codex",
     ],
@@ -256,10 +312,14 @@ async function ensureRunnerOnline() {
       ROAM_RUNNER_ID: runnerId,
       ROAM_RUNNER_WORKSPACE: workspace,
       ROAM_RUNNER_DATA_DIR: runnerDataDir,
-      ROAM_RUNNER_PROFILE: "trusted",
-      ROAMCLI_AGENT_CODEX_MODE: "exec-json",
-      ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
-      ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([fakeCodex]),
+      ROAM_RUNNER_PROFILE: realAgent ? "standard" : "trusted",
+      ...(realAgent
+        ? {}
+        : {
+            ROAMCLI_AGENT_CODEX_MODE: "exec-json",
+            ROAMCLI_AGENT_CODEX_COMMAND: process.execPath,
+            ROAMCLI_AGENT_CODEX_ARGS: JSON.stringify([fakeCodex]),
+          }),
     },
   );
 
@@ -598,6 +658,7 @@ async function requestRaw(path, init = {}) {
   const method = init.method ?? "GET";
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
   const response = await fetch(new URL(path, baseUrl), {
+    signal: AbortSignal.timeout(timeoutMs),
     ...init,
     headers: {
       "content-type": "application/json",
@@ -626,7 +687,7 @@ async function requestRaw(path, init = {}) {
 }
 
 function startChild(label, command, args, env = {}) {
-  const child = spawn(command, args, {
+  const child = spawnWorkspace(command, args, {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -671,7 +732,7 @@ async function cleanup() {
             return;
           }
           child.once("exit", resolveCleanup);
-          child.kill("SIGTERM");
+          terminateTestChild(child);
           setTimeout(() => {
             if (child.exitCode === null && child.signalCode === null) {
               child.kill("SIGKILL");
@@ -681,7 +742,14 @@ async function cleanup() {
     ),
   );
   await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
+    tempDirs.map((dir) =>
+      rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      }),
+    ),
   );
   await Promise.all(tempPaths.map((path) => rm(path, { force: true })));
 }

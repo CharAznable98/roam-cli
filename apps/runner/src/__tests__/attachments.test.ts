@@ -1,3 +1,4 @@
+import { symlink, expectPrivateMode } from "./platform.js";
 import { existsSync } from "node:fs";
 import {
   mkdtemp,
@@ -8,7 +9,6 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   writeFile,
   type FileHandle,
 } from "node:fs/promises";
@@ -280,11 +280,9 @@ describe("SessionAttachmentStore", () => {
         attachment?.runnerStoragePath ?? "",
       );
 
-      expect((await stat(localPath)).mode & 0o777).toBe(0o600);
-      expect((await stat(join(localPath, ".."))).mode & 0o777).toBe(0o700);
-      expect((await stat(join(stateDir, "attachments"))).mode & 0o777).toBe(
-        0o700,
-      );
+      await expectPrivateMode(localPath, 0o600);
+      await expectPrivateMode(join(localPath, ".."), 0o700);
+      await expectPrivateMode(join(stateDir, "attachments"), 0o700);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

@@ -344,7 +344,20 @@ export async function removeGitWorktree(
   return runGitJob(
     options,
     async (cwd) => {
-      await git(cwd, ["worktree", "remove", "--force", cwd]);
+      // Windows cannot remove a directory that is the git process's cwd.
+      const { stdout } = await git(cwd, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ]);
+      await git(options.workspace, [
+        "--git-dir",
+        stdout.trim(),
+        "worktree",
+        "remove",
+        "--force",
+        cwd,
+      ]);
     },
     { missingCwdSucceeds: true, onMissingCwd: pruneGitWorktrees },
   );
@@ -487,7 +500,7 @@ async function git(
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await runQueuedGitCommand(cwd, () =>
-    execFileAsync("git", ["-C", cwd, ...args], {
+    execFileAsync("git", ["-c", "core.longpaths=true", "-C", cwd, ...args], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: GIT_COMMAND_TIMEOUT_MS,
     }),
@@ -507,9 +520,13 @@ function readGitBuffer(
   maxBytes: number,
 ): Promise<Buffer> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", ["-C", cwd, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "git",
+      ["-c", "core.longpaths=true", "-C", cwd, ...args],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;

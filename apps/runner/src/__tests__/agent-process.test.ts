@@ -48,8 +48,8 @@ describe("AgentProcess", () => {
     });
     child.interrupt();
 
-    await expect(exit).resolves.toMatchObject({ code: 130 });
-    expect(output).toContain("interrupted");
+    await expect(exit).resolves.toMatchObject(process.platform === "win32" ? { signal: "SIGINT" } : { code: 130 });
+    if (process.platform !== "win32") expect(output).toContain("interrupted");
   });
 
   it("can close stdin for one-shot child processes", async () => {

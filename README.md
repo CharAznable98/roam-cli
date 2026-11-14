@@ -154,7 +154,7 @@ Use `--source-archive` when the target machine cannot reach GitHub directly; the
 
 `--uninstall` stops and removes the generated Server deployment files. It asks for a second confirmation before deleting Server data; data is preserved by default.
 
-Windows users should run the installer from WSL2 with Docker Desktop integration enabled, or use the local source install path.
+Windows users can use the native source install path; see the [Windows guide](docs/windows.md) for PowerShell startup, proxy settings and end-to-end verification. Run the Docker installer from WSL2 with Docker Desktop integration enabled.
 
 ## Connect A Runner
 

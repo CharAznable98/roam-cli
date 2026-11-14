@@ -131,10 +131,15 @@ function runGitApply(
   stderr: string;
 }> {
   return new Promise((resolveRun) => {
-    const child = spawn("git", [...args], {
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // Applying an explicit patch must not rewrite LF files via a host's global autocrlf.
+    const child = spawn(
+      "git",
+      ["-c", "core.longpaths=true", "-c", "core.autocrlf=false", ...args],
+      {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));

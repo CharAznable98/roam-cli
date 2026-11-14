@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import {
+  spawnWorkspace,
+  launchTestBrowser,
+  terminateTestChild,
+} from "./process-helpers.mjs";
 import {
   chmod,
   mkdir,
@@ -173,7 +177,7 @@ async function run() {
 
 async function launchBrowser() {
   try {
-    return await chromium.launch({
+    return await launchTestBrowser(chromium, {
       headless: process.env.ROAMCLI_BLACKBOX_HEADFUL !== "1",
     });
   } catch (error) {
@@ -302,7 +306,9 @@ async function runUserJourney(browser, scenario) {
   });
   tempDirs.push(projectDir);
 
-  const context = await browser.newContext({ viewport: scenario.viewport });
+  const context = await createTestContext(browser, {
+    viewport: scenario.viewport,
+  });
   await addAuthCookie(context);
   const page = await context.newPage();
   const consoleErrors = [];
@@ -1226,7 +1232,7 @@ async function assertResumeFromUi(page, scenario, session) {
 }
 
 async function runNoRunnerJourney(browser) {
-  const context = await browser.newContext({
+  const context = await createTestContext(browser, {
     viewport: { width: 1280, height: 760 },
   });
   await addAuthCookie(context);
@@ -1253,7 +1259,9 @@ async function runNoRunnerJourney(browser) {
 }
 
 async function runRuntimeConfigJourney(browser, scenario) {
-  const context = await browser.newContext({ viewport: scenario.viewport });
+  const context = await createTestContext(browser, {
+    viewport: scenario.viewport,
+  });
   await addAuthCookie(context);
   const page = await context.newPage();
   const projectDir = resolve(
@@ -1413,7 +1421,9 @@ async function saveRuntimeDefaultsFromSettings(page, scenario) {
 
 async function runAccountSecurityJourney(browser, scenario) {
   await authenticate({});
-  const context = await browser.newContext({ viewport: scenario.viewport });
+  const context = await createTestContext(browser, {
+    viewport: scenario.viewport,
+  });
   await addAuthCookie(context);
   const page = await context.newPage();
   const consoleErrors = [];
@@ -2265,7 +2275,7 @@ async function createFakeCodexCommand() {
 async function createFakeCodexAppServerCommand() {
   const dir = await mkdtemp(resolve(tmpdir(), "roamcli-blackbox-app-server-"));
   tempDirs.push(dir);
-  const script = resolve(dir, "fake-codex-app-server");
+  const script = resolve(dir, "fake-codex-app-server.mjs");
   await writeFile(
     script,
     [
@@ -2483,6 +2493,7 @@ async function requestJson(path, init = {}) {
   const method = init.method ?? "GET";
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
   const response = await fetch(new URL(path, baseUrl), {
+    signal: AbortSignal.timeout(timeoutMs),
     ...init,
     headers: {
       "content-type": "application/json",
@@ -2522,7 +2533,7 @@ async function waitFor(probe, description) {
 }
 
 function startChild(label, command, args, env = {}) {
-  const child = spawn(command, args, {
+  const child = spawnWorkspace(command, args, {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -2542,7 +2553,7 @@ function startChild(label, command, args, env = {}) {
 
 async function runCommand(command, args, options = {}) {
   await new Promise((resolveCommand, rejectCommand) => {
-    const child = spawn(command, args, {
+    const child = spawnWorkspace(command, args, {
       cwd: options.cwd ?? repoRoot,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -2582,7 +2593,7 @@ async function cleanup() {
             return;
           }
           child.once("exit", resolveCleanup);
-          child.kill("SIGTERM");
+          terminateTestChild(child);
           setTimeout(() => {
             if (child.exitCode === null && child.signalCode === null) {
               child.kill("SIGKILL");
@@ -2592,7 +2603,14 @@ async function cleanup() {
     ),
   );
   await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
+    tempDirs.map((dir) =>
+      rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      }),
+    ),
   );
   await Promise.all(tempPaths.map((path) => rm(path, { force: true })));
 }
@@ -2788,4 +2806,14 @@ function slugify(value) {
 
 function escapeTableCell(value) {
   return String(value).replace(/\|/g, "\\|").replace(/\n/g, "<br>");
+}
+
+async function createTestContext(browser, options) {
+  const context = await browser.newContext(options);
+  await context.route(/^https?:\/\//, (route) => {
+    if (new URL(route.request().url()).origin === new URL(baseUrl).origin)
+      return route.continue();
+    return route.abort("blockedbyclient");
+  });
+  return context;
 }

@@ -1,6 +1,11 @@
+import {
+  setPrivateMode,
+  syncDirectoryHandle,
+  renameWithRetry,
+} from "../platform/filesystem.js";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, rm } from "node:fs/promises";
+import { mkdir, open, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
@@ -26,7 +31,7 @@ export async function readPrivateJsonFile(
       throw new Error(`${label} is not a private regular file: ${path}`);
     }
     if ((info.mode & 0o777) !== 0o600) {
-      await handle.chmod(0o600);
+      await setPrivateMode(handle, path, 0o600);
     }
     return await handle.readFile("utf8");
   } finally {
@@ -50,7 +55,7 @@ export async function writePrivateJsonFile(
       throw new Error(`Receipt directory is not a private directory`);
     }
     if ((info.mode & 0o777) !== 0o700) {
-      await securedDirectory.chmod(0o700);
+      await setPrivateMode(securedDirectory, directory, 0o700);
     }
   } finally {
     await securedDirectory.close();
@@ -72,13 +77,13 @@ export async function writePrivateJsonFile(
     } finally {
       await handle.close();
     }
-    await rename(temporary, path);
+    await renameWithRetry(temporary, path);
     const directoryHandle = await open(
       directory,
       constants.O_RDONLY | constants.O_DIRECTORY | NO_FOLLOW,
     );
     try {
-      await directoryHandle.sync();
+      await syncDirectoryHandle(directoryHandle);
     } finally {
       await directoryHandle.close();
     }
