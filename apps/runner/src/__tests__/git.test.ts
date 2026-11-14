@@ -1,3 +1,4 @@
+import { symlink } from "./platform.js";
 import { execFile } from "node:child_process";
 import {
   mkdir,
@@ -6,7 +7,6 @@ import {
   realpath,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -161,7 +161,7 @@ describe("runner git workspace operations", () => {
     }
   });
 
-  it("treats user-supplied mutation paths as literal git paths", async () => {
+  it.skipIf(process.platform === "win32")("treats user-supplied mutation paths as literal git paths", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-literal-"));
     await git(workspace, ["init"]);
     await git(workspace, ["config", "user.email", "test@example.com"]);
@@ -196,7 +196,7 @@ describe("runner git workspace operations", () => {
     );
   });
 
-  it("preserves leading and trailing spaces when diffing, staging, and discarding paths", async () => {
+  it.skipIf(process.platform === "win32")("preserves leading and trailing spaces when diffing, staging, and discarding paths", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "roam-runner-git-space-"));
     const spacedPath = " target ";
     const trimmedNeighbor = "target";
@@ -657,8 +657,8 @@ describe("runner git workspace operations", () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "roam-runner-rename-paths-"),
     );
-    const oldPath = " old\tname\n.txt ";
-    const newPath = " new\tname\n.ts ";
+    const oldPath = process.platform === "win32" ? "old name.txt" : " old\tname\n.txt ";
+    const newPath = process.platform === "win32" ? "new name.ts" : " new\tname\n.ts ";
     await git(workspace, ["init"]);
     await git(workspace, ["config", "user.email", "test@example.com"]);
     await git(workspace, ["config", "user.name", "Test User"]);
@@ -823,7 +823,7 @@ describe("runner git workspace operations", () => {
 });
 
 async function git(cwd: string, args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+  await execFileAsync("git", ["-c", "core.autocrlf=false", "-C", cwd, ...args]);
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string> {

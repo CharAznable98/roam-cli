@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+
+import { dirname, join } from "node:path";
 
 const REEXEC_ENV = "ROAMCLI_RUNNER_REEXEC";
 const RUNNER_PACKAGE = "@roamcli/runner";
@@ -53,6 +55,26 @@ export function hasAlreadyReexeced(
   return env[REEXEC_ENV] === "1";
 }
 
+export function npxLauncher(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[] } {
+  if (process.platform !== "win32") return { command: "npx", args };
+  // Run npm's JS entry directly rather than passing user arguments through cmd.exe.
+  const candidates = [
+    ...(env.npm_execpath
+      ? [join(dirname(env.npm_execpath), "npx-cli.js")]
+      : []),
+    join(dirname(process.execPath), "node_modules/npm/bin/npx-cli.js"),
+  ];
+  const cli = candidates.find((path) => existsSync(path));
+  if (!cli)
+    throw new Error(
+      "Cannot find npx-cli.js. Install Node.js with npm before starting the runner wizard.",
+    );
+  return { command: process.execPath, args: [cli, ...args] };
+}
+
 export async function reexecRunnerWithNpx(input: {
   agentPlugins: readonly string[];
   runnerArgs: readonly string[];
@@ -61,9 +83,11 @@ export async function reexecRunnerWithNpx(input: {
 }): Promise<never> {
   const env = input.env ?? process.env;
   const invocation = buildNpxRunnerInvocation({ ...input, env });
-  const child = spawn("npx", invocation.args, {
+  const launcher = npxLauncher(invocation.args, env);
+  const child = spawn(launcher.command, launcher.args, {
     env: invocation.env,
     stdio: "inherit",
+    windowsHide: true,
   });
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);

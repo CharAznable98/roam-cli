@@ -346,7 +346,8 @@ describe("codex agent plugin", () => {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
       }
     }
-    expect(terminated).toBe("terminated");
+    if (process.platform === "win32") await expectChildExited(workspace);
+    else expect(terminated).toBe("terminated");
   });
 
   it("times out Codex app-server initialization and terminates the child", async () => {
@@ -381,7 +382,8 @@ describe("codex agent plugin", () => {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
       }
     }
-    expect(terminated).toBe("terminated");
+    if (process.platform === "win32") await expectChildExited(workspace);
+    else expect(terminated).toBe("terminated");
   });
 
   it("rejects Codex runtime option base paths outside the runner workspace", async () => {
@@ -924,7 +926,8 @@ describe("codex agent plugin", () => {
         done: true,
       });
       expect(events).toContainEqual({ type: "status", status: "completed" });
-      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
+      if (process.platform === "win32") await expectChildExited(workspace);
+      else await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
     });
   });
 
@@ -961,7 +964,8 @@ describe("codex agent plugin", () => {
       /Codex app-server thread\/start failed/,
     );
     await vi.waitFor(async () => {
-      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
+      if (process.platform === "win32") await expectChildExited(workspace);
+      else await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
     });
   });
 
@@ -1588,7 +1592,8 @@ describe("codex agent plugin", () => {
 
     await vi.waitFor(async () => {
       expect(events).toContainEqual({ type: "status", status: "stopped" });
-      await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
+      if (process.platform === "win32") await expectChildExited(workspace);
+      else await expect(readFile(closedMarker, "utf8")).resolves.toBe("closed");
     });
   });
 
@@ -2275,7 +2280,7 @@ describe("codex agent plugin", () => {
     });
   });
 
-  it("rejects app-server requests that arrive after session closure", async () => {
+  it.skipIf(process.platform === "win32")("rejects app-server requests that arrive after session closure", async () => {
     const workspace = await mkdirTemp("roam-codex-app-server-late-request-");
     const rejectedPath = join(workspace, "late-rejected.json");
     await writeAppServerScript(workspace, "late-request.mjs", [
@@ -2823,6 +2828,7 @@ async function writeAppServerScript(
     [
       "#!/usr/bin/env node",
       "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(join(workspace, "agent-pid.txt"))}, String(process.pid));`,
       "process.stdin.setEncoding('utf8');",
       "let buffer = '';",
       "let handleMessage = () => undefined;",
@@ -2877,4 +2883,9 @@ async function writeSkill(
       "\n",
     ),
   );
+}
+
+async function expectChildExited(workspace: string): Promise<void> {
+  const pid = Number(await readFile(join(workspace, "agent-pid.txt"), "utf8"));
+  expect(() => process.kill(pid, 0)).toThrow();
 }

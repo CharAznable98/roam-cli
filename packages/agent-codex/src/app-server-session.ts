@@ -1,7 +1,5 @@
-import {
-  spawn as spawnChild,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawnCodexCommand } from "./command.js";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   AgentInputUnavailableError,
@@ -137,7 +135,7 @@ export class CodexAppServerSession implements AgentSession {
     if (this.#closed || this.#stopRequested) {
       throw new AgentInputUnavailableError();
     }
-    this.#child = spawnChild(this.#command, [...this.#args], {
+    this.#child = spawnCodexCommand(this.#command, [...this.#args], {
       cwd: this.#context.cwd,
       env: this.#context.env,
       stdio: "pipe",

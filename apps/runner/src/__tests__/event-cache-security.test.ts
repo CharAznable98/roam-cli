@@ -1,12 +1,6 @@
+import { symlink } from "./platform.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import {
-  link,
-  mkdir,
-  mkdtemp,
-  readFile,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

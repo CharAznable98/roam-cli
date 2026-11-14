@@ -1,13 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
-import { constants, type BigIntStats, type Stats } from "node:fs";
 import {
-  lstat,
-  mkdir,
-  open,
-  rename,
-  unlink,
-  type FileHandle,
-} from "node:fs/promises";
+  setPrivateMode,
+  syncDirectoryHandle,
+  renameWithRetry,
+} from "../platform/filesystem.js";
+import { createHash, randomUUID } from "node:crypto";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, mkdir, open, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export interface AuditRecord<TPayload = unknown> {
@@ -349,7 +347,7 @@ async function readAuditCheckpoint(
     let info = await file.stat({ bigint: true });
     assertPrivateRegularFile(info, path, "audit checkpoint");
     if ((Number(info.mode) & 0o777) !== 0o600) {
-      await file.chmod(0o600);
+      await setPrivateMode(file, path, 0o600);
       info = await file.stat({ bigint: true });
     }
     await assertDirectoryIdentity(dirname(path), directoryIdentity);
@@ -410,7 +408,7 @@ async function writeAuditCheckpoint(
       "audit checkpoint temporary file",
     );
     temporaryIdentity = identityOf(created);
-    await file.chmod(0o600);
+    await setPrivateMode(file, temporaryPath, 0o600);
     await file.writeFile(serialized, "utf8");
     await file.sync();
     const written = await file.stat({ bigint: true });
@@ -426,7 +424,7 @@ async function writeAuditCheckpoint(
       "audit checkpoint temporary file",
     );
     await inspectCheckpointSidecar(path, "audit checkpoint");
-    await rename(temporaryPath, path);
+    await renameWithRetry(temporaryPath, path);
     renamed = true;
     await assertPathIdentity(path, written, "audit checkpoint");
     await syncDirectory(dirname(path), directoryIdentity);
@@ -466,10 +464,10 @@ async function assertCheckpointSidecarsSafe(
 async function inspectCheckpointSidecar(
   path: string,
   label: string,
-): Promise<Stats | undefined> {
-  let info: Stats;
+): Promise<BigIntStats | undefined> {
+  let info: BigIntStats;
   try {
-    info = await lstat(path);
+    info = await lstat(path, { bigint: true });
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
@@ -525,11 +523,11 @@ async function syncDirectory(
 ): Promise<void> {
   const directory = await open(path, DIRECTORY_FLAGS);
   try {
-    const info = await directory.stat();
+    const info = await directory.stat({ bigint: true });
     if (!info.isDirectory() || !sameIdentity(identityOf(info), expected)) {
       throw new Error(`Audit directory changed during operation: ${path}`);
     }
-    await directory.sync();
+    await syncDirectoryHandle(directory);
     await assertDirectoryIdentity(path, expected);
   } finally {
     await directory.close();
@@ -689,7 +687,7 @@ async function withAuditLock<T>(
 
 async function ensurePrivateDirectory(path: string): Promise<FileIdentity> {
   try {
-    const info = await lstat(path);
+    const info = await lstat(path, { bigint: true });
     assertNotSymlink(info, path, "audit directory");
     if (!info.isDirectory()) {
       throw new Error(`Audit directory is not a directory: ${path}`);
@@ -704,11 +702,11 @@ async function ensurePrivateDirectory(path: string): Promise<FileIdentity> {
   let directory: FileHandle | undefined;
   try {
     directory = await open(path, DIRECTORY_FLAGS);
-    const info = await directory.stat();
+    const info = await directory.stat({ bigint: true });
     if (!info.isDirectory()) {
       throw new Error(`Audit directory is not a directory: ${path}`);
     }
-    await directory.chmod(0o700);
+    await setPrivateMode(directory, path, 0o700);
     await assertPathIdentity(path, info, "audit directory");
     return identityOf(info);
   } catch (error) {
@@ -745,13 +743,13 @@ async function openAuditFile(
   }
 
   try {
-    let info = await file.stat();
-    if (!info.isFile() || info.nlink !== 1) {
+    let info = await file.stat({ bigint: true });
+    if (!info.isFile() || info.nlink !== 1n) {
       throw new Error(`Audit log is not a private regular file: ${path}`);
     }
-    if ((info.mode & 0o777) !== 0o600) {
-      await file.chmod(0o600);
-      info = await file.stat();
+    if ((Number(info.mode) & 0o777) !== 0o600) {
+      await setPrivateMode(file, path, 0o600);
+      info = await file.stat({ bigint: true });
     }
     await assertDirectoryIdentity(dirname(path), directoryIdentity);
     await assertPathIdentity(path, info, "audit log");
@@ -884,11 +882,11 @@ async function createLockFile(
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NO_FOLLOW,
       0o600,
     );
-    const info = await file.stat();
-    if (!info.isFile() || info.nlink !== 1) {
+    const info = await file.stat({ bigint: true });
+    if (!info.isFile() || info.nlink !== 1n) {
       throw new Error(`${capitalize(label)} is not a private regular file`);
     }
-    await file.chmod(0o600);
+    await setPrivateMode(file, path, 0o600);
     await file.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
     await file.sync();
     await assertDirectoryIdentity(dirname(path), directoryIdentity);
@@ -907,9 +905,9 @@ async function inspectLock(
   path: string,
   label: string,
 ): Promise<InspectedLock | undefined> {
-  let pathInfo: Stats;
+  let pathInfo: BigIntStats;
   try {
-    pathInfo = await lstat(path);
+    pathInfo = await lstat(path, { bigint: true });
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
@@ -917,10 +915,10 @@ async function inspectLock(
     throw error;
   }
   assertNotSymlink(pathInfo, path, label);
-  if (pathInfo.nlink === 0) {
+  if (pathInfo.nlink === 0n) {
     return undefined;
   }
-  if (!pathInfo.isFile() || pathInfo.nlink > 1) {
+  if (!pathInfo.isFile() || pathInfo.nlink > 1n) {
     throw new Error(
       `${capitalize(label)} is not a private regular file: ${path}`,
     );
@@ -929,11 +927,11 @@ async function inspectLock(
   let file: FileHandle | undefined;
   try {
     file = await open(path, constants.O_RDONLY | NO_FOLLOW);
-    const info = await file.stat();
-    if (info.nlink === 0) {
+    const info = await file.stat({ bigint: true });
+    if (info.nlink === 0n) {
       return undefined;
     }
-    if (!info.isFile() || info.nlink > 1) {
+    if (!info.isFile() || info.nlink > 1n) {
       throw new Error(
         `${capitalize(label)} is not a private regular file: ${path}`,
       );
@@ -942,14 +940,14 @@ async function inspectLock(
     if (info.size > MAX_LOCK_BYTES) {
       return {
         identity: identityOf(info),
-        modifiedAtMs: info.mtimeMs,
+        modifiedAtMs: Number(info.mtimeMs),
       };
     }
     const content = await file.readFile("utf8");
     const owner = parseLockOwner(content);
     const inspected = {
       identity: identityOf(info),
-      modifiedAtMs: info.mtimeMs,
+      modifiedAtMs: Number(info.mtimeMs),
     };
     return owner === undefined ? inspected : { ...inspected, owner };
   } catch (error) {
@@ -1108,7 +1106,7 @@ async function assertLeafIsNotSymlink(
   label: string,
 ): Promise<void> {
   try {
-    const info = await lstat(path);
+    const info = await lstat(path, { bigint: true });
     assertNotSymlink(info, path, label);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
@@ -1122,7 +1120,7 @@ async function assertDirectoryIdentity(
   path: string,
   expected: FileIdentity,
 ): Promise<void> {
-  const info = await lstat(path);
+  const info = await lstat(path, { bigint: true });
   assertNotSymlink(info, path, "audit directory");
   if (!info.isDirectory() || !sameIdentity(identityOf(info), expected)) {
     throw new Error(`Audit directory changed during operation: ${path}`);
@@ -1131,24 +1129,28 @@ async function assertDirectoryIdentity(
 
 async function assertPathIdentity(
   path: string,
-  expected: Stats | BigIntStats,
+  expected: BigIntStats,
   label: string,
 ): Promise<void> {
-  const current = await lstat(path);
+  const current = await lstat(path, { bigint: true });
   assertNotSymlink(current, path, label);
   if (!sameIdentity(identityOf(current), identityOf(expected))) {
     throw new Error(`${capitalize(label)} changed during operation: ${path}`);
   }
 }
 
-function assertNotSymlink(info: Stats, path: string, label: string): void {
+function assertNotSymlink(
+  info: BigIntStats,
+  path: string,
+  label: string,
+): void {
   if (info.isSymbolicLink()) {
     throw symlinkError(path, label);
   }
 }
 
 function assertPrivateRegularFile(
-  info: Stats | BigIntStats,
+  info: BigIntStats,
   path: string,
   label: string,
 ): void {
@@ -1171,7 +1173,7 @@ function isSymlinkOpenError(error: unknown): boolean {
   );
 }
 
-function identityOf(info: Stats | BigIntStats): FileIdentity {
+function identityOf(info: BigIntStats): FileIdentity {
   return { dev: BigInt(info.dev), ino: BigInt(info.ino) };
 }
 

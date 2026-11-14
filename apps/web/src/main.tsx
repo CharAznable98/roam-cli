@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./index.css";
+import "./lib/monaco";
 import { registerServiceWorker } from "./features/pwa/pwa";
 import { installExpectedBrowserErrorHandlers } from "./lib/browser-errors";
 

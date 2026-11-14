@@ -1,6 +1,6 @@
+import { spawnCodexCommand } from "./command.js";
 import {
   execFile,
-  spawn as spawnChild,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -147,11 +147,15 @@ class CodexProcessSession implements AgentSession {
   }
 
   public async start(): Promise<void> {
-    const child = spawnChild(this.#options.command, [...this.#options.args], {
-      cwd: this.#options.cwd,
-      env: this.#options.env,
-      stdio: "pipe",
-    });
+    const child = spawnCodexCommand(
+      this.#options.command,
+      [...this.#options.args],
+      {
+        cwd: this.#options.cwd,
+        env: this.#options.env,
+        stdio: "pipe",
+      },
+    );
     this.#child = child;
 
     child.stdout.on("data", (chunk) => this.#trackOutput(chunk));
@@ -542,11 +546,15 @@ export async function listCodexRuntimeConfigOptions(
     };
   }
 
-  const child = spawnChild(commandFor(KIND, context.env), appServerArgsFor(), {
-    cwd: base.path,
-    env: context.env,
-    stdio: "pipe",
-  });
+  const child = spawnCodexCommand(
+    commandFor(KIND, context.env),
+    appServerArgsFor(),
+    {
+      cwd: base.path,
+      env: context.env,
+      stdio: "pipe",
+    },
+  );
   let client: CodexAppServerClient | undefined;
   const closeWithError = (error: Error) => client?.close(error);
   child.on("error", closeWithError);

@@ -1,3 +1,4 @@
+import { symlink, expectPrivateMode } from "./platform.js";
 import {
   chmod,
   mkdir,
@@ -6,11 +7,10 @@ import {
   readdir,
   realpath,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseCliArgs,
@@ -24,6 +24,7 @@ describe("parseCliArgs", () => {
   it("parses required runner flags and normalizes https to wss", () => {
     const options = parseCliArgs(
       [
+        "--",
         "--server",
         "https://roam.example.test/runners",
         "--token=t1",
@@ -42,7 +43,7 @@ describe("parseCliArgs", () => {
       token: "t1",
       profile: "strict",
       runnerId: "r1",
-      workspace: "/tmp/work",
+      workspace: resolve("/tmp/work"),
       dataDir: ".roam-runner",
       agentPlugins: [],
     });
@@ -120,8 +121,8 @@ describe("parseCliArgs", () => {
       dataDir: ".roam-runner",
       agentPlugins: ["@roamcli/agent-codex"],
     });
-    expect((await stat(dirname(configPath))).mode & 0o777).toBe(0o700);
-    expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+    await expectPrivateMode(dirname(configPath), 0o700);
+    await expectPrivateMode(configPath, 0o600);
     expect(
       (await readdir(dirname(configPath))).filter((name) =>
         name.includes(".tmp-"),
@@ -181,9 +182,9 @@ describe("parseCliArgs", () => {
     );
 
     await persistRunnerConfig(configPath, options);
-    expect(
-      JSON.parse(await readFile(configPath, "utf8")),
-    ).toMatchObject({ workspace: configuredWorkspace });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      workspace: configuredWorkspace,
+    });
   });
 
   it("lets cli and env workspaces override a config workspace", async () => {
@@ -254,7 +255,7 @@ describe("parseCliArgs", () => {
 
     await resolveRunnerConfig(["--workspace", workspace], {});
 
-    expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+    await expectPrivateMode(configPath, 0o600);
   });
 
   it("reads a legacy persisted token once and removes it on migration", async () => {
@@ -352,8 +353,9 @@ describe("parseCliArgs", () => {
       resolveRunnerDataDir(workspace, "tools/.roam-runner", true),
     ).resolves.toBe(dataDirectory);
 
-    expect((await stat(toolsDirectory)).mode & 0o777).toBe(0o755);
-    expect((await stat(dataDirectory)).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32")
+      expect((await stat(toolsDirectory)).mode & 0o777).toBe(0o755);
+    await expectPrivateMode(dataDirectory, 0o700);
   });
 
   it("still rejects symlinks in an existing parent of a nested data directory", async () => {

@@ -1,3 +1,4 @@
+import { expectPrivateMode } from "./platform.js";
 import {
   appendFile,
   chmod,
@@ -798,9 +799,9 @@ describe("audit and disconnected cache", () => {
       status: "running",
     });
 
-    expect((await stat(stateDir)).mode & 0o777).toBe(0o700);
-    expect((await stat(auditPath)).mode & 0o777).toBe(0o600);
-    expect((await stat(cachePath)).mode & 0o777).toBe(0o600);
+    await expectPrivateMode(stateDir, 0o700);
+    await expectPrivateMode(auditPath, 0o600);
+    await expectPrivateMode(cachePath, 0o600);
 
     await chmod(stateDir, 0o755);
     await chmod(auditPath, 0o644);
@@ -810,9 +811,9 @@ describe("audit and disconnected cache", () => {
       new EventCache(cachePath).readAll(),
     ]);
 
-    expect((await stat(stateDir)).mode & 0o777).toBe(0o700);
-    expect((await stat(auditPath)).mode & 0o777).toBe(0o600);
-    expect((await stat(cachePath)).mode & 0o777).toBe(0o600);
+    await expectPrivateMode(stateDir, 0o700);
+    await expectPrivateMode(auditPath, 0o600);
+    await expectPrivateMode(cachePath, 0o600);
   });
 });
 

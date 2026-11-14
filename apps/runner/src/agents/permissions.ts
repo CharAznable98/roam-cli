@@ -55,6 +55,25 @@ export const PERMISSION_TEMPLATES: Record<RunnerProfile, PermissionTemplate> = {
 
 const RUNNER_PRIVATE_ENV = new Set(["ROAM_RUNNER_TOKEN"]);
 
+const WINDOWS_RUNTIME_ENV = new Set([
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "CODEX_HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+]);
+
 export function getPermissionTemplate(
   profile: RunnerProfile,
 ): PermissionTemplate {
@@ -89,7 +108,10 @@ export function sanitizeAgentEnvironment(
     if (
       value !== undefined &&
       !RUNNER_PRIVATE_ENV.has(normalizedKey) &&
-      (allowAll || allowed.has(normalizedKey))
+      (allowAll ||
+        allowed.has(normalizedKey) ||
+        (process.platform === "win32" &&
+          WINDOWS_RUNTIME_ENV.has(normalizedKey)))
     ) {
       result[key] = value;
     }

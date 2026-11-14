@@ -608,7 +608,15 @@ export class SessionManager {
         await this.#emitStartReceipt(receiptRequestId, notOwned, "not_owned");
         resolveReceipt();
       })
-      .catch(rejectReceipt);
+      .catch((error: unknown) => {
+        rejectReceipt(error);
+        void this.#emitSafely({
+          type: "error",
+          sessionId: record.payload.session.id,
+          code: "START_RECEIPT_PERSISTENCE_ERROR",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
     await receipt;
   }
 
@@ -1464,6 +1472,8 @@ export class SessionManager {
     }
     const baseRef = session.gitBaseRef ?? "HEAD";
     await execFileAsync("git", [
+      "-c",
+      "core.longpaths=true",
       "-C",
       projectCwd,
       "rev-parse",
@@ -1472,6 +1482,8 @@ export class SessionManager {
     ]);
     await mkdir(dirname(worktreeCwd), { recursive: true });
     await execFileAsync("git", [
+      "-c",
+      "core.longpaths=true",
       "-C",
       projectCwd,
       "worktree",
@@ -1509,6 +1521,8 @@ export class SessionManager {
     }
 
     const inside = await execFileAsync("git", [
+      "-c",
+      "core.longpaths=true",
       "-C",
       worktreeCwd,
       "rev-parse",
@@ -1523,6 +1537,8 @@ export class SessionManager {
     }
 
     const { stdout } = await execFileAsync("git", [
+      "-c",
+      "core.longpaths=true",
       "-C",
       projectCwd,
       "worktree",

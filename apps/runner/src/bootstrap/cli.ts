@@ -1,14 +1,7 @@
+import { setPrivateMode, renameWithRetry } from "../platform/filesystem.js";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  open,
-  realpath,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rm, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import {
   basename,
@@ -226,7 +219,7 @@ async function writeRunnerConfigFile(
     await file.sync();
     await file.close();
     file = undefined;
-    await rename(temporaryPath, target.path);
+    await renameWithRetry(temporaryPath, target.path);
     await hardenConfigFile(target.path);
   } catch (error) {
     await file?.close().catch(() => undefined);
@@ -293,7 +286,7 @@ function parseRawCliArgs(argv: readonly string[]): RawRunnerCliOptions {
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === undefined) {
+    if (arg === undefined || arg === "--") {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -566,7 +559,7 @@ async function hardenConfigFile(path: string): Promise<void> {
     if (!info.isFile()) {
       throw new Error(`Runner config path is not a regular file: ${path}`);
     }
-    await file.chmod(0o600);
+    await setPrivateMode(file, path, 0o600);
   } finally {
     await file?.close().catch(() => undefined);
   }
@@ -583,7 +576,7 @@ async function hardenRunnerDataDirectory(path: string): Promise<void> {
     if (!info.isDirectory()) {
       throw new Error(`Runner data path component is not a directory: ${path}`);
     }
-    await directory.chmod(0o700);
+    await setPrivateMode(directory, path, 0o700);
   } finally {
     await directory?.close().catch(() => undefined);
   }
@@ -636,7 +629,7 @@ async function readRunnerConfigFile(
         `Runner config path is not a regular file: ${configPath}`,
       );
     }
-    await file.chmod(0o600);
+    await setPrivateMode(file, configPath, 0o600);
     content = await file.readFile("utf8");
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {

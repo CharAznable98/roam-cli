@@ -1,3 +1,4 @@
+import { symlink, expectPrivateMode } from "./platform.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   chmod,
@@ -8,7 +9,6 @@ import {
   open,
   readFile,
   stat,
-  symlink,
   unlink,
   utimes,
   writeFile,
@@ -172,10 +172,10 @@ describe("audit log persistence security", () => {
     const lockMode = await observeLockMode(`${path}.lock`);
     await appends;
 
-    expect(lockMode).toBe(0o600);
-    expect((await stat(stateDir)).mode & 0o777).toBe(0o700);
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect((await stat(`${path}.checkpoint`)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(lockMode).toBe(0o600);
+    await expectPrivateMode(stateDir, 0o700);
+    await expectPrivateMode(path, 0o600);
+    await expectPrivateMode(`${path}.checkpoint`, 0o600);
   }, 20_000);
 
   it("fails closed when a complete-looking tail is not newline-terminated", async () => {

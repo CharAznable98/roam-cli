@@ -1,4 +1,5 @@
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { symlink } from "./platform.js";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";

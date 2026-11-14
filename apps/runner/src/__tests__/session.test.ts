@@ -1,3 +1,4 @@
+import { symlink } from "./platform.js";
 import { execFile } from "node:child_process";
 import {
   mkdir,
@@ -5,7 +6,6 @@ import {
   readFile,
   realpath,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2014,7 +2014,8 @@ describe("SessionManager", () => {
     expect(
       events.some(
         (event) =>
-          event.type === "agentActivity" && event.label === "answered: continue",
+          event.type === "agentActivity" &&
+          event.label === "answered: continue",
       ),
     ).toBe(false);
 
@@ -2532,7 +2533,9 @@ async function fakeCodexAgents(workspace: string): Promise<LoadedAgent[]> {
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd });
+  await execFileAsync("git", ["-c", "core.autocrlf=false", ...args], { cwd });
+  if (args[0] === "init")
+    await execFileAsync("git", ["config", "core.autocrlf", "false"], { cwd });
 }
 
 function artifactCodexAgent(): LoadedAgent {

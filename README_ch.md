@@ -151,7 +151,7 @@ chmod +x scripts/install-server.sh
 
 `--uninstall` 会停止并删除脚本生成的 Server 部署文件。删除 Server 数据前会二次确认；默认保留数据。
 
-Windows 用户建议在启用 Docker Desktop 集成的 WSL2 中运行安装脚本，或使用本地源码安装方式。
+Windows 可直接使用本地源码安装；PowerShell 启动、代理配置和端到端验证步骤见 [Windows 指南](docs/windows.md)。Docker 安装脚本仍建议在启用 Docker Desktop 集成的 WSL2 中运行。
 
 ## 连接 Runner
 
