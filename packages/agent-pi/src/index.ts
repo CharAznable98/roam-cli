@@ -113,7 +113,8 @@ class PiSession implements AgentSession {
   #failure: string | undefined;
   #events: Promise<void> = Promise.resolve();
   #dialogTail: Promise<void> = Promise.resolve();
-  #persistence: Promise<void> | undefined;
+  #closing: Promise<void> | undefined;
+  #shutdownFailed = false;
   #outputId: string | undefined;
   #outputSequence = 0;
   #streamed = false;
@@ -137,7 +138,7 @@ class PiSession implements AgentSession {
     try {
       await this.#acceptOnUserWait(() => this.#initializeAndStart());
     } catch (error) {
-      this.close();
+      await this.close();
       throw error;
     }
   }
@@ -177,7 +178,16 @@ class PiSession implements AgentSession {
           ROAMCLI_PI_PROFILE: this.#context.profile,
         },
         onEvent: (event) => {
-          if (event.type === "extension_ui_request") {
+          if (event.type === "entry_appended") {
+            const entry = record(event.entry);
+            const entries = this.#snapshot?.entries;
+            if (
+              typeof entry.id === "string" &&
+              Array.isArray(entries) &&
+              !entries.some((value) => record(value).id === entry.id)
+            )
+              entries.push(entry);
+          } else if (event.type === "extension_ui_request") {
             void this.#handleUI(event).catch((error) => this.#fail(error));
           } else {
             this.#events = this.#events
@@ -329,26 +339,52 @@ class PiSession implements AgentSession {
       this.#cancelUI(true);
       await this.#rpc?.request("clear_queue", {}, 3000);
       await this.#rpc?.request("abort", {}, 5000);
-      // Cancellation can finish an extension-only prompt without ever writing
-      // a conversation. Wait for its handler before saving the native snapshot;
-      // otherwise a late normal prompt could collide with Pi's first wx write.
+      // Extension commands are concurrent in Pi RPC. Capture fresh native state
+      // now, even when the cancelled command has a slow or stuck cleanup hook.
+      await this.#refreshNativeSnapshot();
+      // Give the cancelled command a chance to finish and capture its final
+      // native state. Runner can force close if handler cleanup stalls.
       await Promise.allSettled([...this.#promptOperations]);
-      await this.#persistNativeIfNeeded();
+      await this.#refreshNativeSnapshot();
+    } catch (error) {
+      if (!this.#closed) throw error;
     } finally {
       if (!this.#closed) {
-        this.#closed = true;
-        this.#rpc?.close();
-        await this.#emit({ type: "status", status: "stopped" });
+        await this.#shutdown(false);
+        if (!this.#shutdownFailed)
+          await this.#emit({ type: "status", status: "stopped" });
       }
     }
   }
 
-  close(): void {
+  close(): Promise<void> {
+    return this.#shutdown(true);
+  }
+
+  #shutdown(force: boolean): Promise<void> {
+    if (this.#closing) {
+      if (force) void this.#rpc?.close(true);
+      return this.#closing;
+    }
     this.#closed = true;
     this.#cancelUI();
     if (this.#readyTimer) clearTimeout(this.#readyTimer);
     this.#readyReject?.(new AgentInputUnavailableError());
-    this.#rpc?.close();
+    this.#closing = (async () => {
+      // A native process may still make its first exclusive session-file write.
+      // Only restore the last authentic snapshot after its actual close event.
+      await this.#rpc?.close(force);
+      await this.#writeNativeSnapshotIfMissing();
+    })().catch(async (error) => {
+      this.#shutdownFailed = true;
+      await this.#emit({
+        type: "error",
+        message: message(error),
+        code: "PI_ERROR",
+      });
+      await this.#emit({ type: "status", status: "failed" });
+    });
+    return this.#closing;
   }
 
   #cancelUI(sendResponses = false): void {
@@ -487,10 +523,10 @@ class PiSession implements AgentSession {
     if (this.#failure && !this.#interrupting && !this.#settled.aborted)
       return this.#fail(new Error(this.#failure));
     this.#finishing = true;
-    await this.#persistNativeIfNeeded();
+    await this.#refreshNativeSnapshot();
     if (this.#closed || this.#interrupting) return;
-    this.#closed = true;
-    this.#rpc?.close();
+    await this.#shutdown(false);
+    if (this.#shutdownFailed) return;
     await this.#emit({
       type: "status",
       status:
@@ -499,15 +535,6 @@ class PiSession implements AgentSession {
   }
 
   async #handleUI(event: RecordValue): Promise<void> {
-    if (this.#closed) return;
-    if (
-      event.method === "notify" &&
-      event.message === `roamcli-ready:${this.#token}`
-    ) {
-      if (this.#readyTimer) clearTimeout(this.#readyTimer);
-      this.#readyResolve?.();
-      return;
-    }
     if (
       event.method === "notify" &&
       typeof event.message === "string" &&
@@ -518,6 +545,15 @@ class PiSession implements AgentSession {
           event.message.slice(`roamcli-snapshot:${this.#token}:`.length),
         ),
       );
+      return;
+    }
+    if (this.#closed) return;
+    if (
+      event.method === "notify" &&
+      event.message === `roamcli-ready:${this.#token}`
+    ) {
+      if (this.#readyTimer) clearTimeout(this.#readyTimer);
+      this.#readyResolve?.();
       return;
     }
     const response: RecordValue = {
@@ -666,11 +702,7 @@ class PiSession implements AgentSession {
     }
   }
 
-  #persistNativeIfNeeded(): Promise<void> {
-    return (this.#persistence ??= this.#persistNative());
-  }
-
-  async #persistNative(): Promise<void> {
+  async #refreshNativeSnapshot(): Promise<void> {
     const path = this.#sessionFile;
     if (!path || this.#closed) return;
     try {
@@ -679,14 +711,22 @@ class PiSession implements AgentSession {
     } catch (error) {
       if (record(error).code !== "ENOENT") throw error;
     }
-    // Pi intentionally keeps setup/extension-only sessions in memory. Obtain
-    // its exact public session snapshot after the command settles and save it
-    // before closing. Never fabricate a native header or overwrite a file Pi
-    // has already persisted. There are no further prompts in this process.
-    this.#snapshot = undefined;
     await this.#rpc?.request("prompt", {
       message: `/roamcli-state-${this.#token}`,
     });
+  }
+
+  async #writeNativeSnapshotIfMissing(): Promise<void> {
+    const path = this.#sessionFile;
+    if (!path) return;
+    try {
+      await stat(path);
+      return;
+    } catch (error) {
+      if (record(error).code !== "ENOENT") throw error;
+    }
+    // Pi intentionally keeps setup/extension-only sessions in memory. Preserve
+    // its last public snapshot, never a fabricated header or an existing file.
     const snapshot = this.#snapshot as RecordValue | undefined;
     const header = record(snapshot?.header);
     if (
@@ -726,10 +766,11 @@ class PiSession implements AgentSession {
       error instanceof Error ? error : new Error(message(error)),
     );
     if (this.#readyTimer) clearTimeout(this.#readyTimer);
-    this.#rpc?.close(
+    void this.#rpc?.close(
       true,
       error instanceof Error ? error : new Error(message(error)),
     );
+    await this.#shutdown(true);
     await this.#emit({
       type: "error",
       message: message(error),
@@ -862,7 +903,7 @@ async function withDiscovery<T>(
   try {
     return await run(rpc);
   } finally {
-    rpc.close();
+    await rpc.close();
   }
 }
 

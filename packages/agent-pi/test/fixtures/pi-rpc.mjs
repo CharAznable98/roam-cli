@@ -68,12 +68,18 @@ const sendReady = () => {
   if (
     process.argv.includes("--extension") &&
     process.env.PI_TEST_NO_BRIDGE !== "1"
-  )
+  ) {
+    send({
+      type: "extension_ui_request",
+      method: "notify",
+      message: `roamcli-snapshot:${process.env.ROAMCLI_PI_APPROVAL_TOKEN}:${JSON.stringify({ header, entries })}`,
+    });
     send({
       type: "extension_ui_request",
       method: "notify",
       message: `roamcli-ready:${process.env.ROAMCLI_PI_APPROVAL_TOKEN}`,
     });
+  }
 };
 let startupUI = process.env.PI_TEST_STARTUP_UI === "1";
 if (startupUI)
@@ -124,7 +130,12 @@ const finish = (text, aborted = false) => {
   active = false;
 };
 process.stdin.setEncoding("utf8");
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+  if (process.env.PI_TEST_EXIT_PERSIST === "1")
+    persistConversation("native exit conversation");
+  if (process.env.PI_TEST_HANG_SHUTDOWN === "1") setInterval(() => {}, 1000);
+  else process.exit(0);
+});
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
   let index;
@@ -146,6 +157,7 @@ process.stdin.on("data", (chunk) => {
           sessionFile,
           isStreaming: active,
           thinkingLevel: "medium",
+          pid: process.pid,
         });
       if (startupUI) pendingStartupState = state;
       else state();
@@ -201,6 +213,7 @@ process.stdin.on("data", (chunk) => {
         command.message ===
         `/roamcli-state-${process.env.ROAMCLI_PI_APPROVAL_TOKEN}`
       ) {
+        if (process.env.PI_TEST_NO_STATE_SNAPSHOT === "1") continue;
         send({
           type: "extension_ui_request",
           method: "notify",
@@ -268,7 +281,7 @@ process.stdin.on("data", (chunk) => {
         send({
           type: "extension_ui_request",
           id: "user-dialog",
-          method,
+          method: method === "slow" ? "input" : method,
           title: "Extension question",
           message: "Confirm this action?",
           placeholder: "输入中文回答",
@@ -276,6 +289,23 @@ process.stdin.on("data", (chunk) => {
           options: ["甲", "乙"],
         });
         pendingDialog = (response) => {
+          if (method === "slow") {
+            const entry = {
+              type: "custom",
+              id: "slow-state",
+              parentId: entries.at(-1)?.id ?? null,
+              timestamp: "2026-11-15T00:00:00.000Z",
+              customType: "stop-proof",
+              data: "native-entry",
+            };
+            entries.push(entry);
+            send({ type: "entry_appended", entry });
+            setTimeout(
+              () => respond(command, { disposition: "handled" }),
+              10000,
+            );
+            return;
+          }
           send({
             type: "extension_ui_request",
             method: "notify",

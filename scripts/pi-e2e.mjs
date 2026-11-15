@@ -84,6 +84,12 @@ export default function(pi) {
     const second = await ctx.ui.input('Fixture timed second', 'Answer the second question');
     ctx.ui.notify('FIXTURE_TIMED_SECOND:' + String(second));
   }});
+  pi.registerCommand('fixture-slow-input', {description: 'Input with slow cancellation cleanup', handler: async (_args, ctx) => {
+    await ctx.ui.input('Fixture slow input', 'Stop before answering');
+    pi.appendEntry('slow-stop-fixture', {proof: 'before-slow-cleanup'});
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    ctx.ui.notify('SLOW_CLEANUP_COMPLETE');
+  }});
   for (const method of ['input', 'select', 'confirm', 'editor']) {
     pi.registerCommand('fixture-' + method, {
       description: 'Controlled native UI ' + method,
@@ -741,6 +747,65 @@ async function runCases() {
   );
   pass(
     "first extension-only input stopped, snapshot persisted, and same native file resumed without wx collision",
+  );
+
+  const slowCommand = await createSession(standard, "/fixture-slow-input");
+  const slowWaiting = await wait(async () => {
+    const detail = await snapshot(slowCommand.id);
+    return detail.session.status === "waiting_input" ? detail : false;
+  }, "native command waiting before slow cancellation cleanup");
+  const slowFile = slowWaiting.session.agentThreadId;
+  const stopStarted = Date.now();
+  stream.send(
+    JSON.stringify({
+      type: "controlSignal",
+      requestId: randomUUID(),
+      sessionId: slowCommand.id,
+      signal: "stop",
+    }),
+  );
+  await wait(
+    async () => (await snapshot(slowCommand.id)).session.status === "stopped",
+    "slow native command exposes stopped",
+  );
+  await follow(slowCommand, "AFTER_FORCED_DIALOG_STOP");
+  const slowResumed = await complete(slowCommand);
+  assert(
+    Date.now() - stopStarted < 10000,
+    "slow native command stop was not bounded",
+  );
+  assert(
+    slowResumed.session.agentThreadId === slowFile,
+    "forced stop changed the native session identity",
+  );
+  assert(
+    slowResumed.messages.some(
+      (item) =>
+        item.role === "assistant" &&
+        item.content.includes("AFTER_FORCED_DIALOG_STOP"),
+    ),
+    "forced stop continuation did not complete",
+  );
+  const slowEntries = (await readFile(slowFile, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert(
+    slowEntries.some(
+      (entry) =>
+        entry.customType === "slow-stop-fixture" &&
+        entry.data?.proof === "before-slow-cleanup",
+    ),
+    "forced stop lost the latest public native entry",
+  );
+  assert(
+    !slowResumed.activities.some(
+      (activity) => activity.label === "SLOW_CLEANUP_COMPLETE",
+    ),
+    "slow handler outlived forced stop and completed after resume",
+  );
+  pass(
+    "slow native cleanup forced closed, latest snapshot preserved, and immediate continuation completed in the same file",
   );
 
   for (const [method, answer, expected] of [

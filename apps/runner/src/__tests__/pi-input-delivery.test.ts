@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { RunnerEvent, Session } from "@roamcli/shared/protocol";
 import { loadAgentRegistry } from "../agents/registry.js";
 import { InputDeliveryStore } from "../persistence/input-deliveries.js";
+import { StartDeliveryStore } from "../persistence/start-deliveries.js";
 import { SessionManager } from "../sessions/manager.js";
 import { piAgent } from "@roamcli/agent-pi";
 
@@ -22,88 +23,106 @@ afterEach(async () => {
   }
 });
 
-it("waits for stop cleanup before resuming the same session", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "roam-pi-stop-resume-"));
-  temporary.push(workspace);
-  const events: RunnerEvent[] = [];
-  let releaseStop!: () => void;
-  const stopped = new Promise<void>((resolve) => {
-    releaseStop = resolve;
-  });
-  let created = 0;
-  let resumedThread: string | undefined;
-  const manager = new SessionManager({
-    workspace,
-    profile: "trusted",
-    agents: [
-      {
-        capability: piAgent.buildCapability({ profile: "trusted", env: {} }),
-        definition: {
-          ...piAgent,
-          createSession: (context) => {
-            const sequence = ++created;
-            return {
-              start: async () => {
-                if (sequence > 1) {
-                  resumedThread = context.resumeThreadId;
-                  await context.emit({ type: "status", status: "completed" });
-                }
-              },
-              deliverInput: async () => undefined,
-              control: async (signal) => {
-                if (signal === "stop") {
-                  await stopped;
-                  await context.emit({ type: "status", status: "stopped" });
-                }
-              },
-              close: async () => undefined,
-            };
+it.each(["direct", "durable"])(
+  "waits for stop cleanup before a %s continuation",
+  async (mode) => {
+    const workspace = await mkdtemp(join(tmpdir(), "roam-pi-stop-resume-"));
+    temporary.push(workspace);
+    const events: RunnerEvent[] = [];
+    let releaseStop!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    let created = 0;
+    let resumedThread: string | undefined;
+    const manager = new SessionManager({
+      workspace,
+      profile: "trusted",
+      agents: [
+        {
+          capability: piAgent.buildCapability({ profile: "trusted", env: {} }),
+          definition: {
+            ...piAgent,
+            createSession: (context) => {
+              const sequence = ++created;
+              return {
+                start: async () => {
+                  if (sequence > 1) {
+                    resumedThread = context.resumeThreadId;
+                    await context.emit({ type: "status", status: "completed" });
+                  }
+                },
+                deliverInput: async () => undefined,
+                control: async (signal) => {
+                  if (signal === "stop") {
+                    await stopped;
+                    await context.emit({ type: "status", status: "stopped" });
+                  }
+                },
+                close: async () => undefined,
+              };
+            },
           },
         },
+      ],
+      emit: (event) => {
+        events.push(event);
       },
-    ],
-    emit: (event) => {
-      events.push(event);
-    },
-  });
-  const session: Session = {
-    id: "pi-stop-resume",
-    projectId: "p1",
-    runnerId: "r1",
-    title: "Pi stop resume",
-    agent: "pi",
-    status: "pending",
-    executionMode: "direct",
-    executionFolder: workspace,
-    cwd: workspace,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  try {
-    await manager.start(session, "wait");
-    manager.control(session.id, "stop");
-    let resumed = false;
-    const restarting = manager
-      .start(session, "continue", "native-thread")
-      .then(() => {
+    });
+    const session: Session = {
+      id: "pi-stop-resume",
+      projectId: "p1",
+      runnerId: "r1",
+      title: "Pi stop resume",
+      agent: "pi",
+      status: "pending",
+      executionMode: "direct",
+      executionFolder: workspace,
+      cwd: workspace,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    let restarting: Promise<void> | undefined;
+    try {
+      await manager.start(session, "wait");
+      const storeReads = vi.spyOn(StartDeliveryStore.prototype, "get");
+      manager.control(session.id, "stop");
+      let resumed = false;
+      restarting = (
+        mode === "durable"
+          ? manager.handle({
+              type: "startSession",
+              requestId: "resume-request",
+              deliveryId: "resume-delivery",
+              session,
+              prompt: "continue",
+              resumeThreadId: "native-thread",
+              attachments: [],
+            })
+          : manager.start(session, "continue", "native-thread")
+      ).then(() => {
         resumed = true;
       });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(resumed).toBe(false);
-    releaseStop();
-    await restarting;
-    expect(created).toBe(2);
-    expect(resumedThread).toBe("native-thread");
-    expect(
-      events.some(
-        (event) => event.type === "error" && event.code === "SESSION_EXISTS",
-      ),
-    ).toBe(false);
-  } finally {
-    releaseStop();
-    manager.control(session.id, "stop");
-  }
-});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (mode === "durable") expect(storeReads).not.toHaveBeenCalled();
+      expect(resumed).toBe(false);
+      releaseStop();
+      await restarting;
+      expect(created).toBe(2);
+      expect(resumedThread).toBe("native-thread");
+      expect(
+        events.some(
+          (event) => event.type === "error" && event.code === "SESSION_EXISTS",
+        ),
+      ).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      releaseStop();
+      await restarting?.catch(() => undefined);
+      manager.control(session.id, "stop");
+    }
+  },
+);
 
 it("retries an explicit Pi refusal through Runner and persists only accepted ownership", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "roam-pi-input-retry-"));

@@ -471,6 +471,7 @@ export class SessionManager {
       deliveryId: string;
     },
   ): Promise<void> {
+    await this.#waitForTerminalPublication(command.session.id);
     const payload = startDeliveryPayload(command);
     const payloadHash = hashStartDeliveryPayload(payload);
     const existing = await this.#startDeliveryStore.get(command.deliveryId);

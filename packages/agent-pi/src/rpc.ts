@@ -32,6 +32,9 @@ export class PiRpc {
   #closed = false;
   #paused = false;
   #shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  #pipeCloseTimer: ReturnType<typeof setTimeout> | undefined;
+  readonly #closePromise: Promise<void>;
+  #resolveClose!: () => void;
   readonly #onEvent: (event: RecordValue) => void;
   readonly #onFailure: (error: Error) => void;
 
@@ -45,6 +48,9 @@ export class PiRpc {
   }) {
     this.#onEvent = options.onEvent;
     this.#onFailure = options.onFailure;
+    this.#closePromise = new Promise((resolve) => {
+      this.#resolveClose = resolve;
+    });
     const invocation = piInvocation(options.command, options.env);
     this.#child = spawn(
       invocation.command,
@@ -64,8 +70,18 @@ export class PiRpc {
     });
     this.#child.on("error", (error) => this.#fail(error));
     this.#child.stdin.on("error", (error) => this.#fail(error));
+    this.#child.on("exit", () => {
+      // Drain Pi's final notifications before closing pipes a descendant may
+      // have inherited. Such a descendant must not hold the exit barrier open.
+      if (this.#closed) {
+        this.#pipeCloseTimer = setTimeout(() => this.#destroyPipes(), 100);
+        this.#pipeCloseTimer.unref();
+      }
+    });
     this.#child.on("close", (code, signal) => {
       if (this.#shutdownTimer) clearTimeout(this.#shutdownTimer);
+      if (this.#pipeCloseTimer) clearTimeout(this.#pipeCloseTimer);
+      this.#resolveClose();
       if (!this.#closed)
         this.#fail(
           new Error(
@@ -120,18 +136,30 @@ export class PiRpc {
     this.#child.stdin.write(`${JSON.stringify(value)}\n`);
   }
 
-  close(force = false, reason = new Error("Pi RPC is closed")): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#rejectPending(reason);
+  close(force = false, reason = new Error("Pi RPC is closed")): Promise<void> {
+    const alreadyClosing = this.#closed;
+    if (!alreadyClosing) {
+      this.#closed = true;
+      this.#rejectPending(reason);
+    }
     if (force) {
+      if (this.#shutdownTimer) clearTimeout(this.#shutdownTimer);
       this.#child.kill("SIGKILL");
-    } else {
+      if (this.#child.exitCode !== null || this.#child.signalCode !== null)
+        this.#destroyPipes();
+    } else if (!alreadyClosing) {
       // Let Pi flush session state and refreshed OAuth credentials before exit.
       this.#child.stdin.end();
       this.#shutdownTimer = setTimeout(() => this.#child.kill("SIGKILL"), 3000);
       this.#shutdownTimer.unref();
     }
+    return this.#closePromise;
+  }
+
+  #destroyPipes(): void {
+    this.#child.stdin.destroy();
+    this.#child.stdout.destroy();
+    this.#child.stderr.destroy();
   }
 
   #read(chunk: string): void {
@@ -141,11 +169,21 @@ export class PiRpc {
     while ((index = this.#buffer.indexOf("\n")) !== -1) {
       const line = this.#buffer.slice(0, index).replace(/\r$/, "");
       this.#buffer = this.#buffer.slice(index + 1);
-      if (!line.trim() || this.#closed) continue;
+      if (!line.trim()) continue;
       try {
         if (line.length > 64 * 1024 * 1024)
           throw new Error("Pi RPC record exceeded 64 MiB");
         const event = record(JSON.parse(line));
+        if (this.#closed) {
+          // Native shutdown hooks may provide a final snapshot. Keep observing
+          // notifications and entries until close, without accepting RPC work.
+          if (
+            event.type === "extension_ui_request" ||
+            event.type === "entry_appended"
+          )
+            this.#onEvent(event);
+          continue;
+        }
         if (event.type === "response") {
           const pending = this.#pending.get(String(event.id));
           if (!pending) continue;

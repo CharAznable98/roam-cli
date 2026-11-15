@@ -376,6 +376,77 @@ describe("Pi RPC integration", () => {
       ),
     ).toBe(false);
   });
+  it.each([false, true])(
+    "persists the last native snapshot after forced close interrupts a slow stop handler (snapshot RPC hangs=%s)",
+    async (snapshotHangs) => {
+      const { create, context, events, log } = await setup("dialog:slow");
+      context.env.PI_TEST_HANG_SHUTDOWN = "1";
+      if (snapshotHangs) context.env.PI_TEST_NO_STATE_SNAPSHOT = "1";
+      context.requestUserInput = async () => new Promise(() => {});
+      const session = create();
+      await session.start();
+      const thread = events.find((event) => event.type === "thread");
+      if (thread?.type !== "thread") throw new Error("Missing thread");
+      const started = Date.now();
+      const stopping = session.control("stop");
+      await new Promise((resolve) => setTimeout(resolve, 1550));
+      const closed = session.close();
+      await closed;
+      await stopping;
+      expect(Date.now() - started).toBeLessThan(3500);
+      const saved = (await readFile(thread.threadId, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(saved[0]).toMatchObject({
+        type: "session",
+        id: "native-id",
+        cwd: context.cwd,
+      });
+      expect(saved).toContainEqual(
+        expect.objectContaining({
+          type: "custom",
+          id: "slow-state",
+          data: "native-entry",
+        }),
+      );
+      delete context.env.PI_TEST_HANG_SHUTDOWN;
+      delete context.env.PI_TEST_NO_STATE_SNAPSHOT;
+      context.resumeThreadId = thread.threadId;
+      context.prompt = "first conversation after forced stop";
+      events.length = 0;
+      await create().start();
+      await vi.waitFor(() => expect(completed(events)).toBe(true));
+      expect(events).toContainEqual({
+        type: "thread",
+        threadId: thread.threadId,
+      });
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(
+        (await log()).filter(
+          (command) =>
+            command.message === "first conversation after forced stop",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+  it("lets the native process make its final exclusive file write before snapshot fallback", async () => {
+    const { create, context, events } = await setup("handled-empty");
+    context.env.PI_TEST_EXIT_PERSIST = "1";
+    await create().start();
+    await vi.waitFor(() => expect(completed(events)).toBe(true));
+    const thread = events.find((event) => event.type === "thread");
+    if (thread?.type !== "thread") throw new Error("Missing thread");
+    const saved = (await readFile(thread.threadId, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(saved.at(-1)?.message).toMatchObject({
+      role: "user",
+      content: [{ text: "native exit conversation" }],
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
   it("exposes unexpected user-input failures with the question title", async () => {
     const { create, context, events } = await setup("dialog:input");
     context.requestUserInput = async () => {
@@ -575,6 +646,23 @@ describe("Pi RPC integration", () => {
 });
 
 describe("Pi RPC user wait timing", () => {
+  it("waits for child close and can force an already graceful shutdown", async () => {
+    const { context } = await setup();
+    const rpc = new PiRpc({
+      command: fixture,
+      args: ["--mode", "rpc", "--no-session"],
+      cwd: context.cwd,
+      env: { ...context.env, PI_TEST_HANG_SHUTDOWN: "1" },
+      onEvent: () => undefined,
+      onFailure: () => undefined,
+    });
+    const state = await rpc.request("get_state");
+    const closing = rpc.close();
+    const forced = rpc.close(true);
+    expect(forced).toBe(closing);
+    await forced;
+    expect(() => process.kill(Number(state.pid), 0)).toThrow();
+  });
   it("pauses request deadlines during human input and restores them after the answer", async () => {
     const { context } = await setup();
     let asked = false;
@@ -623,6 +711,33 @@ describe("Pi RPC user wait timing", () => {
 });
 
 describe("Pi execution guard", () => {
+  it("does not serialize already persisted native history for the readiness seed", async () => {
+    const { cwd } = await setup();
+    const path = join(cwd, "persisted.jsonl");
+    await writeFile(path, "persisted native history\n");
+    vi.stubEnv("ROAMCLI_PI_APPROVAL_TOKEN", "test-token");
+    const handlers = new Map<string, Function>();
+    approvalExtension({
+      registerCommand: vi.fn(),
+      on: (event: string, handler: Function) => {
+        handlers.set(event, handler);
+      },
+    });
+    const notify = vi.fn();
+    const getEntries = vi.fn(() => {
+      throw new Error("Persisted history must stay in Pi");
+    });
+    const ctx = {
+      sessionManager: { getSessionFile: () => path, getEntries },
+      ui: { notify },
+    };
+    handlers.get("session_start")!({}, ctx);
+    handlers.get("session_shutdown")!({}, ctx);
+    expect(getEntries).not.toHaveBeenCalled();
+    expect(notify.mock.calls.map((call) => call[0])).toEqual([
+      "roamcli-ready:test-token",
+    ]);
+  });
   it.each(["strict", "standard", "trusted"])(
     "uses the approved tool policy for %s",
     async (profile) => {
