@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   AgentInputUnavailableError,
+  AgentInputRejectedError,
   type AgentRuntimeEvent,
   type ArtifactDraft,
 } from "@roamcli/agent-plugin-sdk";
@@ -63,6 +64,8 @@ interface TerminalPublication {
 
 interface TerminalSignal {
   generation: number;
+  published: Promise<void>;
+  settle: () => void;
 }
 
 interface StableInputDelivery {
@@ -468,6 +471,7 @@ export class SessionManager {
       deliveryId: string;
     },
   ): Promise<void> {
+    await this.#waitForTerminalPublication(command.session.id);
     const payload = startDeliveryPayload(command);
     const payloadHash = hashStartDeliveryPayload(payload);
     const existing = await this.#startDeliveryStore.get(command.deliveryId);
@@ -899,12 +903,16 @@ export class SessionManager {
         return result;
       })
       .catch((error: unknown) => {
-        if (error instanceof UserInputAcceptanceRetryableError) {
+        if (
+          error instanceof UserInputAcceptanceRetryableError ||
+          error instanceof AgentInputRejectedError
+        ) {
           const current = this.#stableInputDeliveries.get(input.deliveryId);
           if (current?.ownership === ownership) {
             this.#stableInputDeliveries.delete(input.deliveryId);
           }
         }
+        if (error instanceof AgentInputRejectedError) return "not_owned";
         throw error;
       });
     this.#stableInputDeliveries.set(input.deliveryId, {
@@ -960,6 +968,7 @@ export class SessionManager {
       }
       return "owned";
     } catch (error: unknown) {
+      if (error instanceof AgentInputRejectedError) throw error;
       if (error instanceof AgentAcceptanceTimeoutError) {
         await this.#terminateTimedOutSession(token, running, error);
       }
@@ -1302,8 +1311,13 @@ export class SessionManager {
   }
 
   #registerTerminalSignal(token: SessionGeneration): void {
+    let settle!: () => void;
     this.#terminalSignals.set(token.sessionId, {
       generation: token.generation,
+      published: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+      settle: () => settle(),
     });
   }
 
@@ -1372,12 +1386,19 @@ export class SessionManager {
       }
       const signal = this.#terminalSignals.get(publication.token.sessionId);
       if (signal?.generation === publication.token.generation) {
+        signal.settle();
         this.#terminalSignals.delete(publication.token.sessionId);
       }
     }
   }
 
   async #waitForTerminalPublication(sessionId: string): Promise<void> {
+    // The Server exposes stopped optimistically. A continuation may arrive
+    // before the agent has flushed its native session and published terminal.
+    // Wait only for an explicitly stopping generation, not for active work.
+    if (this.#sessions.get(sessionId)?.stopRequested) {
+      await this.#terminalSignals.get(sessionId)?.published;
+    }
     const publication = this.#terminalPublications.get(sessionId);
     await publication?.promise;
   }

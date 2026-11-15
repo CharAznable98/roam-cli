@@ -29,8 +29,9 @@ pnpm --filter @roamcli/runner dev -- `
   --agent-plugin @roamcli/agent-codex
 ```
 
-The default `standard` profile preserves Windows runtime/home directories,
-`CODEX_HOME`, and HTTP/SOCKS proxy environment settings. It still removes the
+The default `standard` profile preserves Windows runtime/home and installation directories,
+`CODEX_HOME`, and HTTP/SOCKS proxy environment settings. Installation directories
+let Pi find Git Bash and PowerShell without overriding its native settings. It still removes the
 Runner token and agent command override variables before launching agents.
 When a local proxy is running, set its **actual** port in the Runner terminal:
 
@@ -79,6 +80,25 @@ checks that it resumes the same Codex thread. It also checks Runner file reads,
 saves and patch application. Image fixture assertions remain covered by default smoke.
 Without `ROAMCLI_SMOKE_WORKSPACE`, smoke creates and removes an isolated temporary
 workspace rather than changing an existing workspace's Runner configuration.
+
+For Pi, install `@earendil-works/pi-coding-agent@1.5.2`, configure its local
+authentication/models, and use `--agent-plugin @roamcli/agent-pi`. The default
+Pi command tool uses Git Bash; Pi can also enable its native `powershell` tool
+through local settings. Both command tools are covered by RoamCli approvals.
+Pi has no OS sandbox. Run the real Pi smoke with:
+
+```powershell
+$env:ROAMCLI_SMOKE_REAL_AGENT = '1'
+$env:ROAMCLI_SMOKE_AGENT = 'pi'
+pnpm smoke:e2e
+Remove-Item Env:ROAMCLI_SMOKE_REAL_AGENT
+Remove-Item Env:ROAMCLI_SMOKE_AGENT
+```
+
+This uses an isolated temporary workspace and automatically approves Pi tool
+requests there. It verifies a real file edit and persisted reply, then continues
+the same native Pi session. Existing local model configuration is reused;
+`strict`/`standard` still filter provider API-key environment variables.
 
 Windows tests use junctions for directory-link coverage. Tests that require file
 symlinks are explicitly skipped if the current account lacks the symlink

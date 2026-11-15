@@ -29,6 +29,7 @@ const packages = {
   "@roamcli/shared": "packages/shared",
   "@roamcli/agent-plugin-sdk": "packages/agent-plugin-sdk",
   "@roamcli/agent-codex": "packages/agent-codex",
+  "@roamcli/agent-pi": "packages/agent-pi",
 };
 
 // Invoke Node tools directly: .cmd shims cannot be spawned without a shell on Windows,

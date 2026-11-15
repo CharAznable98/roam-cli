@@ -50,6 +50,7 @@
   "devDependencies": {
     "@roamcli/agent-claude-code": "workspace:*",
     "@roamcli/agent-codex": "workspace:*",
+    "@roamcli/agent-pi": "workspace:*",
     "@types/react": "^19.2.16",
     "tsx": "^4.22.4",
     "typescript": "^5.8.3",

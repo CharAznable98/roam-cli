@@ -19,8 +19,19 @@ let workspace = process.env.ROAMCLI_SMOKE_WORKSPACE
   ? resolve(process.env.ROAMCLI_SMOKE_WORKSPACE)
   : undefined;
 const realAgent = process.env.ROAMCLI_SMOKE_REAL_AGENT === "1";
+const agentKind = process.env.ROAMCLI_SMOKE_AGENT ?? "codex";
+if (
+  !["codex", "pi"].includes(agentKind) ||
+  (agentKind === "pi" && !realAgent)
+) {
+  throw new Error(
+    "ROAMCLI_SMOKE_AGENT must be codex or pi; Pi smoke requires ROAMCLI_SMOKE_REAL_AGENT=1.",
+  );
+}
 const suppliedBaseUrl = process.env.ROAMCLI_SMOKE_BASE_URL;
-const timeoutMs = Number(process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? (realAgent ? 300_000 : 30_000));
+const timeoutMs = Number(
+  process.env.ROAMCLI_SMOKE_TIMEOUT_MS ?? (realAgent ? 300_000 : 30_000),
+);
 const runnerId = process.env.ROAMCLI_SMOKE_RUNNER_ID ?? `smoke-${process.pid}`;
 const runnerDataDir = `.roam-runner-smoke-${process.pid}-${Date.now().toString(36)}`;
 const smokeMaxImageBytes = 5 * 1024 * 1024;
@@ -49,7 +60,9 @@ Environment:
   ROAMCLI_SMOKE_PASSWORD        Owner password for login/setup. Default: roamcli-smoke-password.
   ROAMCLI_SMOKE_RUNNER_ID       Runner id to use or start. Default: smoke-<pid>.
   ROAMCLI_SMOKE_WORKSPACE       Workspace exposed to the runner. Default: isolated temporary workspace.
-  ROAMCLI_SMOKE_REAL_AGENT=1   Use the authenticated Codex CLI; verify a real file edit and follow-up turn.
+  ROAMCLI_SMOKE_REAL_AGENT=1   Use the authenticated agent CLI; verify a real file edit and follow-up turn.
+  ROAMCLI_SMOKE_AGENT          codex (default) or pi (real-agent mode only).
+  ROAMCLI_SMOKE_MODEL          Optional model selection (Pi: provider/model).
   ROAMCLI_SMOKE_SKIP_BUILD=1    Skip shared package prebuild.
   ROAMCLI_SMOKE_TIMEOUT_MS      Per-step timeout. Default: 30000 (real agent: 300000).
   ROAMCLI_SMOKE_EXPECT_PATCH_APPLY=0
@@ -101,9 +114,9 @@ async function runSmoke() {
       "@roamcli/agent-plugin-sdk",
       "build",
     ]);
-    await runCommand("build:agent-codex", "pnpm", [
+    await runCommand(`build:agent-${agentKind}`, "pnpm", [
       "--filter",
-      "@roamcli/agent-codex",
+      `@roamcli/agent-${agentKind}`,
       "build",
     ]);
   }
@@ -159,9 +172,11 @@ async function runSmoke() {
       (
         await readFile(resolve(workspace, "real-agent-proof.txt"), "utf8")
       ).trim() === marker,
-      "real Codex did not create the requested workspace file",
+      `real ${agentKind} did not create the requested workspace file`,
     );
-    pass("real Codex file editing tool created the requested workspace file");
+    pass(
+      `real ${agentKind} file editing tool created the requested workspace file`,
+    );
     const initial = await requestJson(`/v1/sessions/${session.id}`);
     const reply = `ROAMCLI_RESUMED_${Date.now()}`;
     await requestJson(`/v1/sessions/${session.id}/messages`, {
@@ -177,15 +192,15 @@ async function runSmoke() {
     assert(
       initial.session.agentThreadId &&
         resumed.session.agentThreadId === initial.session.agentThreadId,
-      "follow-up did not resume the original Codex thread",
+      `follow-up did not resume the original ${agentKind} thread`,
     );
-    pass("real Codex follow-up resumed the same thread and completed");
+    pass(`real ${agentKind} follow-up resumed the same thread and completed`);
   }
 
   if (!realAgent) await imageAttachmentAssertionEntry(project.id, runner);
   else
     pass(
-      "real Codex app-server round-trip completed (image fixture assertions covered by default smoke)",
+      `real ${agentKind} round-trip completed (image fixture assertions covered by default smoke)`,
     );
 
   const tree = await requestJson(
@@ -304,7 +319,7 @@ async function ensureRunnerOnline() {
       "--profile",
       realAgent ? "standard" : "trusted",
       "--agent-plugin",
-      "@roamcli/agent-codex",
+      `@roamcli/agent-${agentKind}`,
     ],
     {
       ROAM_RUNNER_SERVER: wsUrl.toString(),
@@ -351,7 +366,10 @@ async function createSession(projectId, prompt, attachments = []) {
     body: JSON.stringify({
       requestId: `smoke-session-${randomUUID()}`,
       projectId,
-      agent: "codex",
+      agent: agentKind,
+      ...(process.env.ROAMCLI_SMOKE_MODEL
+        ? { agentRuntimeConfig: { model: process.env.ROAMCLI_SMOKE_MODEL } }
+        : {}),
       prompt,
       title: "Smoke E2E",
       ...(attachments.length > 0 ? { attachments } : {}),
@@ -408,6 +426,24 @@ async function waitForPersistedAssistantMessage(sessionId, expected) {
   return waitFor(
     async () => {
       const payload = await requestJson(`/v1/sessions/${sessionId}`);
+      if (realAgent && agentKind === "pi") {
+        for (const approval of payload.approvals ?? []) {
+          if (approval.status === "pending") {
+            await requestJson(`/v1/approvals/${approval.id}`, {
+              method: "POST",
+              body: JSON.stringify({ approved: true }),
+            });
+            pass(`approved Pi tool: ${approval.summary}`);
+          }
+        }
+      }
+      if (["failed", "stopped"].includes(payload.session?.status)) {
+        const error = new Error(
+          `Agent session ${payload.session.status}: ${JSON.stringify(payload.messages?.slice(-3))}`,
+        );
+        error.terminal = true;
+        throw error;
+      }
       return payload.messages?.some(
         (message) =>
           message.role === "assistant" && message.content.includes(expected),
@@ -636,6 +672,7 @@ async function waitFor(probe, description) {
         return value;
       }
     } catch (error) {
+      if (error?.terminal) throw error;
       lastError = error;
     }
     await delay(250);

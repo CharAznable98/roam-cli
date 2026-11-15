@@ -121,6 +121,7 @@ export const RunnerCapabilitySchema = z.object({
     .optional(),
   pluginName: z.string().min(1).optional(),
   pluginVersion: z.string().min(1).optional(),
+  permissionNotice: z.string().min(1).optional(),
 });
 export type RunnerCapability = z.infer<typeof RunnerCapabilitySchema>;
 

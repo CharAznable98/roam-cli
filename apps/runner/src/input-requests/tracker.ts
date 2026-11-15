@@ -28,6 +28,7 @@ interface PendingUserInputRequest {
   resolve: (decision: UserInputDecision) => void;
   reject: (error: Error) => void;
   accepting: boolean;
+  detachCancellation(): void;
 }
 
 export class UserInputRequestTracker {
@@ -49,6 +50,7 @@ export class UserInputRequestTracker {
     draft: UserInputRequestDraft,
   ): Promise<UserInputDecision> {
     const question = supportedQuestion(draft);
+    draft.signal?.throwIfAborted();
     const existing = this.#pendingBySession.get(session.id);
     if (existing !== undefined) {
       throw new Error(
@@ -64,6 +66,7 @@ export class UserInputRequestTracker {
         resolve,
         reject,
         accepting: false,
+        detachCancellation: () => undefined,
       });
     });
     void decision.catch(() => undefined);
@@ -76,6 +79,27 @@ export class UserInputRequestTracker {
       );
       pending?.reject(error);
       throw error;
+    }
+    if (draft.signal) {
+      const signal = draft.signal;
+      const cancel = () => {
+        const pending = this.#pendingBySession.get(session.id);
+        if (pending?.inputRequestId !== inputRequestId) return;
+        this.#pendingBySession.delete(session.id);
+        this.#waits.remove(token, inputRequestId);
+        pending.detachCancellation();
+        // Release the question synchronously, then settle only after its status
+        // transition. The next native dialog can now use this session's slot.
+        void this.#waits
+          .syncStatus(token)
+          .catch(() => undefined)
+          .finally(() => {
+            pending.reject(toError(signal.reason));
+          });
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      this.#pendingBySession.get(session.id)!.detachCancellation = () =>
+        signal.removeEventListener("abort", cancel);
     }
     try {
       await this.#emit({
@@ -101,6 +125,7 @@ export class UserInputRequestTracker {
       ) {
         this.#pendingBySession.delete(session.id);
         this.#waits.remove(token, inputRequestId);
+        pending.detachCancellation();
         pending.reject(toError(error));
         await this.#waits.syncStatus(token).catch(() => undefined);
       }
@@ -149,6 +174,7 @@ export class UserInputRequestTracker {
       return false;
     }
     this.#pendingBySession.delete(sessionId);
+    pending.detachCancellation();
     pending.resolve({
       inputRequestId: pending.inputRequestId,
       content,
@@ -167,6 +193,7 @@ export class UserInputRequestTracker {
     }
     this.#pendingBySession.delete(sessionId);
     this.#waits.remove(pending.token, pending.inputRequestId);
+    pending.detachCancellation();
     pending.reject(new Error("Session ended before user input was provided"));
   }
 

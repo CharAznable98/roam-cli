@@ -13,6 +13,14 @@ const runnerVersion = JSON.parse(
 ) as { version: string };
 
 describe("buildNpxRunnerArgs", () => {
+  it("pins the Pi plugin to the Runner release", () => {
+    expect(
+      buildNpxRunnerArgs({
+        agentPlugins: ["@roamcli/agent-pi"],
+        runnerArgs: ["--agent-plugin", "@roamcli/agent-pi"],
+      }),
+    ).toContain(`@roamcli/agent-pi@${runnerVersion.version}`);
+  });
   it("can launch the installed npx without a Windows shell", async () => {
     const invocation = npxLauncher(["--version"], process.env);
     const { stdout } = await promisify(execFile)(

@@ -26,11 +26,12 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm -r build",
-    "build:packages": "pnpm --filter @roamcli/shared --filter @roamcli/agent-plugin-sdk --filter @roamcli/agent-codex --filter @roamcli/agent-claude-code build",
+    "build:packages": "pnpm --filter @roamcli/shared --filter @roamcli/agent-plugin-sdk --filter @roamcli/agent-codex --filter @roamcli/agent-claude-code --filter @roamcli/agent-pi build",
     "blackbox:browser": "pnpm build && node scripts/blackbox-browser.mjs",
     "pin-show-more:browser": "pnpm build && node scripts/pin-show-more-browser.mjs",
     "dev": "pnpm --filter @roamcli/server dev",
     "smoke:e2e": "node scripts/smoke-e2e.mjs",
+    "test:pi:e2e": "pnpm build:packages && pnpm --filter @roamcli/server --filter @roamcli/runner build && node scripts/pi-e2e.mjs",
     "test": "vitest run",
     "typecheck": "pnpm build:packages && pnpm -r typecheck",
     "lint": "pnpm build:packages && pnpm -r lint",

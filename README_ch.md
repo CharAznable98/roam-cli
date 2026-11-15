@@ -2,7 +2,7 @@
 
 English documentation is available in [README.md](README.md).
 
-**RoamCli 是一个自托管 Web UI 和控制面，用来管理运行在自有机器上的 Codex、Claude Code 和其它 AI 编码 Agent。**
+**RoamCli 是一个自托管 Web UI 和控制面，用来管理运行在自有机器上的 Codex、Claude Code、Pi 和其它 AI 编码 Agent。**
 
 你可以在浏览器里启动、监督和恢复编码 Agent Session，同时把仓库访问和代码执行留在你控制的 Runner 机器上。浏览器只访问 Server；每个 Runner 负责自己的 workspace 访问和执行，并通过反向 WebSocket 主动连接 Server。
 
@@ -165,7 +165,7 @@ ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
   --agent-plugin @roamcli/agent-codex
 ```
 
-同时启用两个内置 Agent 插件：
+同时启用所有内置 Agent 插件：
 
 ```bash
 ROAM_RUNNER_TOKEN=<runner-token> \
@@ -173,7 +173,8 @@ ROAM_RUNNER_TOKEN=<runner-token> \
   --server ws://127.0.0.1:8787/v1/runner \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex \
-  --agent-plugin @roamcli/agent-claude-code
+  --agent-plugin @roamcli/agent-claude-code \
+  --agent-plugin @roamcli/agent-pi
 ```
 
 Runner 会把非敏感启动配置写入 `<workspace>/<data-dir>/config.json`，默认是 workspace 下的 `.roam-runner/config.json`。Runner token 永远不会写入配置，因此每次启动都要提供 `ROAM_RUNNER_TOKEN`，其他非敏感参数可以复用：
@@ -205,6 +206,28 @@ Agent 插件是受信任的进程内扩展，只应安装你信任的插件代�
 
 - `@roamcli/agent-codex`
 - `@roamcli/agent-claude-code`
+- `@roamcli/agent-pi`
+
+### Pi
+
+先在 Runner 机器安装并配置 [Pi coding agent](https://github.com/earendil-works/pi)，启动 Runner 时选择 `@roamcli/agent-pi`。本次以 Pi 1.5.2 为验收基线，旧版本不作为兼容要求。
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.5.2
+pi auth login <provider>
+```
+
+插件通过 `pi --mode rpc` 接入，认证、模型配置、skills 和项目信任交给本机 Pi 管理。RoamCli 不新增网页登录或密钥存储。现有权限 profile 的环境变量过滤仍然生效；`trusted` 还可以使用 `PI_CODING_AGENT_DIR` 和可选的 `ROAMCLI_AGENT_PI_COMMAND`。Windows 下支持官方安装器的托管布局和 npm 安装，均直接解析当前版本的 CLI 入口，不经过 shell；覆盖路径可以指向绝对 `.js`、`.mjs`、`.cjs` 或 `.exe` 文件。
+
+模型动态发现并显示所属 provider，思考强度按模型能力提供，不支持的 Fast Mode/service tier 控件隐藏。图片沿用现有限制，仅可在回合之间发送；运行中追加文字会补充当前任务的指令。停止会先清理 Pi 的排队输入再中止执行。后续回合及 Runner 重启后续聊复用同一个原生会话文件；文件丢失或项目目录变化时明确报错，不会静默创建另一段对话。Runner 重启不代表自动续跑被中断的任务。
+
+`strict`、`standard` 下读取、grep、find、ls 工具正常运行；命令执行、文件修改及未知自定义工具先经 RoamCli 审批。`trusted` 自动执行工具。**Pi 没有操作系统沙箱**；工具审批不能隔离本地扩展直接执行的代码，只应加载可信扩展。原生历史导入、分叉/回退和自定义终端 UI 沿用现有产品边界。
+
+默认 smoke 测试仍使用确定性 fixture。真实 Pi 闭环可运行 `ROAMCLI_SMOKE_REAL_AGENT=1 ROAMCLI_SMOKE_AGENT=pi pnpm smoke:e2e`，验证 Server/Runner 链路上的文件修改、审批和续聊。该测试复用本机 Pi 配置，并批准隔离 smoke workspace 中的工具请求。PowerShell 用法见 [Windows 验证文档](docs/windows.md)。
+
+`pnpm test:pi:e2e` 使用真实安装的 Pi 和隔离的确定性 HTTP 模型 fixture，验证工具执行、审批、图片、skills、补充指令、停止及重启恢复，不使用你的 provider 凭据，也不修改本机 Pi 配置。报告保存在 `artifacts/pi-e2e/`。它验证实际 Pi 引擎与传输链路，fixture 本身不是大语言模型。
+
+Pi 1.5.2 的 RPC 输入读取器在 `session_start` 完成后才启动，无法回答扩展在该启动钩子中等待的对话。RoamCli 会明确报错，避免显示无法回答的问题；可把交互移到扩展命令或工具钩子。命令或工具执行中的对话复用现有自由文本输入流程，支持较长等待；选择题和确认题的选项显示在问题文字中。
 
 Codex 插件默认使用 `codex app-server --stdio -c skip_git_repo_check=true`。Codex 命令可以通过以下环境变量覆盖：
 

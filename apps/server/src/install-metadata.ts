@@ -19,12 +19,21 @@ export const installMetadata: InstallMetadata = {
       label: "Claude Code",
       description: "Runs sessions through the Claude Code agent.",
     },
+    {
+      packageName: "@roamcli/agent-pi",
+      packageSpec: `@roamcli/agent-pi@${packageVersion}`,
+      label: "Pi",
+      description: "Runs sessions through the local Pi coding agent RPC.",
+    },
   ],
 };
 
 function readPackageVersion(): string {
   try {
-    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const raw = readFileSync(
+      new URL("../package.json", import.meta.url),
+      "utf8",
+    );
     const parsed = JSON.parse(raw) as { version?: unknown };
     if (typeof parsed.version === "string" && parsed.version.length > 0) {
       return parsed.version;

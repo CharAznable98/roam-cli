@@ -24,15 +24,18 @@ describe("capabilities", () => {
     const registry = await loadAgentRegistry("standard", [
       "@roamcli/agent-codex",
       "@roamcli/agent-claude-code",
+      "@roamcli/agent-pi",
     ]);
 
     expect(registry.capabilities.map((capability) => capability.kind)).toEqual([
       "codex",
       "claude-code",
+      "pi",
     ]);
     expect(registry.agents.map((agent) => agent.definition.kind)).toEqual([
       "codex",
       "claude-code",
+      "pi",
     ]);
     expect(
       registry.capabilities.every(
@@ -94,6 +97,25 @@ describe("capabilities", () => {
       pluginName: "@roamcli/agent-codex",
     });
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "preserves Windows shell installation directories without provider credentials",
+    () => {
+      expect(
+        sanitizeAgentEnvironment("standard", {
+          ProgramFiles: "C:\\Program Files",
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+          ProgramW6432: "C:\\Program Files",
+          OPENAI_API_KEY: "private-key",
+          ROAM_RUNNER_TOKEN: "private-token",
+        }),
+      ).toEqual({
+        ProgramFiles: "C:\\Program Files",
+        "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        ProgramW6432: "C:\\Program Files",
+      });
+    },
+  );
 
   it("supports legacy per-agent command and args overrides for trusted runners", async () => {
     vi.stubEnv("ROAMCLI_AGENT_CODEX_MODE", "exec-json");
