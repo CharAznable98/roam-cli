@@ -573,6 +573,9 @@ export function NewSessionForm({
           ))}
         </select>
       </label>
+      {imageCapability?.permissionNotice ? (
+        <p className="field-help">{imageCapability.permissionNotice}</p>
+      ) : null}
       <details className="advanced-session-config">
         <summary>Advanced configuration</summary>
         <div className="advanced-session-fields">

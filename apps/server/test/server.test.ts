@@ -93,6 +93,12 @@ describe("server", () => {
             label: "Claude Code",
             description: "Runs sessions through the Claude Code agent.",
           },
+          {
+            packageName: "@roamcli/agent-pi",
+            packageSpec: "@roamcli/agent-pi@1.1.0",
+            label: "Pi",
+            description: "Runs sessions through the local Pi coding agent RPC.",
+          },
         ],
       },
     });

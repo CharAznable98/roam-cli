@@ -51,6 +51,9 @@ importers:
       '@roamcli/agent-codex':
         specifier: workspace:*
         version: link:../../packages/agent-codex
+      '@roamcli/agent-pi':
+        specifier: workspace:*
+        version: link:../../packages/agent-pi
       '@types/react':
         specifier: ^19.2.16
         version: 19.2.16
@@ -242,6 +245,25 @@ importers:
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.0)(jiti@1.21.7)(jsdom@25.0.1)(tsx@4.22.4)
 
   packages/agent-codex:
+    dependencies:
+      '@roamcli/agent-plugin-sdk':
+        specifier: workspace:^1.1.0
+        version: link:../agent-plugin-sdk
+      '@roamcli/shared':
+        specifier: workspace:^1.1.0
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.0
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.0)(jiti@1.21.7)(jsdom@25.0.1)(tsx@4.22.4)
+
+  packages/agent-pi:
     dependencies:
       '@roamcli/agent-plugin-sdk':
         specifier: workspace:^1.1.0

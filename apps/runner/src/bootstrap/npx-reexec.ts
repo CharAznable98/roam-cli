@@ -8,6 +8,7 @@ const RUNNER_PACKAGE = "@roamcli/runner";
 const OFFICIAL_AGENT_PACKAGES = new Set([
   "@roamcli/agent-codex",
   "@roamcli/agent-claude-code",
+  "@roamcli/agent-pi",
 ]);
 const PACKAGE_VERSION = readPackageVersion();
 

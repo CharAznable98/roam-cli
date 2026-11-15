@@ -2,7 +2,7 @@
 
 中文文档见 [README_ch.md](README_ch.md)。
 
-**RoamCli is a self-hosted web UI and control plane for Codex, Claude Code, and other AI coding agents running on your own machines.**
+**RoamCli is a self-hosted web UI and control plane for Codex, Claude Code, Pi, and other AI coding agents running on your own machines.**
 
 Start, supervise, and resume coding-agent sessions from a browser while keeping repository access and code execution on runner machines you control. The browser talks to the Server; each Runner owns workspace access and execution, then connects outbound to the Server over reverse WebSocket.
 
@@ -168,7 +168,7 @@ ROAM_RUNNER_TOKEN=<runner-token-from-account-security> \
   --agent-plugin @roamcli/agent-codex
 ```
 
-To enable both built-in agent plugins:
+To enable all built-in agent plugins:
 
 ```bash
 ROAM_RUNNER_TOKEN=<runner-token> \
@@ -176,7 +176,8 @@ ROAM_RUNNER_TOKEN=<runner-token> \
   --server ws://127.0.0.1:8787/v1/runner \
   --workspace "$PWD" \
   --agent-plugin @roamcli/agent-codex \
-  --agent-plugin @roamcli/agent-claude-code
+  --agent-plugin @roamcli/agent-claude-code \
+  --agent-plugin @roamcli/agent-pi
 ```
 
 The Runner writes non-secret startup configuration to `<workspace>/<data-dir>/config.json`, defaulting to `.roam-runner/config.json` under the workspace. The Runner token is never written there, so provide `ROAM_RUNNER_TOKEN` on every start while reusing the persisted non-secret options:
@@ -208,6 +209,28 @@ Built-in workspace plugin packages:
 
 - `@roamcli/agent-codex`
 - `@roamcli/agent-claude-code`
+- `@roamcli/agent-pi`
+
+### Pi
+
+Install and authenticate the local [Pi coding agent](https://github.com/earendil-works/pi), then select `@roamcli/agent-pi` when starting the Runner. The integration targets Pi 1.5.2; older versions are not a compatibility requirement.
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@1.5.2
+pi auth login <provider>
+```
+
+The plugin launches `pi --mode rpc` and delegates authentication, model configuration, skills and project trust to Pi on the Runner machine. RoamCli does not add a separate provider login or key store. Permission-profile environment filtering still applies; `trusted` also permits `PI_CODING_AGENT_DIR` and the optional `ROAMCLI_AGENT_PI_COMMAND` executable override. On Windows, npm's Pi launcher is resolved to its Node entry without a shell. An override can point to an absolute `.js`, `.mjs`, `.cjs` or `.exe` entry.
+
+Pi models are discovered dynamically and shown with their provider. Thinking levels follow each model's capabilities; unsupported Fast Mode/service tier controls are hidden. Images use the existing limits and can be sent only between turns. Text sent during execution steers the current run. Stop clears Pi's queued messages before aborting. Follow-up turns and Runner restarts resume the same native session file; a missing session file or changed project directory produces an error instead of starting a different conversation. A Runner restart does not automatically continue an interrupted task.
+
+For `strict` and `standard`, read/grep/find/ls tools run normally; commands, file changes and unknown custom tools require approval through RoamCli. `trusted` allows tools automatically. **Pi has no OS sandbox.** Tool approval does not restrict arbitrary code executed by local extensions; load only extensions you trust. Native history import, fork/rollback and custom terminal UI are outside the existing RoamCli feature set.
+
+The regular smoke test remains deterministic. For an opt-in real Pi round trip (file edit, approval and continuation through Server/Runner), run `ROAMCLI_SMOKE_REAL_AGENT=1 ROAMCLI_SMOKE_AGENT=pi pnpm smoke:e2e`. It uses the local Pi configuration and approves tool requests in its isolated smoke workspace. See [Windows verification](docs/windows.md) for PowerShell commands.
+
+`pnpm test:pi:e2e` runs the real installed Pi against an isolated, deterministic HTTP model fixture. It verifies tool execution, approvals, images, skills, steering, stop and restart recovery without using your provider credentials or changing your Pi configuration. Reports are saved under `artifacts/pi-e2e/`. This checks the actual Pi engine and transport; the fixture is not an LLM.
+
+Pi 1.5.2 RPC cannot answer extension dialogs awaited inside `session_start`: its input reader is not yet active. RoamCli reports this explicitly rather than displaying a question it cannot answer. Move such dialogs into an extension command or tool hook. Dialogs during commands/tools use the existing RoamCli free-text input flow, including long waits; select/confirm choices are shown in the question text.
 
 The Codex plugin uses `codex app-server --stdio -c skip_git_repo_check=true` by default. The Codex command can be overridden with:
 

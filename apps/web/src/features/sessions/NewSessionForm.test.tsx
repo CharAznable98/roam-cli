@@ -686,6 +686,71 @@ function runtimeOptions(): AgentRuntimeConfigOptionsResult {
   };
 }
 
+describe("Pi session options", () => {
+  it("shows provider-qualified models and permission capabilities, then submits the selected model and effort", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const notice =
+      "Pi requires approval for commands, file changes and custom tools. Pi has no OS sandbox.";
+    render(
+      <NewSessionForm
+        project={project}
+        runner={{
+          ...runner,
+          capabilities: [
+            {
+              ...runner.capabilities[0]!,
+              kind: "pi",
+              label: "Pi",
+              parser: "pi-rpc",
+              permissionNotice: notice,
+            },
+          ],
+        }}
+        onCreate={onCreate}
+        onListAgentRuntimeConfigOptions={async () => ({
+          ...runtimeOptions(),
+          agent: "pi",
+          fastMode: { kind: "unsupported", supported: false },
+          models: ["provider-a", "custom%2Fprovider"].map((provider) => ({
+            value: `${provider}/org/model`,
+            label: `Same model (${provider})`,
+            reasoningEfforts: [{ value: "low", label: "low" }],
+            serviceTiers: [],
+          })),
+        })}
+      />,
+    );
+    await screen.findByPlaceholderText("Describe the work");
+    expect(screen.getByText(notice)).toBeVisible();
+    fireEvent.click(screen.getByText("Advanced configuration"));
+    expect(
+      await screen.findByRole("option", { name: "Same model (provider-a)" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "custom%2Fprovider/org/model" },
+    });
+    fireEvent.change(screen.getByLabelText("Thinking intensity"), {
+      target: { value: "low" },
+    });
+    expect(screen.queryByLabelText("Fast Mode")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Describe the work"), {
+      target: { value: "Use pi" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create session/ }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "pi",
+          agentRuntimeConfig: {
+            model: "custom%2Fprovider/org/model",
+            reasoningEffort: "low",
+          },
+        }),
+      ),
+    );
+  });
+});
+
 function fileInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector('input[type="file"]');
   if (!(input instanceof HTMLInputElement)) {
