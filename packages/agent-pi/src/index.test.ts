@@ -279,6 +279,117 @@ describe("Pi RPC integration", () => {
     expect(commands.some((command) => command.type === "prompt")).toBe(false);
     expect(completed(events)).toBe(false);
   });
+  it("withdraws an expired native dialog before presenting its next question", async () => {
+    const { create, context, events, log } = await setup("timed-dialogs");
+    let active = false;
+    const cancelled: string[] = [];
+    context.requestUserInput = async (draft) => {
+      if (active)
+        throw new Error("Session already has a pending user input request");
+      if (draft.summary === "Second question")
+        return {
+          inputRequestId: "second",
+          content: "second answer",
+          answeredAt: "now",
+        };
+      active = true;
+      return new Promise((_resolve, reject) => {
+        draft.signal?.addEventListener(
+          "abort",
+          () => {
+            active = false;
+            cancelled.push(draft.summary);
+            reject(draft.signal?.reason);
+          },
+          { once: true },
+        );
+      });
+    };
+    await create().start();
+    await vi.waitFor(() => expect(completed(events)).toBe(true));
+    expect(cancelled).toEqual(["First timed question"]);
+    expect(events).toContainEqual({
+      type: "activity",
+      kind: "system",
+      label: "SECOND_ANSWER:second answer",
+    });
+    expect(
+      (await log()).find((command) => command.id === "next-dialog"),
+    ).toMatchObject({ value: "second answer" });
+  });
+  it("persists a first extension command stopped at user input and resumes the same native file", async () => {
+    const { create, context, events } = await setup("dialog:input");
+    const cancelled = vi.fn();
+    context.requestUserInput = async (draft) =>
+      new Promise((_resolve, reject) => {
+        draft.signal?.addEventListener(
+          "abort",
+          () => {
+            cancelled();
+            reject(draft.signal?.reason);
+          },
+          { once: true },
+        );
+      });
+    const session = create();
+    await session.start();
+    const thread = events.find((event) => event.type === "thread");
+    if (thread?.type !== "thread") throw new Error("Missing thread");
+    expect(existsSync(thread.threadId)).toBe(false);
+    await session.control("stop");
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(existsSync(thread.threadId)).toBe(true);
+    expect(events.filter((event) => event.type === "status")).toEqual([
+      { type: "status", status: "stopped" },
+    ]);
+    context.resumeThreadId = thread.threadId;
+    context.prompt = "after stop";
+    events.length = 0;
+    await create().start();
+    await vi.waitFor(() => expect(completed(events)).toBe(true));
+    expect(events).toContainEqual({
+      type: "thread",
+      threadId: thread.threadId,
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+  it("does not display a queued question whose native timeout already elapsed", async () => {
+    const { create, context, events } = await setup("queued-timed-dialog");
+    const answer = deferred<UserInputDecision>();
+    const request = vi.fn(() => answer.promise);
+    context.requestUserInput = request;
+    await create().start();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(request).toHaveBeenCalledOnce();
+    answer.resolve({
+      inputRequestId: "first",
+      content: "answer",
+      answeredAt: "now",
+    });
+    await vi.waitFor(() => expect(completed(events)).toBe(true));
+    expect(request).toHaveBeenCalledOnce();
+    expect(
+      events.some(
+        (event) =>
+          event.type === "activity" &&
+          event.label.includes("input request failed"),
+      ),
+    ).toBe(false);
+  });
+  it("exposes unexpected user-input failures with the question title", async () => {
+    const { create, context, events } = await setup("dialog:input");
+    context.requestUserInput = async () => {
+      throw new Error("tracker unavailable");
+    };
+    await create().start();
+    await vi.waitFor(() => expect(completed(events)).toBe(true));
+    expect(events).toContainEqual({
+      type: "activity",
+      kind: "system",
+      label:
+        "Pi input request failed (Extension question): tracker unavailable. Retry the extension command.",
+    });
+  });
   it.each([false, true])(
     "gates actual writes through Roam approval: approved=%s",
     async (approved) => {

@@ -217,7 +217,7 @@ npm install -g @earendil-works/pi-coding-agent@1.5.2
 pi auth login <provider>
 ```
 
-插件通过 `pi --mode rpc` 接入，认证、模型配置、skills 和项目信任交给本机 Pi 管理。RoamCli 不新增网页登录或密钥存储。现有权限 profile 的环境变量过滤仍然生效；`trusted` 还可以使用 `PI_CODING_AGENT_DIR` 和可选的 `ROAMCLI_AGENT_PI_COMMAND`。Windows 下会把 npm 的 Pi 启动脚本解析为 Node 入口，不经过 shell；覆盖路径可以指向绝对 `.js`、`.mjs`、`.cjs` 或 `.exe` 文件。
+插件通过 `pi --mode rpc` 接入，认证、模型配置、skills 和项目信任交给本机 Pi 管理。RoamCli 不新增网页登录或密钥存储。现有权限 profile 的环境变量过滤仍然生效；`trusted` 还可以使用 `PI_CODING_AGENT_DIR` 和可选的 `ROAMCLI_AGENT_PI_COMMAND`。Windows 下支持官方安装器的托管布局和 npm 安装，均直接解析当前版本的 CLI 入口，不经过 shell；覆盖路径可以指向绝对 `.js`、`.mjs`、`.cjs` 或 `.exe` 文件。
 
 模型动态发现并显示所属 provider，思考强度按模型能力提供，不支持的 Fast Mode/service tier 控件隐藏。图片沿用现有限制，仅可在回合之间发送；运行中追加文字会补充当前任务的指令。停止会先清理 Pi 的排队输入再中止执行。后续回合及 Runner 重启后续聊复用同一个原生会话文件；文件丢失或项目目录变化时明确报错，不会静默创建另一段对话。Runner 重启不代表自动续跑被中断的任务。
 

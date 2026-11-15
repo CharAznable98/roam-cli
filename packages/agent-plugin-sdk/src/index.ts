@@ -73,6 +73,8 @@ export interface UserInputRequestDraft {
   summary: string;
   questions: readonly UserInputQuestion[];
   payload: Record<string, unknown>;
+  /** Cancel a question that its agent runtime has expired or withdrawn. */
+  signal?: AbortSignal;
 }
 
 export interface UserInputDecision {
@@ -129,6 +131,16 @@ export class AgentInputUnavailableError extends Error {
   public constructor(message = "Agent input channel is unavailable") {
     super(message);
     this.name = "AgentInputUnavailableError";
+  }
+}
+
+/** An explicit pre-acceptance rejection; the same delivery can be retried. */
+export class AgentInputRejectedError extends Error {
+  readonly code = "AGENT_INPUT_REJECTED";
+
+  public constructor(message = "Agent rejected input before accepting it") {
+    super(message);
+    this.name = "AgentInputRejectedError";
   }
 }
 

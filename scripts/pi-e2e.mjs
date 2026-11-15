@@ -78,6 +78,12 @@ export default function(pi) {
     }
   });
   pi.registerCommand('fixture-handled', {description: 'No-message handled command', handler: async () => {}});
+  pi.registerCommand('fixture-timed-dialog', {description: 'Timed dialog then normal input', handler: async (_args, ctx) => {
+    const first = await ctx.ui.input('Fixture timed first', 'Expires before the answer', {timeout: 400});
+    ctx.ui.notify('FIXTURE_TIMED_FIRST:' + String(first));
+    const second = await ctx.ui.input('Fixture timed second', 'Answer the second question');
+    ctx.ui.notify('FIXTURE_TIMED_SECOND:' + String(second));
+  }});
   for (const method of ['input', 'select', 'confirm', 'editor']) {
     pi.registerCommand('fixture-' + method, {
       description: 'Controlled native UI ' + method,
@@ -661,6 +667,82 @@ async function runCases() {
     "startup failure was overwritten by a generic RPC closure",
   );
   if (onlyStartup) return;
+  const timedDialog = await createSession(standard, "/fixture-timed-dialog");
+  const secondQuestion = await wait(async () => {
+    const detail = await snapshot(timedDialog.id);
+    if (["failed", "completed"].includes(detail.session.status))
+      throw new Error(
+        "Timed input cancelled its following question before it was answered",
+      );
+    return detail.session.status === "waiting_input" &&
+      detail.activities.some((activity) =>
+        activity.label.includes("Fixture timed second"),
+      )
+      ? detail
+      : false;
+  }, "native timed dialog releases the Runner input tracker for its next question");
+  snapshots.push(secondQuestion);
+  await follow(timedDialog, "SECOND_QUESTION_ANSWER");
+  const timedAnswered = await complete(timedDialog);
+  assert(
+    timedAnswered.activities.some(
+      (activity) =>
+        activity.label === "FIXTURE_TIMED_SECOND:SECOND_QUESTION_ANSWER",
+    ),
+    "native second dialog did not receive its answer",
+  );
+  assert(
+    !timedAnswered.activities.some((activity) =>
+      activity.label.includes("input request failed"),
+    ),
+    "normal native timeout was reported as an input failure",
+  );
+  pass(
+    "native timed dialog withdrawn and following question answered through the real Runner tracker",
+  );
+
+  const firstCommand = await createSession(standard, "/fixture-input");
+  const firstWaiting = await wait(async () => {
+    const detail = await snapshot(firstCommand.id);
+    return detail.session.status === "waiting_input" ? detail : false;
+  }, "first extension-only native command waiting for input");
+  const firstFile = firstWaiting.session.agentThreadId;
+  assert(
+    firstFile && !(await exists(firstFile)),
+    "extension-only command unexpectedly persisted a conversation before stop",
+  );
+  stream.send(
+    JSON.stringify({
+      type: "controlSignal",
+      requestId: randomUUID(),
+      sessionId: firstCommand.id,
+      signal: "stop",
+    }),
+  );
+  await wait(
+    async () => (await snapshot(firstCommand.id)).session.status === "stopped",
+    "first extension-only command stopped",
+  );
+  // Continue as soon as the UI exposes stopped. Runner must wait for native
+  // cleanup itself rather than requiring the user to inspect its session file.
+  await follow(firstCommand, "AFTER_FIRST_DIALOG_STOP");
+  const firstResumed = await complete(firstCommand);
+  assert(
+    firstResumed.session.agentThreadId === firstFile,
+    "stopped first command resumed a different native session",
+  );
+  assert(
+    firstResumed.messages.some(
+      (item) =>
+        item.role === "assistant" &&
+        item.content.includes("AFTER_FIRST_DIALOG_STOP"),
+    ),
+    "stopped first command did not resume its first conversation",
+  );
+  pass(
+    "first extension-only input stopped, snapshot persisted, and same native file resumed without wx collision",
+  );
+
   for (const [method, answer, expected] of [
     ["input", "中文回答", "中文回答"],
     ["select", "Beta", "Beta"],

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { AgentInputRejectedError } from "@roamcli/agent-plugin-sdk";
 import { piInvocation } from "./command.js";
 
 export type RecordValue = Record<string, unknown>;
@@ -13,7 +14,7 @@ export function message(error: unknown): string {
 }
 
 /** The runtime explicitly rejected this command before accepting it. */
-export class PiRequestRejectedError extends Error {}
+export class PiRequestRejectedError extends AgentInputRejectedError {}
 
 export class PiRpc {
   readonly #child: ChildProcessWithoutNullStreams;

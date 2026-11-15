@@ -53,7 +53,7 @@ apps/server       Fastify API, WebSocket hub, persistence, artifacts, static Web
 apps/runner       Runner CLI, agent process management, workspace file operations.
 apps/web          React browser client.
 packages/shared   Shared protocol schemas/types plus Node-side security helpers.
-packages/agent-*  Agent plugin SDK and built-in Codex and Claude Code plugins.
+packages/agent-*  Agent plugin SDK and built-in Codex, Claude Code, and Pi plugins.
 ```
 
 ## Security Reports

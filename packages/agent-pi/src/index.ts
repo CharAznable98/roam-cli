@@ -96,6 +96,14 @@ class PiSession implements AgentSession {
   >();
   readonly #tools = new Map<string, { name: string; args: RecordValue }>();
   readonly #pendingUI = new Set<string>();
+  readonly #userDialogs = new Map<
+    string,
+    {
+      controller: AbortController;
+      timer: ReturnType<typeof setTimeout> | undefined;
+    }
+  >();
+  readonly #promptOperations = new Set<Promise<void>>();
   readonly #acceptanceWaiters = new Set<() => void>();
   #rpc: PiRpc | undefined;
   #closed = false;
@@ -104,6 +112,8 @@ class PiSession implements AgentSession {
   #settled: { aborted: boolean } | undefined;
   #failure: string | undefined;
   #events: Promise<void> = Promise.resolve();
+  #dialogTail: Promise<void> = Promise.resolve();
+  #persistence: Promise<void> | undefined;
   #outputId: string | undefined;
   #outputSequence = 0;
   #streamed = false;
@@ -249,7 +259,14 @@ class PiSession implements AgentSession {
   }
 
   async #submit(content: string, images: RecordValue[] = []): Promise<void> {
-    return this.#acceptOnUserWait(() => this.#runPrompt(content, images));
+    return this.#acceptOnUserWait(() => {
+      const operation = this.#runPrompt(content, images);
+      this.#promptOperations.add(operation);
+      void operation
+        .finally(() => this.#promptOperations.delete(operation))
+        .catch(() => undefined);
+      return operation;
+    });
   }
 
   async #runPrompt(content: string, images: RecordValue[]): Promise<void> {
@@ -309,12 +326,14 @@ class PiSession implements AgentSession {
     if (signal === "resume" || this.#closed) return;
     this.#interrupting = true;
     try {
-      for (const id of this.#pendingUI)
-        this.#rpc?.send({ type: "extension_ui_response", id, cancelled: true });
-      this.#pendingUI.clear();
-      this.#rpc?.setWaitingForUser(false);
+      this.#cancelUI(true);
       await this.#rpc?.request("clear_queue", {}, 3000);
       await this.#rpc?.request("abort", {}, 5000);
+      // Cancellation can finish an extension-only prompt without ever writing
+      // a conversation. Wait for its handler before saving the native snapshot;
+      // otherwise a late normal prompt could collide with Pi's first wx write.
+      await Promise.allSettled([...this.#promptOperations]);
+      await this.#persistNativeIfNeeded();
     } finally {
       if (!this.#closed) {
         this.#closed = true;
@@ -326,9 +345,24 @@ class PiSession implements AgentSession {
 
   close(): void {
     this.#closed = true;
+    this.#cancelUI();
     if (this.#readyTimer) clearTimeout(this.#readyTimer);
     this.#readyReject?.(new AgentInputUnavailableError());
     this.#rpc?.close();
+  }
+
+  #cancelUI(sendResponses = false): void {
+    if (sendResponses) {
+      for (const id of this.#pendingUI)
+        this.#rpc?.send({ type: "extension_ui_response", id, cancelled: true });
+    }
+    this.#pendingUI.clear();
+    for (const dialog of this.#userDialogs.values()) {
+      clearTimeout(dialog.timer);
+      dialog.controller.abort(new AgentInputUnavailableError());
+    }
+    this.#userDialogs.clear();
+    this.#rpc?.setWaitingForUser(false);
   }
 
   async #handleEvent(event: RecordValue): Promise<void> {
@@ -508,7 +542,47 @@ class PiSession implements AgentSession {
       if (this.#readyTimer) clearTimeout(this.#readyTimer);
       for (const accept of this.#acceptanceWaiters) accept();
     }
+    const approval =
+      event.method === "confirm" &&
+      event.title === `roamcli-approval:${this.#token}`;
+    if (dialog && !approval) {
+      const id = String(event.id);
+      const controller = new AbortController();
+      const timer =
+        typeof event.timeout === "number" &&
+        Number.isFinite(event.timeout) &&
+        event.timeout > 0
+          ? setTimeout(
+              () => controller.abort(new Error("Pi dialog expired")),
+              event.timeout,
+            )
+          : undefined;
+      this.#userDialogs.set(id, { controller, timer });
+      // The Runner owns one free-text request per session. Queue only those
+      // dialogs; approval requests and protocol notifications remain parallel.
+      const operation = this.#dialogTail.then(() =>
+        this.#answerUI(event, response, controller.signal),
+      );
+      this.#dialogTail = operation.catch(() => undefined);
+      try {
+        await operation;
+      } finally {
+        clearTimeout(timer);
+        this.#userDialogs.delete(id);
+      }
+      return;
+    }
+    await this.#answerUI(event, response);
+  }
+
+  async #answerUI(
+    event: RecordValue,
+    response: RecordValue,
+    signal?: AbortSignal,
+  ): Promise<void> {
     try {
+      if (this.#closed || this.#interrupting) return;
+      signal?.throwIfAborted();
       if (
         event.method === "confirm" &&
         event.title === `roamcli-approval:${this.#token}`
@@ -563,6 +637,7 @@ class PiSession implements AgentSession {
             },
           ],
           payload: { source: "pi-rpc", method: event.method },
+          ...(signal ? { signal } : {}),
         });
         if (event.method === "confirm")
           response.confirmed = answer.content.trim().toLowerCase() === "yes";
@@ -574,8 +649,14 @@ class PiSession implements AgentSession {
           await this.#activity("system", event.message);
         return;
       }
-    } catch {
+    } catch (error) {
       response.cancelled = true;
+      if (signal && !signal.aborted && !this.#closed && !this.#interrupting) {
+        await this.#activity(
+          "system",
+          `Pi input request failed (${String(event.title ?? "Pi requests input")}): ${message(error)}. Retry the extension command.`,
+        );
+      }
     }
     if (!this.#closed && this.#pendingUI.delete(String(event.id))) {
       this.#rpc?.send(response);
@@ -585,7 +666,11 @@ class PiSession implements AgentSession {
     }
   }
 
-  async #persistNativeIfNeeded(): Promise<void> {
+  #persistNativeIfNeeded(): Promise<void> {
+    return (this.#persistence ??= this.#persistNative());
+  }
+
+  async #persistNative(): Promise<void> {
     const path = this.#sessionFile;
     if (!path || this.#closed) return;
     try {
@@ -636,6 +721,7 @@ class PiSession implements AgentSession {
   async #fail(error: unknown): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#cancelUI();
     this.#readyReject?.(
       error instanceof Error ? error : new Error(message(error)),
     );

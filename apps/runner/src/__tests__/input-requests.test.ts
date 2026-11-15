@@ -16,6 +16,213 @@ const plainQuestion = {
 };
 
 describe("UserInputRequestTracker", () => {
+  it("does not publish an already cancelled question", async () => {
+    const emit = vi.fn();
+    const waits = new SessionWaitCoordinator(emit);
+    const token = waits.begin("s1");
+    const tracker = new UserInputRequestTracker({ emit, waits });
+    const controller = new AbortController();
+    controller.abort(new Error("Native dialog expired"));
+
+    await expect(
+      tracker.request(
+        token,
+        { id: "s1" },
+        {
+          summary: "Expired",
+          questions: [plainQuestion],
+          payload: {},
+          signal: controller.signal,
+        },
+      ),
+    ).rejects.toThrow("Native dialog expired");
+    expect(emit).not.toHaveBeenCalled();
+    expect(waits.hasWaits(token)).toBe(false);
+  });
+
+  it("withdraws a cancelled question before accepting the next one", async () => {
+    const events: RunnerEvent[] = [];
+    const emit = (event: RunnerEvent) => {
+      events.push(event);
+    };
+    const waits = new SessionWaitCoordinator(emit);
+    const token = waits.begin("s1");
+    const tracker = new UserInputRequestTracker({ emit, waits });
+    const controller = new AbortController();
+    const first = tracker.request(
+      token,
+      { id: "s1" },
+      {
+        summary: "First",
+        questions: [plainQuestion],
+        payload: {},
+        signal: controller.signal,
+      },
+    );
+    void first.catch(() => undefined);
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({
+        type: "sessionStatus",
+        sessionId: "s1",
+        status: "waiting_input",
+      }),
+    );
+    const stale = events.find((e) => e.type === "agentActivity");
+    controller.abort(new Error("Native dialog expired"));
+    await expect(first).rejects.toThrow("Native dialog expired");
+    expect(waits.hasWaits(token)).toBe(false);
+    expect(events.at(-1)).toEqual({
+      type: "sessionStatus",
+      sessionId: "s1",
+      status: "running",
+    });
+    if (stale?.type !== "agentActivity") throw new Error("Missing question");
+    await expect(
+      tracker.resolve("s1", stale.inputRequestId, "late"),
+    ).resolves.toBe(false);
+
+    const next = tracker.request(
+      token,
+      { id: "s1" },
+      {
+        summary: "Second",
+        questions: [plainQuestion],
+        payload: {},
+      },
+    );
+    await vi.waitFor(() =>
+      expect(events.filter((e) => e.type === "agentActivity")).toHaveLength(2),
+    );
+    await expect(
+      tracker.resolve("s1", undefined, "second answer"),
+    ).resolves.toBe(true);
+    await expect(next).resolves.toMatchObject({ content: "second answer" });
+  });
+
+  it.each([false, true])(
+    "does not revive input cancelled while answer status is synchronizing (sink fails=%s)",
+    async (failStatus) => {
+      const events: RunnerEvent[] = [];
+      let holdRunning = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const emit = async (event: RunnerEvent) => {
+        events.push(event);
+        if (
+          holdRunning &&
+          event.type === "sessionStatus" &&
+          event.status === "running"
+        ) {
+          holdRunning = false;
+          await gate;
+          if (failStatus) throw new Error("status sink failed");
+        }
+      };
+      const waits = new SessionWaitCoordinator(emit);
+      const token = waits.begin("s1");
+      const tracker = new UserInputRequestTracker({ emit, waits });
+      const controller = new AbortController();
+      const decision = tracker.request(
+        token,
+        { id: "s1" },
+        {
+          summary: "First",
+          questions: [plainQuestion],
+          payload: {},
+          signal: controller.signal,
+        },
+      );
+      void decision.catch(() => undefined);
+      await vi.waitFor(() =>
+        expect(events).toContainEqual({
+          type: "sessionStatus",
+          sessionId: "s1",
+          status: "waiting_input",
+        }),
+      );
+      holdRunning = true;
+      const acceptance = tracker.resolve("s1", undefined, "too late");
+      void acceptance.catch(() => undefined);
+      await vi.waitFor(() =>
+        expect(events.at(-1)).toEqual({
+          type: "sessionStatus",
+          sessionId: "s1",
+          status: "running",
+        }),
+      );
+      controller.abort(new Error("expired during acceptance"));
+      release();
+      if (failStatus)
+        await expect(acceptance).rejects.toBeInstanceOf(
+          UserInputAcceptanceRetryableError,
+        );
+      else await expect(acceptance).resolves.toBe(false);
+      await expect(decision).rejects.toThrow("expired during acceptance");
+      expect(waits.hasWaits(token)).toBe(false);
+      await expect(
+        tracker.resolve("s1", undefined, "retry stale"),
+      ).resolves.toBe(false);
+      const next = tracker.request(
+        token,
+        { id: "s1" },
+        { summary: "Next", questions: [plainQuestion], payload: {} },
+      );
+      await vi.waitFor(() =>
+        expect(
+          events.filter((event) => event.type === "agentActivity"),
+        ).toHaveLength(2),
+      );
+      await expect(tracker.resolve("s1", undefined, "current")).resolves.toBe(
+        true,
+      );
+      await expect(next).resolves.toMatchObject({ content: "current" });
+    },
+  );
+
+  it("detaches an answered question's cancellation before a replacement request", async () => {
+    const events: RunnerEvent[] = [];
+    const emit = (event: RunnerEvent) => {
+      events.push(event);
+    };
+    const waits = new SessionWaitCoordinator(emit);
+    const token = waits.begin("s1");
+    const tracker = new UserInputRequestTracker({ emit, waits });
+    const oldController = new AbortController();
+    const first = tracker.request(
+      token,
+      { id: "s1" },
+      {
+        summary: "First",
+        questions: [plainQuestion],
+        payload: {},
+        signal: oldController.signal,
+      },
+    );
+    await vi.waitFor(() =>
+      expect(events.some((event) => event.type === "agentActivity")).toBe(true),
+    );
+    await tracker.resolve("s1", undefined, "first");
+    await first;
+    const second = tracker.request(
+      token,
+      { id: "s1" },
+      { summary: "Second", questions: [plainQuestion], payload: {} },
+    );
+    await vi.waitFor(() =>
+      expect(
+        events.filter((event) => event.type === "agentActivity"),
+      ).toHaveLength(2),
+    );
+    oldController.abort(new Error("late old timer"));
+    expect(waits.hasWaits(token)).toBe(true);
+    await expect(tracker.resolve("s1", undefined, "second")).resolves.toBe(
+      true,
+    );
+    await expect(second).resolves.toMatchObject({ content: "second" });
+  });
+
   it.each([
     {
       name: "multiple questions",
@@ -313,9 +520,9 @@ describe("UserInputRequestTracker", () => {
     await vi.waitFor(() => {
       expect(events.some((event) => event.type === "agentActivity")).toBe(true);
     });
-    await expect(
-      tracker.resolve("s1", undefined, "legacy"),
-    ).resolves.toBe(true);
+    await expect(tracker.resolve("s1", undefined, "legacy")).resolves.toBe(
+      true,
+    );
     await expect(first).resolves.toMatchObject({ content: "legacy" });
 
     events.length = 0;

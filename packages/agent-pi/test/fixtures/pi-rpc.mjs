@@ -88,6 +88,7 @@ else sendReady();
 let active = false;
 let pendingApproval;
 let pendingDialog;
+const timedDialogs = new Map();
 let pendingStartupState;
 let pendingTransport;
 let rejectedOnce = false;
@@ -212,6 +213,56 @@ process.stdin.on("data", (chunk) => {
         respond(command, { disposition: "handled" });
         continue;
       }
+      if (command.message === "timed-dialogs") {
+        send({
+          type: "extension_ui_request",
+          id: "expired-dialog",
+          method: "input",
+          title: "First timed question",
+          timeout: 100,
+        });
+        setTimeout(() => {
+          send({
+            type: "extension_ui_request",
+            method: "notify",
+            message: "FIRST_EXPIRED",
+          });
+          send({
+            type: "extension_ui_request",
+            id: "next-dialog",
+            method: "input",
+            title: "Second question",
+          });
+          timedDialogs.set("next-dialog", (answer) => {
+            send({
+              type: "extension_ui_request",
+              method: "notify",
+              message: `SECOND_ANSWER:${answer.value}`,
+            });
+            respond(command, { disposition: "handled" });
+          });
+        }, 100);
+        continue;
+      }
+      if (command.message === "queued-timed-dialog") {
+        send({
+          type: "extension_ui_request",
+          id: "first-queued-dialog",
+          method: "input",
+          title: "First queued question",
+        });
+        send({
+          type: "extension_ui_request",
+          id: "expired-dialog",
+          method: "input",
+          title: "Expired queued question",
+          timeout: 40,
+        });
+        timedDialogs.set("first-queued-dialog", () =>
+          respond(command, { disposition: "handled" }),
+        );
+        continue;
+      }
       if (command.message.startsWith("dialog:")) {
         const method = command.message.slice("dialog:".length);
         send({
@@ -313,7 +364,12 @@ process.stdin.on("data", (chunk) => {
         } else finish(command.message);
       }
     } else if (command.type === "extension_ui_response") {
-      if (command.id === "startup-ui") {
+      if (command.id === "expired-dialog") {
+        // The native runtime already expired this request.
+      } else if (timedDialogs.has(command.id)) {
+        timedDialogs.get(command.id)(command);
+        timedDialogs.delete(command.id);
+      } else if (command.id === "startup-ui") {
         startupUI = false;
         sendReady();
         pendingStartupState?.();
